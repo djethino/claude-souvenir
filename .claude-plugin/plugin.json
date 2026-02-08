@@ -1,0 +1,18 @@
+{
+  "name": "claude-recall",
+  "version": "0.1.0",
+  "description": "Search and browse past Claude Code conversation transcripts with text and semantic search",
+  "author": {
+    "name": "ASymptOmatik"
+  },
+  "license": "MIT",
+  "keywords": [
+    "claude-code",
+    "search",
+    "transcript",
+    "memory",
+    "recall",
+    "mcp",
+    "semantic-search"
+  ]
+}

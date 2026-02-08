@@ -1,0 +1,48 @@
+{
+  "name": "claude-recall",
+  "version": "0.1.0",
+  "description": "MCP server for searching and browsing Claude Code conversation transcripts",
+  "type": "module",
+  "bin": {
+    "claude-recall": "./build/index.js"
+  },
+  "files": [
+    "build"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.7.0",
+    "zod": "^3.23.0",
+    "better-sqlite3": "^11.0.0",
+    "sqlite-vec": "^0.1.6"
+  },
+  "optionalDependencies": {
+    "@huggingface/transformers": "^3.0.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.0",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.5.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "author": {
+    "name": "ASymptOmatik"
+  },
+  "license": "MIT",
+  "keywords": [
+    "claude",
+    "claude-code",
+    "mcp",
+    "transcript",
+    "search",
+    "semantic-search",
+    "recall",
+    "memory"
+  ]
+}
