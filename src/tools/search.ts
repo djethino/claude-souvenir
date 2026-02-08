@@ -61,6 +61,7 @@ async function performTextSearch(
     role?: 'user' | 'assistant' | 'both';
     date_from?: string;
     date_to?: string;
+    include_subagents?: boolean;
     max_results?: number;
     offset?: number;
     case_sensitive?: boolean;
@@ -76,6 +77,7 @@ async function performTextSearch(
     role: params.role || 'both',
     dateFrom: params.date_from,
     dateTo: params.date_to,
+    includeSubagents: params.include_subagents ?? false,
     maxResults,
     offset: params.offset || 0,
     caseSensitive: params.case_sensitive ?? false,
@@ -191,6 +193,7 @@ async function performHybridSearch(
     role?: 'user' | 'assistant' | 'both';
     date_from?: string;
     date_to?: string;
+    include_subagents?: boolean;
     max_results?: number;
     offset?: number;
     case_sensitive?: boolean;
@@ -207,6 +210,7 @@ async function performHybridSearch(
     role: params.role || 'both',
     dateFrom: params.date_from,
     dateTo: params.date_to,
+    includeSubagents: params.include_subagents ?? false,
     maxResults: maxResults * 2,
     offset: 0,
     caseSensitive: params.case_sensitive ?? false,

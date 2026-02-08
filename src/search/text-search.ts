@@ -101,13 +101,18 @@ export async function textSearch(options: TextSearchOptions): Promise<{
     }
   }
 
+  const includeSubagents = options.includeSubagents ?? false;
+
   // Determine which files to search
   for (const projectDir of projectDirs) {
-    const files = listTranscriptFiles(projectDir);
+    const files = listTranscriptFiles(projectDir, {
+      includeSubagents,
+      sessionId,
+    });
 
     for (const filePath of files) {
-      // If filtering by session, check filename
-      if (sessionId) {
+      // If filtering by session (and not using subagent discovery which already filters), check filename
+      if (sessionId && !includeSubagents) {
         const fileName = basename(filePath, '.jsonl');
         if (fileName !== sessionId) continue;
       }

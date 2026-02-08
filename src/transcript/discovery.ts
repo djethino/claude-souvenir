@@ -164,14 +164,54 @@ export function getSessionMetadata(
 
 /**
  * List all JSONL transcript files for a project.
+ * When includeSubagents is true, also includes subagent transcripts
+ * (excludes prompt_suggestion agents which are just input prediction noise).
  */
-export function listTranscriptFiles(projectDir: string): string[] {
+export function listTranscriptFiles(
+  projectDir: string,
+  options: { includeSubagents?: boolean; sessionId?: string } = {},
+): string[] {
   const dir = getProjectTranscriptDir(projectDir);
   if (!existsSync(dir)) return [];
 
-  return readdirSync(dir)
+  // Main session transcripts
+  const mainFiles = readdirSync(dir)
     .filter((f) => f.endsWith('.jsonl'))
     .map((f) => join(dir, f));
+
+  if (!options.includeSubagents) return mainFiles;
+
+  // Also collect subagent files
+  const subagentFiles: string[] = [];
+  const entries = readdirSync(dir, { withFileTypes: true });
+
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    // Session directories are UUIDs (skip others)
+    if (!entry.name.match(/^[0-9a-f]{8}-/)) continue;
+    // Filter by sessionId if specified
+    if (options.sessionId && entry.name !== options.sessionId) continue;
+
+    const subagentDir = join(dir, entry.name, 'subagents');
+    if (!existsSync(subagentDir)) continue;
+
+    try {
+      const agentFiles = readdirSync(subagentDir)
+        .filter((f) => {
+          if (!f.endsWith('.jsonl')) return false;
+          // Skip prompt_suggestion agents - they're just input prediction noise
+          if (f.includes('aprompt_suggestion')) return false;
+          return true;
+        })
+        .map((f) => join(subagentDir, f));
+
+      subagentFiles.push(...agentFiles);
+    } catch (err) {
+      logger.debug(`Error reading subagents for ${entry.name}:`, err);
+    }
+  }
+
+  return [...mainFiles, ...subagentFiles];
 }
 
 /**

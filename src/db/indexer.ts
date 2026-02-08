@@ -32,6 +32,7 @@ export async function buildIndex(
   projectDirs: string[],
   options: {
     sessionId?: string;
+    includeSubagents?: boolean;
     rebuild?: boolean;
     onProgress?: (progress: IndexProgress) => void;
   } = {},
@@ -41,7 +42,7 @@ export async function buildIndex(
   filesProcessed: number;
   skipped: number;
 }> {
-  const { sessionId, rebuild = false, onProgress } = options;
+  const { sessionId, includeSubagents = true, rebuild = false, onProgress } = options;
 
   // Initialize database
   getDb(provider.dimensions);
@@ -81,10 +82,13 @@ export async function buildIndex(
   let skipped = 0;
 
   for (const projectDir of projectDirs) {
-    let files = listTranscriptFiles(projectDir);
+    let files = listTranscriptFiles(projectDir, {
+      includeSubagents,
+      sessionId,
+    });
 
-    // Filter to specific session if requested
-    if (sessionId) {
+    // Filter to specific session if requested (for main transcripts only, subagents already filtered by discovery)
+    if (sessionId && !includeSubagents) {
       files = files.filter((f) => basename(f, '.jsonl') === sessionId);
     }
 
