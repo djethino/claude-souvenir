@@ -30,7 +30,7 @@ export interface IndexStateRow {
 }
 
 let _db: Database.Database | null = null;
-let _dimensions: number = 384;
+let _dimensions: number = 768;
 
 /**
  * Get or create the SQLite database connection.
@@ -128,7 +128,8 @@ export function insertChunks(
       });
 
       if (result.changes > 0) {
-        const chunkId = result.lastInsertRowid;
+        // sqlite-vec requires BigInt for primary key (uses sqlite3_bind_int64)
+        const chunkId = BigInt(result.lastInsertRowid);
         // Convert Float32Array to Buffer for sqlite-vec
         const buffer = Buffer.from(embeddings[i].buffer);
         insertVec.run(chunkId, buffer);
@@ -283,7 +284,7 @@ export function clearProject(projectDir: string): void {
       .all(projectDir) as Array<{ chunk_id: number }>;
 
     for (const { chunk_id } of chunkIds) {
-      db.prepare('DELETE FROM vec_chunks WHERE chunk_id = ?').run(chunk_id);
+      db.prepare('DELETE FROM vec_chunks WHERE chunk_id = ?').run(BigInt(chunk_id));
     }
 
     db.prepare('DELETE FROM chunks WHERE project_dir = ?').run(projectDir);

@@ -21,11 +21,6 @@ export async function handleRecallSessions(params: {
     return 'Error: No project specified and could not detect current project. Use the "project" parameter.';
   }
 
-  const index = loadSessionIndex(projectDir);
-  if (!index) {
-    return `Error: No transcript data found for project "${projectDir}".`;
-  }
-
   const sessions = getSessions(projectDir, {
     search: params.search,
     dateFrom: params.date_from,
@@ -43,9 +38,19 @@ export async function handleRecallSessions(params: {
       : `No sessions found for project "${projectDir}".`;
   }
 
-  const header = `Project: ${index.originalPath} (${sessions.length} session${sessions.length > 1 ? 's' : ''}${sessions.length > maxResults ? `, showing first ${maxResults}` : ''})\n`;
+  // Try to get original path from index, fallback to projectDir
+  const index = loadSessionIndex(projectDir);
+  const originalPath = index?.originalPath || projectDir;
+  const total = sessions.length;
+  const hasMore = total > maxResults;
+
+  const header = `Project: ${originalPath} (${total} session${total > 1 ? 's' : ''})\n`;
 
   const entries = displayed.map((s, i) => formatSessionListEntry(s, i));
 
-  return header + '\n' + entries.join('\n\n');
+  const footer = hasMore
+    ? `\n--- Showing ${maxResults}/${total} sessions | ${total - maxResults} more | Increase max_results to see more ---`
+    : '';
+
+  return header + '\n' + entries.join('\n\n') + footer;
 }

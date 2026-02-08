@@ -1,12 +1,48 @@
 import { textSearch } from '../search/text-search.js';
 import { formatSearchResult } from '../transcript/formatter.js';
-import { listProjectDirs, getSessionMetadata } from '../transcript/discovery.js';
+import { listProjectDirs, getSessionMetadata, resolveCurrentSession } from '../transcript/discovery.js';
 import { getConfig } from '../config.js';
 import { resolveProjectDir } from '../utils/paths.js';
 import { getDb, searchSemantic, getStoredProvider } from '../db/store.js';
 import { createEmbeddingProvider } from './helpers.js';
 import { logger } from '../utils/logger.js';
 import type { SearchResult } from '../transcript/types.js';
+
+/**
+ * Extract a smart snippet from content, trying to center on query words.
+ * For semantic search where we don't have exact match positions.
+ */
+function extractSmartSnippet(content: string, query: string, maxLen: number = 250): string {
+  const contentLower = content.toLowerCase();
+  const words = query.toLowerCase().split(/\s+/).filter((w) => w.length > 2);
+
+  // Try to find the first significant query word in content
+  let bestPos = -1;
+  for (const word of words) {
+    const pos = contentLower.indexOf(word);
+    if (pos !== -1) {
+      bestPos = pos;
+      break;
+    }
+  }
+
+  if (bestPos === -1) {
+    // No match found, return start of content
+    const snippet = content.slice(0, maxLen);
+    return (snippet.length < content.length ? snippet + '...' : snippet).replace(/\n/g, ' ');
+  }
+
+  // Center the snippet on the match
+  const halfLen = Math.floor(maxLen / 2);
+  const start = Math.max(0, bestPos - halfLen);
+  const end = Math.min(content.length, bestPos + halfLen);
+
+  let snippet = content.slice(start, end);
+  if (start > 0) snippet = '...' + snippet;
+  if (end < content.length) snippet = snippet + '...';
+
+  return snippet.replace(/\n/g, ' ');
+}
 
 export async function handleRecallSearch(params: {
   query: string;
@@ -24,6 +60,16 @@ export async function handleRecallSearch(params: {
 }): Promise<string> {
   const config = getConfig();
   const mode = params.mode || 'text';
+
+  // Resolve "current" session_id
+  if (params.session_id === 'current') {
+    const projectDir = config.currentProject || undefined;
+    const resolved = resolveCurrentSession(projectDir);
+    if (!resolved) {
+      return 'Error: Could not determine current session.';
+    }
+    params = { ...params, session_id: resolved };
+  }
 
   // Resolve project dirs
   let projectDirs: string[];
@@ -89,13 +135,22 @@ async function performTextSearch(
   }
 
   const offset = params.offset || 0;
-  const header = `Found ${result.totalMatches} result(s) for "${params.query}" (showing ${offset + 1}-${offset + result.results.length}, searched ${result.filesSearched} files):\n`;
+  const showing = result.results.length;
+  const total = result.totalMatches;
+  const endIndex = offset + showing;
+  const hasMore = endIndex < total;
+
+  const header = `Found ${total} result(s) for "${params.query}" (showing ${offset + 1}-${endIndex}, searched ${result.filesSearched} files):\n`;
 
   const formatted = result.results.map((r, i) =>
     formatSearchResult(r, offset + i),
   );
 
-  return header + '\n' + formatted.join('\n\n');
+  const footer = hasMore
+    ? `\n--- Page ${Math.ceil(endIndex / maxResults)}/${Math.ceil(total / maxResults)} | ${total - endIndex} more results | Next page: offset=${endIndex} ---`
+    : `\n--- All ${total} results shown ---`;
+
+  return header + '\n' + formatted.join('\n\n') + footer;
 }
 
 async function performSemanticSearch(
@@ -165,7 +220,7 @@ async function performSemanticSearch(
         entryUuid: vr.entry_uuid || undefined,
         role: vr.role || 'turn',
         content: vr.content_text,
-        snippet: vr.content_text.slice(0, 200),
+        snippet: extractSmartSnippet(vr.content_text, params.query),
         timestamp: vr.timestamp || undefined,
         lineNumber: vr.line_number || 0,
         score: 1 - vr.distance, // Convert cosine distance to similarity
@@ -174,10 +229,18 @@ async function performSemanticSearch(
       };
     });
 
-    const header = `Found ${vecResults.length} semantic result(s) for "${params.query}" (showing ${offset + 1}-${offset + results.length}):\n`;
+    const total = vecResults.length;
+    const endIndex = offset + results.length;
+    const hasMore = endIndex < total;
+
+    const header = `Found ${total} semantic result(s) for "${params.query}" (showing ${offset + 1}-${endIndex}):\n`;
     const formatted = results.map((r, i) => formatSearchResult(r, offset + i));
 
-    return header + '\n' + formatted.join('\n\n');
+    const footer = hasMore
+      ? `\n--- Page ${Math.ceil(endIndex / maxResults)}/${Math.ceil(total / maxResults)} | ${total - endIndex} more results | Next page: offset=${endIndex} ---`
+      : `\n--- All ${total} results shown ---`;
+
+    return header + '\n' + formatted.join('\n\n') + footer;
   } catch (err) {
     return `Semantic search error: ${err instanceof Error ? err.message : String(err)}`;
   } finally {
@@ -279,7 +342,7 @@ async function performHybridSearch(
         entryUuid: vr.entry_uuid || undefined,
         role: vr.role || 'turn',
         content: vr.content_text,
-        snippet: vr.content_text.slice(0, 200),
+        snippet: extractSmartSnippet(vr.content_text, params.query),
         timestamp: vr.timestamp || undefined,
         lineNumber: vr.line_number || 0,
         score: semanticScore,
@@ -299,8 +362,16 @@ async function performHybridSearch(
     return `No results found for "${params.query}".`;
   }
 
-  const header = `Found ${allResults.length} hybrid result(s) for "${params.query}" (showing ${offset + 1}-${offset + sliced.length}):\n`;
+  const total = allResults.length;
+  const endIndex = offset + sliced.length;
+  const hasMore = endIndex < total;
+
+  const header = `Found ${total} hybrid result(s) for "${params.query}" (showing ${offset + 1}-${endIndex}):\n`;
   const formatted = sliced.map((r, i) => formatSearchResult(r, offset + i));
 
-  return header + '\n' + formatted.join('\n\n');
+  const footer = hasMore
+    ? `\n--- Page ${Math.ceil(endIndex / maxResults)}/${Math.ceil(total / maxResults)} | ${total - endIndex} more results | Next page: offset=${endIndex} ---`
+    : `\n--- All ${total} results shown ---`;
+
+  return header + '\n' + formatted.join('\n\n') + footer;
 }

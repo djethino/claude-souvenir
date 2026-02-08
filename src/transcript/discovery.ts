@@ -1,5 +1,5 @@
-import { readFileSync, readdirSync, existsSync, statSync } from 'fs';
-import { join } from 'path';
+import { readFileSync, readdirSync, existsSync, statSync, openSync, readSync, closeSync } from 'fs';
+import { join, basename } from 'path';
 import { logger } from '../utils/logger.js';
 import { getProjectsDir, getProjectTranscriptDir } from '../utils/paths.js';
 import type { SessionIndex, SessionIndexEntry } from './types.js';
@@ -63,9 +63,11 @@ export function getSessions(
   } = {},
 ): SessionIndexEntry[] {
   const index = loadSessionIndex(projectDir);
-  if (!index) return [];
+  const indexedEntries = index?.entries ?? [];
 
-  let entries = [...index.entries];
+  // Merge indexed sessions with orphan sessions
+  const orphans = discoverOrphanSessions(projectDir);
+  let entries = [...indexedEntries, ...orphans];
 
   // Filter sidechains
   if (!options.includeSidechains) {
@@ -152,11 +154,19 @@ export function getSessionMetadata(
   const projectDirs = projectDir ? [projectDir] : listProjectDirs();
 
   for (const dir of projectDirs) {
+    // Check index first
     const index = loadSessionIndex(dir);
-    if (!index) continue;
+    if (index) {
+      const entry = index.entries.find((e) => e.sessionId === sessionId);
+      if (entry) return { entry, projectDir: dir };
+    }
 
-    const entry = index.entries.find((e) => e.sessionId === sessionId);
-    if (entry) return { entry, projectDir: dir };
+    // Check orphan files
+    const filePath = join(getProjectTranscriptDir(dir), `${sessionId}.jsonl`);
+    if (existsSync(filePath)) {
+      const meta = extractMinimalMetadata(filePath, sessionId, dir);
+      if (meta) return { entry: meta, projectDir: dir };
+    }
   }
 
   return null;
@@ -215,6 +225,129 @@ export function listTranscriptFiles(
 }
 
 /**
+ * Discover orphan sessions: .jsonl files not present in sessions-index.json.
+ * Reads the first bytes of each orphan to build minimal metadata.
+ */
+export function discoverOrphanSessions(projectDir: string): SessionIndexEntry[] {
+  const dir = getProjectTranscriptDir(projectDir);
+  if (!existsSync(dir)) return [];
+
+  // Get indexed session IDs
+  const index = loadSessionIndex(projectDir);
+  const indexedIds = new Set(index?.entries.map((e) => e.sessionId) ?? []);
+
+  // List .jsonl files in the project directory
+  const jsonlFiles = readdirSync(dir)
+    .filter((f) => f.endsWith('.jsonl'))
+    .map((f) => basename(f, '.jsonl'))
+    .filter((id) => !indexedIds.has(id));
+
+  if (jsonlFiles.length === 0) return [];
+
+  const orphans: SessionIndexEntry[] = [];
+
+  for (const sessionId of jsonlFiles) {
+    const filePath = join(dir, `${sessionId}.jsonl`);
+    try {
+      const meta = extractMinimalMetadata(filePath, sessionId, projectDir);
+      if (meta) orphans.push(meta);
+    } catch (err) {
+      logger.debug(`Failed to read orphan session ${sessionId}:`, err);
+    }
+  }
+
+  return orphans;
+}
+
+/**
+ * Read the beginning of a .jsonl file to extract minimal session metadata.
+ * Uses sync read of first 64KB to avoid async complexity while keeping it fast.
+ */
+function extractMinimalMetadata(
+  filePath: string,
+  sessionId: string,
+  projectDir: string,
+): SessionIndexEntry | null {
+  const stat = statSync(filePath);
+  if (stat.size === 0) return null;
+
+  // Read first 64KB - enough to find metadata in most sessions
+  const CHUNK_SIZE = 64 * 1024;
+  const buf = Buffer.alloc(Math.min(CHUNK_SIZE, stat.size));
+  const fd = openSync(filePath, 'r');
+  try {
+    readSync(fd, buf, 0, buf.length, 0);
+  } finally {
+    closeSync(fd);
+  }
+
+  const text = buf.toString('utf-8');
+  const lines = text.split('\n');
+
+  let firstPrompt = '';
+  let firstTimestamp = '';
+  let messageCount = 0;
+
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    if (line.includes('"file-history-snapshot"')) continue;
+
+    try {
+      const entry = JSON.parse(line);
+      // Capture first timestamp
+      if (entry.timestamp && !firstTimestamp) {
+        firstTimestamp = entry.timestamp;
+      }
+
+      if (entry.type === 'user' || entry.type === 'assistant') {
+        messageCount++;
+      }
+
+      // Capture first user message as firstPrompt
+      if (entry.type === 'user' && !firstPrompt) {
+        if (typeof entry.message?.content === 'string') {
+          firstPrompt = entry.message.content.slice(0, 200);
+        } else if (Array.isArray(entry.message?.content)) {
+          const textBlock = entry.message.content.find((b: { type: string }) => b.type === 'text');
+          if (textBlock?.text) {
+            firstPrompt = textBlock.text.slice(0, 200);
+          }
+        }
+      }
+    } catch {
+      // Skip corrupt/truncated lines (last line from partial read)
+    }
+  }
+
+  // Skip completely empty files
+  if (messageCount === 0 && !firstPrompt) return null;
+
+  return {
+    sessionId,
+    fullPath: filePath,
+    fileMtime: stat.mtimeMs,
+    firstPrompt,
+    summary: '', // No summary available for orphans
+    messageCount,
+    created: firstTimestamp || new Date(stat.birthtimeMs).toISOString(),
+    modified: new Date(stat.mtimeMs).toISOString(),
+    gitBranch: '',
+    projectPath: projectDir,
+    isSidechain: false,
+  };
+}
+
+/**
+ * Resolve the most recent session for a project.
+ * Used for session_id="current" support.
+ */
+export function resolveCurrentSession(projectDir?: string): string | null {
+  if (!projectDir) return null;
+  const sessions = getSessions(projectDir, { sort: 'newest' });
+  return sessions.length > 0 ? sessions[0].sessionId : null;
+}
+
+/**
  * Get project info: original path and session count.
  */
 export function getProjectInfo(projectDir: string): {
@@ -225,14 +358,18 @@ export function getProjectInfo(projectDir: string): {
   oldestDate: string | null;
 } | null {
   const index = loadSessionIndex(projectDir);
-  if (!index) return null;
+  const indexedEntries = index?.entries ?? [];
+  const orphans = discoverOrphanSessions(projectDir);
+  const allEntries = [...indexedEntries, ...orphans];
 
-  const nonSidechain = index.entries.filter((e) => !e.isSidechain);
+  if (allEntries.length === 0) return null;
+
+  const nonSidechain = allEntries.filter((e) => !e.isSidechain);
   const dates = nonSidechain.map((e) => new Date(e.created).getTime()).filter((d) => !isNaN(d));
 
   return {
     dirName: projectDir,
-    originalPath: index.originalPath || projectDir.replace(/--/g, '/'),
+    originalPath: index?.originalPath || projectDir.replace(/--/g, '/'),
     sessionCount: nonSidechain.length,
     latestDate: dates.length ? new Date(Math.max(...dates)).toISOString() : null,
     oldestDate: dates.length ? new Date(Math.min(...dates)).toISOString() : null,

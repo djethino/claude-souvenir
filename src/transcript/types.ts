@@ -122,6 +122,10 @@ export interface SessionIndex {
   entries: SessionIndexEntry[];
 }
 
+// --- Detail level for output formatting ---
+
+export type DetailLevel = 'conversation' | 'compact' | 'full';
+
 // --- Search result ---
 
 export interface SearchResult {

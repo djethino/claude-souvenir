@@ -13,7 +13,7 @@ export interface Chunk {
   line_number: number;
 }
 
-const MAX_EMBED_CHARS = 800; // ~200 tokens for MiniLM (256 token limit)
+const MAX_EMBED_CHARS = 1600; // ~400 tokens for EmbeddingGemma (2048 token limit)
 const MAX_CONTENT_CHARS = 2000; // Full text for display
 
 /**

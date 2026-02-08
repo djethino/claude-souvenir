@@ -41,6 +41,7 @@ export async function buildIndex(
   totalEmbedded: number;
   filesProcessed: number;
   skipped: number;
+  errors: string[];
 }> {
   const { sessionId, includeSubagents = true, rebuild = false, onProgress } = options;
 
@@ -80,6 +81,7 @@ export async function buildIndex(
   let totalEmbedded = 0;
   let filesProcessed = 0;
   let skipped = 0;
+  const errors: string[] = [];
 
   for (const projectDir of projectDirs) {
     let files = listTranscriptFiles(projectDir, {
@@ -150,12 +152,16 @@ export async function buildIndex(
         setIndexState(filePath, stat.size, lastLine);
         filesProcessed++;
       } catch (err) {
-        logger.error(`Error processing ${filePath}:`, err);
+        const msg = err instanceof Error ? err.message : String(err);
+        logger.error(`Error processing ${filePath}:`, msg);
+        if (errors.length < 5) {
+          errors.push(`${basename(filePath, '.jsonl').slice(0, 8)}...: ${msg.slice(0, 200)}`);
+        }
       }
     }
   }
 
   logger.info(`Indexing complete: ${totalChunks} chunks, ${totalEmbedded} embedded, ${filesProcessed} files, ${skipped} skipped`);
 
-  return { totalChunks, totalEmbedded, filesProcessed, skipped };
+  return { totalChunks, totalEmbedded, filesProcessed, skipped, errors };
 }

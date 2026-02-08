@@ -31,17 +31,15 @@ export function getDbPath(): string {
 
 /**
  * Convert a working directory path to a Claude project directory name.
+ * Claude Code replaces each special char (: \ /) with a single hyphen.
  * e.g. "D:\projet\claude-plugins" -> "D--projet-claude-plugins"
+ *       (D + ":" → "-" + "\" → "-" = "D--", then "\" → "-" for each separator)
  */
 export function cwdToProjectDir(cwd: string): string {
-  // Normalize to forward slashes, remove trailing slash
-  let normalized = cwd.replace(/\\/g, '/').replace(/\/$/, '');
-
-  // Remove the colon after drive letter on Windows (D: -> D)
-  normalized = normalized.replace(/^([A-Za-z]):/, '$1');
-
-  // Replace slashes with double dashes
-  return normalized.replace(/\//g, '--');
+  // Remove trailing slashes
+  const cleaned = cwd.replace(/[\\/]+$/, '');
+  // Replace : and path separators with single -
+  return cleaned.replace(/:/g, '-').replace(/[\\/]/g, '-');
 }
 
 /**

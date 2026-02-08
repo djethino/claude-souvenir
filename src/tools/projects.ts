@@ -1,8 +1,10 @@
 import { listProjectDirs, getProjectInfo } from '../transcript/discovery.js';
+import { getConfig } from '../config.js';
 
 export async function handleRecallProjects(params: {
   search?: string;
 }): Promise<string> {
+  const config = getConfig();
   const allDirs = listProjectDirs();
 
   const projects = allDirs
@@ -40,7 +42,8 @@ export async function handleRecallProjects(params: {
     const latest = p.latestDate ? p.latestDate.slice(0, 10) : '???';
     const oldest = p.oldestDate ? p.oldestDate.slice(0, 10) : '???';
 
-    lines.push(`${i + 1}. ${p.originalPath}`);
+    const isCurrent = p.dirName === config.currentProject;
+    lines.push(`${i + 1}. ${p.originalPath}${isCurrent ? ' [current]' : ''}`);
     lines.push(`   Dir: ${p.dirName}`);
     lines.push(`   Sessions: ${p.sessionCount} | Latest: ${latest} | Oldest: ${oldest}`);
     lines.push('');

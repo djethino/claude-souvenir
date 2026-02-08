@@ -99,6 +99,14 @@ async function runBuild(
       `  Files skipped (unchanged): ${result.skipped}`,
     ];
 
+    if (result.errors.length > 0) {
+      lines.push('');
+      lines.push(`  Errors (${result.errors.length}${result.errors.length >= 5 ? '+' : ''}):`);
+      for (const err of result.errors) {
+        lines.push(`    - ${err}`);
+      }
+    }
+
     return lines.join('\n');
   } catch (err) {
     return `Indexing error: ${err instanceof Error ? err.message : String(err)}`;

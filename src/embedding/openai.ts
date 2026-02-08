@@ -2,7 +2,7 @@ import type { EmbeddingProvider } from './provider.js';
 import { logger } from '../utils/logger.js';
 
 const MODEL = 'text-embedding-3-small';
-const DEFAULT_DIMENSIONS = 384;
+const DEFAULT_DIMENSIONS = 768;
 const API_URL = 'https://api.openai.com/v1/embeddings';
 const MAX_BATCH_SIZE = 100;
 
