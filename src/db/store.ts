@@ -327,3 +327,19 @@ export function setStoredProvider(name: string, dimensions: number): void {
   db.prepare('INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)').run('embedding_provider', name);
   db.prepare('INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)').run('embedding_dimensions', String(dimensions));
 }
+
+/**
+ * Get the number of indexed chunks for a project.
+ * Does NOT create the DB if it doesn't exist — returns 0 silently.
+ */
+export function getProjectChunkCount(projectDir: string): number {
+  try {
+    const dbPath = getDbPath();
+    if (!existsSync(dbPath)) return 0;
+    const db = getDb();
+    const row = db.prepare('SELECT COUNT(*) as cnt FROM chunks WHERE project_dir = ?').get(projectDir) as { cnt: number } | undefined;
+    return row?.cnt ?? 0;
+  } catch {
+    return 0;
+  }
+}

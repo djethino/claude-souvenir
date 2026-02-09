@@ -3,7 +3,7 @@ import { resolveProjectDir } from '../utils/paths.js';
 import { listProjectDirs, loadSessionIndex } from '../transcript/discovery.js';
 import { buildIndex } from '../db/indexer.js';
 import { getDb, getIndexStatus, getStoredProvider, clearAll } from '../db/store.js';
-import { createEmbeddingProvider } from './helpers.js';
+import { getOrCreateProvider } from './helpers.js';
 
 export async function handleRecallIndex(params: {
   action: 'status' | 'build' | 'rebuild';
@@ -80,8 +80,8 @@ async function runBuild(
     return 'Error: No project specified and could not detect current project.';
   }
 
-  // Create embedding provider
-  const provider = createEmbeddingProvider(config);
+  // Get singleton embedding provider
+  const provider = getOrCreateProvider(config);
 
   const isRebuild = params.action === 'rebuild';
 
@@ -110,7 +110,5 @@ async function runBuild(
     return lines.join('\n');
   } catch (err) {
     return `Indexing error: ${err instanceof Error ? err.message : String(err)}`;
-  } finally {
-    await provider.dispose();
   }
 }

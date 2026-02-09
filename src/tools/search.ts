@@ -3,8 +3,9 @@ import { formatSearchResult } from '../transcript/formatter.js';
 import { listProjectDirs, getSessionMetadata, resolveCurrentSession } from '../transcript/discovery.js';
 import { getConfig } from '../config.js';
 import { resolveProjectDir } from '../utils/paths.js';
-import { getDb, searchSemantic, getStoredProvider } from '../db/store.js';
-import { createEmbeddingProvider } from './helpers.js';
+import { getDb, searchSemantic, getStoredProvider, getProjectChunkCount } from '../db/store.js';
+import { getOrCreateProvider, isProviderLoaded } from './helpers.js';
+import { buildIndex } from '../db/indexer.js';
 import { logger } from '../utils/logger.js';
 import type { SearchResult } from '../transcript/types.js';
 
@@ -146,9 +147,15 @@ async function performTextSearch(
     formatSearchResult(r, offset + i),
   );
 
-  const footer = hasMore
+  let footer = hasMore
     ? `\n--- Page ${Math.ceil(endIndex / maxResults)}/${Math.ceil(total / maxResults)} | ${total - endIndex} more results | Next page: offset=${endIndex} ---`
     : `\n--- All ${total} results shown ---`;
+
+  // Add semantic hint if index is available
+  const hint = await getSemanticHint(params.query, projectDirs);
+  if (hint) {
+    footer += `\n${hint}`;
+  }
 
   return header + '\n' + formatted.join('\n\n') + footer;
 }
@@ -169,22 +176,33 @@ async function performSemanticSearch(
 ): Promise<string> {
   const config = getConfig();
 
-  // Check if index exists
+  // Get singleton provider and initialize
+  const provider = getOrCreateProvider(config);
   try {
-    getDb(config.embeddingDimensions);
-  } catch {
-    return 'No semantic index found. Run recall_index with action="build" first to create the index.';
-  }
+    if (!provider.isReady()) {
+      await provider.initialize();
+    }
 
-  const stored = getStoredProvider();
-  if (!stored) {
-    return 'No semantic index found. Run recall_index with action="build" first.';
-  }
+    // Auto-index for single-project searches (the common case)
+    if (projectDirs.length === 1) {
+      try {
+        await buildIndex(provider, projectDirs, { rebuild: false });
+      } catch (err) {
+        logger.warn('Auto-index failed, continuing with existing index:', err);
+      }
+    } else {
+      // Multi-project: check that index exists (no auto-index to avoid long waits)
+      try {
+        getDb(config.embeddingDimensions);
+      } catch {
+        return 'No semantic index found. Run recall_index with action="build" first to create the index.';
+      }
+      const stored = getStoredProvider();
+      if (!stored) {
+        return 'No semantic index found. Run recall_index with action="build" first.';
+      }
+    }
 
-  // Create provider and embed query
-  const provider = createEmbeddingProvider(config);
-  try {
-    await provider.initialize();
     const queryEmbedding = await provider.embedQuery(params.query);
 
     // Map role filter
@@ -243,8 +261,6 @@ async function performSemanticSearch(
     return header + '\n' + formatted.join('\n\n') + footer;
   } catch (err) {
     return `Semantic search error: ${err instanceof Error ? err.message : String(err)}`;
-  } finally {
-    await provider.dispose();
   }
 }
 
@@ -286,9 +302,23 @@ async function performHybridSearch(
   const semanticPromise = (async () => {
     try {
       const config = getConfig();
-      getDb(config.embeddingDimensions);
-      const provider = createEmbeddingProvider(config);
-      await provider.initialize();
+      const provider = getOrCreateProvider(config);
+      if (!provider.isReady()) {
+        await provider.initialize();
+      }
+
+      // Auto-index for single-project (same as performSemanticSearch)
+      if (projectDirs.length === 1) {
+        try {
+          await buildIndex(provider, projectDirs, { rebuild: false });
+        } catch (err) {
+          logger.warn('Auto-index failed in hybrid mode:', err);
+        }
+      } else {
+        // Multi-project: just ensure DB exists
+        getDb(config.embeddingDimensions);
+      }
+
       const queryEmbedding = await provider.embedQuery(params.query);
 
       let roleFilter: string | undefined;
@@ -306,7 +336,6 @@ async function performHybridSearch(
         dateTo: params.date_to,
       });
 
-      await provider.dispose();
       return results;
     } catch {
       return [];
@@ -374,4 +403,44 @@ async function performHybridSearch(
     : `\n--- All ${total} results shown ---`;
 
   return header + '\n' + formatted.join('\n\n') + footer;
+}
+
+/**
+ * Generate a hint about semantic search availability for text search results.
+ *
+ * Two strategies depending on provider state:
+ * - Provider loaded in memory: embed query + KNN count → "Hint: N+ semantic results (best: X.XX)"
+ * - Provider not loaded: SQL COUNT on chunks → "Hint: Semantic index available (N chunks)"
+ * - No DB: null (no hint)
+ */
+async function getSemanticHint(query: string, projectDirs: string[]): Promise<string | null> {
+  try {
+    if (isProviderLoaded()) {
+      // Provider already in memory — fast semantic probe
+      const config = getConfig();
+      const provider = getOrCreateProvider(config);
+      const queryEmbedding = await provider.embedQuery(query);
+      const projectDir = projectDirs.length === 1 ? projectDirs[0] : undefined;
+      const probeResults = searchSemantic(queryEmbedding, { topK: 5, projectDir });
+      if (probeResults.length > 0) {
+        const bestScore = (1 - probeResults[0].distance).toFixed(2);
+        return `--- Hint: ${probeResults.length}+ semantic results available (best score: ${bestScore}). Use mode="semantic" or mode="hybrid" for meaning-based search. ---`;
+      }
+      return null;
+    }
+
+    // Provider not loaded — just check chunk count via SQL (no model load)
+    const projectDir = projectDirs.length === 1 ? projectDirs[0] : undefined;
+    if (projectDir) {
+      const count = getProjectChunkCount(projectDir);
+      if (count > 0) {
+        return `--- Hint: Semantic index available (${count} chunks indexed). Use mode="semantic" or mode="hybrid" for meaning-based search. ---`;
+      }
+    }
+
+    return null;
+  } catch {
+    // Hint is non-critical — fail silently
+    return null;
+  }
 }
