@@ -4,7 +4,7 @@ import { listProjectDirs, getSessionMetadata, resolveCurrentSession } from '../t
 import { getConfig } from '../config.js';
 import { resolveProjectDir } from '../utils/paths.js';
 import { getDb, searchSemantic, getStoredProvider, getProjectChunkCount } from '../db/store.js';
-import { getOrCreateProvider, isProviderLoaded } from './helpers.js';
+import { getOrCreateProvider } from './helpers.js';
 import { buildIndex } from '../db/indexer.js';
 import { logger } from '../utils/logger.js';
 import type { SearchResult } from '../transcript/types.js';
@@ -415,27 +415,25 @@ async function performHybridSearch(
  */
 async function getSemanticHint(query: string, projectDirs: string[]): Promise<string | null> {
   try {
-    if (isProviderLoaded()) {
-      // Provider already in memory — fast semantic probe
-      const config = getConfig();
-      const provider = getOrCreateProvider(config);
-      const queryEmbedding = await provider.embedQuery(query);
-      const projectDir = projectDirs.length === 1 ? projectDirs[0] : undefined;
-      const probeResults = searchSemantic(queryEmbedding, { topK: 5, projectDir });
-      if (probeResults.length > 0) {
-        const bestScore = (1 - probeResults[0].distance).toFixed(2);
-        return `--- Hint: ${probeResults.length}+ semantic results available (best score: ${bestScore}). Use mode="semantic" or mode="hybrid" for meaning-based search. ---`;
-      }
-      return null;
-    }
-
-    // Provider not loaded — just check chunk count via SQL (no model load)
+    // Check if there's an index at all before loading the provider
     const projectDir = projectDirs.length === 1 ? projectDirs[0] : undefined;
     if (projectDir) {
       const count = getProjectChunkCount(projectDir);
-      if (count > 0) {
-        return `--- Hint: Semantic index available (${count} chunks indexed). Use mode="semantic" or mode="hybrid" for meaning-based search. ---`;
-      }
+      if (count === 0) return null;
+    }
+
+    // Load provider (singleton — first call loads the model, subsequent calls are instant)
+    const config = getConfig();
+    const provider = getOrCreateProvider(config);
+    if (!provider.isReady()) {
+      await provider.initialize();
+    }
+
+    const queryEmbedding = await provider.embedQuery(query);
+    const probeResults = searchSemantic(queryEmbedding, { topK: 5, projectDir });
+    if (probeResults.length > 0) {
+      const bestScore = (1 - probeResults[0].distance).toFixed(2);
+      return `--- Hint: ${probeResults.length}+ semantic results available (best score: ${bestScore}). Use mode="semantic" or mode="hybrid" for meaning-based search. ---`;
     }
 
     return null;
