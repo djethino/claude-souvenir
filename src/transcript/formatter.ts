@@ -281,6 +281,7 @@ export function formatSearchResult(
     lineNumber: number;
   },
   index: number,
+  sessionHitCount?: number,
 ): string {
   const ts = result.timestamp ? formatTimestampCompact(result.timestamp) : '???';
   const session = result.sessionSummary
@@ -291,8 +292,13 @@ export function formatSearchResult(
   const lines = [
     `--- Result ${index + 1} (score: ${scoreStr}) ---`,
     `Session: ${session}`,
-    `  session_id: ${result.sessionId}`,
   ];
+
+  if (sessionHitCount && sessionHitCount > 1) {
+    lines.push(`  [Session: ${sessionHitCount} matching results]`);
+  }
+
+  lines.push(`  session_id: ${result.sessionId}`);
 
   if (result.entryUuid) {
     lines.push(`  entry_uuid: ${result.entryUuid}`);

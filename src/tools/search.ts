@@ -7,6 +7,7 @@ import { getDb, searchSemantic, getStoredProvider, getProjectChunkCount } from '
 import { getOrCreateProvider } from './helpers.js';
 import { buildIndex } from '../db/indexer.js';
 import { logger } from '../utils/logger.js';
+import { applySessionDensityBoost } from '../search/density-boost.js';
 import type { SearchResult } from '../transcript/types.js';
 
 /**
@@ -117,6 +118,7 @@ async function performTextSearch(
   projectDirs: string[],
   maxResults: number,
 ): Promise<string> {
+  // Fetch all results (no pagination) so density boost can re-rank across sessions
   const result = await textSearch({
     query: params.query,
     projectDirs,
@@ -125,8 +127,8 @@ async function performTextSearch(
     dateFrom: params.date_from,
     dateTo: params.date_to,
     includeSubagents: params.include_subagents ?? false,
-    maxResults,
-    offset: params.offset || 0,
+    maxResults: 10000,
+    offset: 0,
     caseSensitive: params.case_sensitive ?? false,
     regex: params.regex ?? false,
   });
@@ -135,16 +137,19 @@ async function performTextSearch(
     return `No results found for "${params.query}" (searched ${result.filesSearched} files).`;
   }
 
+  // Apply session density boost before pagination
+  const { results: boostedResults, sessionHitCounts } = applySessionDensityBoost(result.results);
+
   const offset = params.offset || 0;
-  const showing = result.results.length;
-  const total = result.totalMatches;
-  const endIndex = offset + showing;
+  const sliced = boostedResults.slice(offset, offset + maxResults);
+  const total = boostedResults.length;
+  const endIndex = offset + sliced.length;
   const hasMore = endIndex < total;
 
   const header = `Found ${total} result(s) for "${params.query}" (showing ${offset + 1}-${endIndex}, searched ${result.filesSearched} files):\n`;
 
-  const formatted = result.results.map((r, i) =>
-    formatSearchResult(r, offset + i),
+  const formatted = sliced.map((r, i) =>
+    formatSearchResult(r, offset + i, sessionHitCounts.get(r.sessionId)),
   );
 
   let footer = hasMore
@@ -226,11 +231,8 @@ async function performSemanticSearch(
       return `No semantic results found for "${params.query}". The index may be empty for the specified project. Run recall_index with action="status" to check.`;
     }
 
-    // Convert to SearchResult format
-    const offset = params.offset || 0;
-    const sliced = vecResults.slice(offset, offset + maxResults);
-
-    const results: SearchResult[] = sliced.map((vr) => {
+    // Convert all results to SearchResult format (no pagination yet)
+    const allResults: SearchResult[] = vecResults.map((vr) => {
       const meta = getSessionMetadata(vr.session_id);
       return {
         sessionId: vr.session_id,
@@ -247,12 +249,17 @@ async function performSemanticSearch(
       };
     });
 
-    const total = vecResults.length;
-    const endIndex = offset + results.length;
+    // Apply session density boost before pagination
+    const { results: boostedResults, sessionHitCounts } = applySessionDensityBoost(allResults);
+
+    const offset = params.offset || 0;
+    const sliced = boostedResults.slice(offset, offset + maxResults);
+    const total = boostedResults.length;
+    const endIndex = offset + sliced.length;
     const hasMore = endIndex < total;
 
     const header = `Found ${total} semantic result(s) for "${params.query}" (showing ${offset + 1}-${endIndex}):\n`;
-    const formatted = results.map((r, i) => formatSearchResult(r, offset + i));
+    const formatted = sliced.map((r, i) => formatSearchResult(r, offset + i, sessionHitCounts.get(r.sessionId)));
 
     const footer = hasMore
       ? `\n--- Page ${Math.ceil(endIndex / maxResults)}/${Math.ceil(total / maxResults)} | ${total - endIndex} more results | Next page: offset=${endIndex} ---`
@@ -381,22 +388,23 @@ async function performHybridSearch(
     }
   }
 
-  // Sort by combined score
+  // Sort by combined score, then apply session density boost
   const allResults = [...merged.values()].sort((a, b) => b.score - a.score);
+  const { results: boostedResults, sessionHitCounts } = applySessionDensityBoost(allResults);
 
   const offset = params.offset || 0;
-  const sliced = allResults.slice(offset, offset + maxResults);
+  const sliced = boostedResults.slice(offset, offset + maxResults);
 
   if (sliced.length === 0) {
     return `No results found for "${params.query}".`;
   }
 
-  const total = allResults.length;
+  const total = boostedResults.length;
   const endIndex = offset + sliced.length;
   const hasMore = endIndex < total;
 
   const header = `Found ${total} hybrid result(s) for "${params.query}" (showing ${offset + 1}-${endIndex}):\n`;
-  const formatted = sliced.map((r, i) => formatSearchResult(r, offset + i));
+  const formatted = sliced.map((r, i) => formatSearchResult(r, offset + i, sessionHitCounts.get(r.sessionId)));
 
   const footer = hasMore
     ? `\n--- Page ${Math.ceil(endIndex / maxResults)}/${Math.ceil(total / maxResults)} | ${total - endIndex} more results | Next page: offset=${endIndex} ---`

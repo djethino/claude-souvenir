@@ -164,14 +164,6 @@ export async function textSearch(options: TextSearchOptions): Promise<{
           }
 
           if (matched) {
-            // Apply recency boost: +15% for today, fading to 0% over 365 days
-            if (entry.timestamp) {
-              const ageMs = Date.now() - new Date(entry.timestamp).getTime();
-              const ageDays = Math.max(0, ageMs / (1000 * 60 * 60 * 24));
-              const recencyFactor = 1 - Math.min(1, ageDays / 365);
-              score *= (1 + 0.15 * recencyFactor);
-            }
-
             const entrySessionId = entry.sessionId || basename(filePath, '.jsonl');
             const meta = getSessionMetadata(entrySessionId, projectDir);
 
