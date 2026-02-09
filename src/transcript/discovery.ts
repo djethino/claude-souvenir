@@ -122,19 +122,20 @@ export function getSessionFilePath(
   const projectDirs = projectDir ? [projectDir] : listProjectDirs();
 
   for (const dir of projectDirs) {
+    // Check index first (may be null if sessions-index.json doesn't exist or is locked)
     const index = loadSessionIndex(dir);
-    if (!index) continue;
-
-    const session = index.entries.find((e) => e.sessionId === sessionId);
-    if (session) {
-      // Use fullPath from index if available, otherwise construct it
-      const filePath = session.fullPath || join(getProjectTranscriptDir(dir), `${sessionId}.jsonl`);
-      if (existsSync(filePath)) {
-        return { filePath, projectDir: dir };
+    if (index) {
+      const session = index.entries.find((e) => e.sessionId === sessionId);
+      if (session) {
+        // Use fullPath from index if available, otherwise construct it
+        const filePath = session.fullPath || join(getProjectTranscriptDir(dir), `${sessionId}.jsonl`);
+        if (existsSync(filePath)) {
+          return { filePath, projectDir: dir };
+        }
       }
     }
 
-    // Also try direct file path
+    // Also try direct file path (works for orphan sessions or when index is unavailable)
     const directPath = join(getProjectTranscriptDir(dir), `${sessionId}.jsonl`);
     if (existsSync(directPath)) {
       return { filePath: directPath, projectDir: dir };
