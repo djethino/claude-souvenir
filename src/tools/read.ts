@@ -31,10 +31,10 @@ export async function handleRecallRead(params: {
     return 'Error: Could not determine current session. Use an explicit session_id.';
   }
 
-  // Find the session file
+  // Find the session file (current project only unless project is specified)
   const location = getSessionFilePath(sessionId, projectDir || config.currentProject || undefined);
   if (!location) {
-    return `Error: Session "${sessionId}" not found.${!projectDir ? ' Try specifying the project parameter.' : ''}`;
+    return `Error: Session "${sessionId}" not found in ${projectDir ? `project "${projectDir}"` : 'current project'}. Use recall_sessions to list valid session IDs, or specify the project parameter to search in a different project.`;
   }
 
   // Get session metadata

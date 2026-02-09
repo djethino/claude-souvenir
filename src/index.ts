@@ -25,7 +25,9 @@ Modes: "text" (default, fast, exact/regex), "semantic" (meaning-based, requires 
 
 Each result includes a session_id and entry_uuid. To read full context around a result, use recall_read with around_uuid=<entry_uuid> and session_id=<session_id>.
 
-Pagination: Results include "Page X/Y" footer. Use offset parameter to get next pages.`,
+Pagination: Results include "Page X/Y" footer. Use offset parameter to get next pages.
+
+Typical workflow: recall_projects → recall_sessions (pick a session) → recall_read or recall_search with session_id.`,
   {
     query: z.string().describe('Search query. For text mode: substring or regex. For semantic mode: natural language description of what you\'re looking for.'),
     mode: z.enum(['text', 'semantic', 'hybrid']).optional().describe('Search mode. Default: "text". "semantic" requires prior indexing via recall_index.'),
@@ -56,6 +58,8 @@ Pagination: Results include "Page X/Y" footer. Use offset parameter to get next 
 server.tool(
   'recall_read',
   `Read conversation entries from a specific Claude Code session transcript. Returns formatted messages with timestamps, roles, and content. Use this after recall_search to read the full context around a search result, or to browse a session chronologically. Automatically skips internal entries (file snapshots, thinking blocks) and condenses tool calls for readability. Use detail_level to control verbosity and before_turns/after_turns for asymmetric message navigation.
+
+IMPORTANT: session_id must come from recall_search results or recall_sessions output. Do NOT guess or fabricate session IDs.
 
 Reading modes:
 - Default (no from_line): reads the LAST entries (most recent). Best for catching up after context compaction.

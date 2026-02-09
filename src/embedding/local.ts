@@ -5,7 +5,9 @@ import { logger } from '../utils/logger.js';
 
 const MODEL_NAME = 'onnx-community/embeddinggemma-300m-ONNX';
 const DIMENSIONS = 768;
-const BATCH_SIZE = 16; // Smaller batches: larger model uses more memory per inference
+
+const BATCH_SIZE_GPU = 32;
+const BATCH_SIZE_CPU = 8;
 
 /** Prefixes required by EmbeddingGemma for asymmetric search */
 const DOCUMENT_PREFIX = 'title: none | text: ';
@@ -15,9 +17,28 @@ const QUERY_PREFIX = 'task: search result | query: ';
 const DEFAULT_MODEL_CACHE = join(homedir(), '.claude', 'recall', 'models');
 
 /**
+ * Detect the best available device for ONNX inference.
+ * Priority: env override > GPU (dml on Windows, cuda on Linux x64) > cpu.
+ */
+function detectDevice(): string {
+  const envDevice = process.env.RECALL_DEVICE;
+  if (envDevice) return envDevice;
+
+  switch (process.platform) {
+    case 'win32':
+      return 'dml';
+    case 'linux':
+      return process.arch === 'x64' ? 'cuda' : 'cpu';
+    default:
+      return 'cpu';
+  }
+}
+
+/**
  * Local embedding provider using EmbeddingGemma-300M via HuggingFace Transformers.js.
  * Google Gemma 3 derived, 100+ languages, 768 dimensions.
- * Model is downloaded on first use (~150-200MB quantized).
+ * Uses q4 quantization for optimal speed/quality trade-off.
+ * Auto-detects GPU (DirectML on Windows, CUDA on Linux) with CPU fallback.
  */
 export class LocalEmbeddingProvider implements EmbeddingProvider {
   readonly name = `local (${MODEL_NAME})`;
@@ -26,6 +47,7 @@ export class LocalEmbeddingProvider implements EmbeddingProvider {
   private model: any = null;
   private tokenizer: any = null;
   private ready = false;
+  private batchSize = BATCH_SIZE_CPU;
 
   isReady(): boolean {
     return this.ready;
@@ -34,25 +56,45 @@ export class LocalEmbeddingProvider implements EmbeddingProvider {
   async initialize(): Promise<void> {
     if (this.ready) return;
 
-    logger.info(`Loading local embedding model: ${MODEL_NAME} (~200MB on first download)...`);
+    const requestedDevice = detectDevice();
+    logger.info(`Loading local embedding model: ${MODEL_NAME} (q4, device: ${requestedDevice})...`);
 
     try {
       const { AutoModel, AutoTokenizer, env } = await import('@huggingface/transformers');
 
-      // Always set cache dir outside plugin cache to avoid permission issues
+      // Set cache dir outside plugin cache to avoid permission issues
       env.cacheDir = process.env.RECALL_MODEL_CACHE || DEFAULT_MODEL_CACHE;
-      logger.info(`Model cache dir: ${env.cacheDir}`);
 
-      // Load tokenizer and model in parallel for faster startup
-      [this.tokenizer, this.model] = await Promise.all([
-        AutoTokenizer.from_pretrained(MODEL_NAME),
-        AutoModel.from_pretrained(MODEL_NAME, {
-          dtype: 'q8' as any, // EmbeddingGemma does NOT support fp16, use q8 or q4
-        }),
-      ]);
+      // Try GPU first, fall back to CPU if unavailable
+      let device = requestedDevice;
+      let model: any;
 
+      try {
+        model = await AutoModel.from_pretrained(MODEL_NAME, {
+          dtype: 'q4' as any,
+          device: device as any,
+          session_options: { graphOptimizationLevel: 'all' },
+        });
+      } catch (gpuErr) {
+        if (device !== 'cpu') {
+          const gpuMsg = gpuErr instanceof Error ? gpuErr.message : String(gpuErr);
+          logger.warn(`GPU device "${device}" failed, falling back to CPU: ${gpuMsg}`);
+          device = 'cpu';
+          model = await AutoModel.from_pretrained(MODEL_NAME, {
+            dtype: 'q4' as any,
+            session_options: { graphOptimizationLevel: 'all' },
+          });
+        } else {
+          throw gpuErr;
+        }
+      }
+
+      this.model = model;
+      this.tokenizer = await AutoTokenizer.from_pretrained(MODEL_NAME);
+      this.batchSize = device === 'cpu' ? BATCH_SIZE_CPU : BATCH_SIZE_GPU;
       this.ready = true;
-      logger.info('Local embedding model loaded successfully');
+
+      logger.info(`Local embedding model loaded (device: ${device}, batch: ${this.batchSize})`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes('Cannot find module') || msg.includes('MODULE_NOT_FOUND')) {
@@ -79,8 +121,8 @@ export class LocalEmbeddingProvider implements EmbeddingProvider {
 
     const results: Float32Array[] = [];
 
-    for (let i = 0; i < texts.length; i += BATCH_SIZE) {
-      const batch = texts.slice(i, i + BATCH_SIZE);
+    for (let i = 0; i < texts.length; i += this.batchSize) {
+      const batch = texts.slice(i, i + this.batchSize);
       const prefixed = batch.map((t) => DOCUMENT_PREFIX + t);
 
       const inputs = await this.tokenizer(prefixed, {
