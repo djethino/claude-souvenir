@@ -19,18 +19,23 @@ const server = new McpServer({
 // --- recall_search ---
 server.tool(
   'recall_search',
-  `Search through past Claude Code conversation transcripts. Finds relevant conversations by matching your query against user messages, assistant responses, and session summaries. Returns ranked results with context snippets, timestamps, and session info.
+  `Search through past Claude Code conversation transcripts. Returns ranked results with context snippets, timestamps, and session info.
 
-Modes: "text" (default, fast, exact/regex), "semantic" (meaning-based, requires recall_index build first), "hybrid" (both combined).
+Modes:
+- "hybrid" (default): combines text matching AND meaning-based search. Best for most queries. Use this when looking for topics, discussions, or concepts.
+- "text": exact substring or regex matching only. Use ONLY when you need a specific literal string (e.g. a variable name, error message, UUID).
+- "semantic": meaning-based only. Understands natural language queries in any language, finds conceptually related content even without exact word matches.
+
+IMPORTANT: For conceptual queries ("what did we decide about X", "discussion about Y"), ALWAYS use hybrid or semantic mode. Text mode requires the exact words to appear in the transcript.
 
 Each result includes a session_id and entry_uuid. To read full context around a result, use recall_read with around_uuid=<entry_uuid> and session_id=<session_id>.
 
 Pagination: Results include "Page X/Y" footer. Use offset parameter to get next pages.
 
-Typical workflow: recall_projects → recall_sessions (pick a session) → recall_read or recall_search with session_id.`,
+Typical workflow: recall_search (find relevant entries) → recall_read around_uuid (read context). Or: recall_sessions → recall_read session_id (browse chronologically).`,
   {
-    query: z.string().describe('Search query. For text mode: substring or regex. For semantic mode: natural language description of what you\'re looking for.'),
-    mode: z.enum(['text', 'semantic', 'hybrid']).optional().describe('Search mode. Default: "text". "semantic" requires prior indexing via recall_index.'),
+    query: z.string().describe('Search query. Describe what you\'re looking for in natural language. For text mode only: substring or regex pattern.'),
+    mode: z.enum(['text', 'semantic', 'hybrid']).optional().describe('Search mode. Default: "hybrid". Use "text" only for exact literal matches (variable names, error codes, UUIDs).'),
     project: z.string().optional().describe('Project directory name (e.g. "D--projet-claude-plugins") or path. Default: current project. Use "all" for all projects.'),
     session_id: z.string().optional().describe('Limit search to a specific session UUID. Use "current" to auto-resolve the most recent session.'),
     role: z.enum(['user', 'assistant', 'both']).optional().describe('Filter by message role. Default: "both".'),

@@ -60,7 +60,7 @@ export async function handleRecallSearch(params: {
   regex?: boolean;
 }): Promise<string> {
   const config = getConfig();
-  const mode = params.mode || 'text';
+  const mode = params.mode || 'hybrid';
 
   // Resolve "current" session_id
   if (params.session_id === 'current') {
