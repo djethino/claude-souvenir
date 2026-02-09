@@ -18,7 +18,7 @@ export async function handleRecallRead(params: {
   entry_types?: string;
 }): Promise<string> {
   const config = getConfig();
-  const projectDir = params.project
+  const projectDir = params.project && params.project !== 'all'
     ? resolveProjectDir(params.project)
     : undefined;
 
@@ -31,10 +31,12 @@ export async function handleRecallRead(params: {
     return 'Error: Could not determine current session. Use an explicit session_id.';
   }
 
-  // Find the session file (current project only unless project is specified)
-  const location = getSessionFilePath(sessionId, projectDir || config.currentProject || undefined);
+  // Find the session file
+  const searchAllProjects = params.project === 'all';
+  const searchDir = searchAllProjects ? undefined : (projectDir || config.currentProject || undefined);
+  const location = getSessionFilePath(sessionId, searchDir);
   if (!location) {
-    return `Error: Session "${sessionId}" not found in ${projectDir ? `project "${projectDir}"` : 'current project'}. Use recall_sessions to list valid session IDs, or specify the project parameter to search in a different project.`;
+    return `Error: Session "${sessionId}" not found in ${searchAllProjects ? 'any project' : projectDir ? `project "${params.project}"` : 'current project'}. Use recall_sessions to list valid session IDs, or specify the project parameter to search in a different project.`;
   }
 
   // Get session metadata
