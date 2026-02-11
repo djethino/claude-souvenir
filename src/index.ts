@@ -10,7 +10,7 @@ import { handleRecallRead } from './tools/read.js';
 import { handleRecallSessions } from './tools/sessions.js';
 import { handleRecallProjects } from './tools/projects.js';
 import { handleRecallIndex } from './tools/index-mgmt.js';
-import { scheduleBackgroundIndex, consumeTriggerFlag } from './indexer/background.js';
+import { scheduleBackgroundIndex } from './indexer/background.js';
 
 const server = new McpServer({
   name: 'claude-recall',
@@ -24,16 +24,8 @@ const server = new McpServer({
  */
 function withBackgroundIndex<T>(handler: (params: T) => Promise<{ content: Array<{ type: 'text'; text: string }>; isError?: boolean }>) {
   return async (params: T) => {
-    // Check if Stop hook signaled new content
-    if (consumeTriggerFlag()) {
-      scheduleBackgroundIndex();
-    }
-
     const result = await handler(params);
-
-    // Schedule background index after responding
     scheduleBackgroundIndex();
-
     return result;
   };
 }
