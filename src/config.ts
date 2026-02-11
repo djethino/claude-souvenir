@@ -3,19 +3,23 @@ import { existsSync } from 'fs';
 import { join } from 'path';
 import { logger } from './utils/logger.js';
 
-export type EmbeddingProvider = 'local' | 'openai';
+export type EmbeddingProviderType = 'ollama' | 'openai';
 
 export interface RecallConfig {
   /** Current working directory (from Claude Code) */
   cwd: string;
   /** Current project directory name (e.g. D--projet-claude-plugins) */
   currentProject: string | null;
-  /** Embedding provider: 'local' or 'openai' */
-  embeddingProvider: EmbeddingProvider;
+  /** Embedding provider: 'ollama' or 'openai' */
+  embeddingProvider: EmbeddingProviderType;
   /** OpenAI API key (required if provider is 'openai') */
   openaiApiKey: string | null;
   /** Embedding dimensions */
   embeddingDimensions: number;
+  /** Ollama server URL (default http://localhost:11434) */
+  ollamaUrl: string;
+  /** Ollama model name (default 'embeddinggemma') */
+  ollamaModel: string;
 }
 
 let _config: RecallConfig | null = null;
@@ -42,7 +46,7 @@ export function getConfig(): RecallConfig {
   if (_config) return _config;
 
   const cwd = process.env.CWD || process.cwd();
-  const provider = (process.env.RECALL_PROVIDER || 'local') as EmbeddingProvider;
+  const provider = (process.env.RECALL_PROVIDER || 'ollama') as EmbeddingProviderType;
 
   // Try CWD-based detection (works if CWD env is properly set by Claude Code)
   const detectedProject = resolvePathToProject(cwd);
@@ -58,6 +62,8 @@ export function getConfig(): RecallConfig {
     embeddingProvider: provider,
     openaiApiKey: process.env.RECALL_OPENAI_API_KEY || null,
     embeddingDimensions: parseInt(process.env.RECALL_EMBEDDING_DIMENSIONS || '768', 10),
+    ollamaUrl: process.env.RECALL_OLLAMA_URL || 'http://localhost:11434',
+    ollamaModel: process.env.RECALL_OLLAMA_MODEL || 'embeddinggemma',
   };
 
   return _config;

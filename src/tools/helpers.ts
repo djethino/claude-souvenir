@@ -1,6 +1,6 @@
 import type { RecallConfig } from '../config.js';
 import type { EmbeddingProvider } from '../embedding/provider.js';
-import { LocalEmbeddingProvider } from '../embedding/local.js';
+import { OllamaEmbeddingProvider } from '../embedding/ollama.js';
 import { OpenAIEmbeddingProvider } from '../embedding/openai.js';
 
 /**
@@ -8,8 +8,8 @@ import { OpenAIEmbeddingProvider } from '../embedding/openai.js';
  */
 export function createEmbeddingProvider(config: RecallConfig): EmbeddingProvider {
   switch (config.embeddingProvider) {
-    case 'local':
-      return new LocalEmbeddingProvider();
+    case 'ollama':
+      return new OllamaEmbeddingProvider(config.ollamaUrl, config.ollamaModel);
 
     case 'openai':
       if (!config.openaiApiKey) {
@@ -21,7 +21,7 @@ export function createEmbeddingProvider(config: RecallConfig): EmbeddingProvider
       return new OpenAIEmbeddingProvider(config.openaiApiKey, config.embeddingDimensions);
 
     default:
-      throw new Error(`Unknown embedding provider: "${config.embeddingProvider}". Use "local" or "openai".`);
+      throw new Error(`Unknown embedding provider: "${config.embeddingProvider}". Use "ollama" or "openai".`);
   }
 }
 

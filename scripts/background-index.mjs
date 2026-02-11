@@ -7,7 +7,8 @@
  * Uses a lock file + timestamp to debounce across hook invocations
  * (each hook = new process, so debounce must be file-based).
  *
- * Loads the embedding model each time (~2-5s), but:
+ * With Ollama provider: initialization is a simple HTTP check (~2ms).
+ * The embedding model stays loaded in Ollama, shared across all processes.
  * - Debounced at 30s → max once per 30s
  * - Async hook → never blocks Claude
  * - Incremental → only indexes new content
