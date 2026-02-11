@@ -3,7 +3,7 @@ import { join } from 'path';
 import { homedir } from 'os';
 import { logger } from '../utils/logger.js';
 import { getConfig } from '../config.js';
-import { getOrCreateProvider, isProviderLoaded } from '../tools/helpers.js';
+import { getOrCreateProvider } from '../tools/helpers.js';
 import { buildIndex } from '../db/indexer.js';
 
 const TRIGGER_DIR = join(homedir(), '.claude', 'claude-recall');
@@ -53,11 +53,6 @@ export function scheduleBackgroundIndex(): void {
 
   // Skip if already running or too recent
   if (_indexing || (now - _lastIndexTime) < MIN_INTERVAL_MS) {
-    return;
-  }
-
-  // Skip if no provider loaded (don't load the model just for background indexing)
-  if (!isProviderLoaded()) {
     return;
   }
 
