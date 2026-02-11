@@ -10,11 +10,33 @@ import { handleRecallRead } from './tools/read.js';
 import { handleRecallSessions } from './tools/sessions.js';
 import { handleRecallProjects } from './tools/projects.js';
 import { handleRecallIndex } from './tools/index-mgmt.js';
+import { scheduleBackgroundIndex, consumeTriggerFlag } from './indexer/background.js';
 
 const server = new McpServer({
   name: 'claude-recall',
   version: '0.1.0',
 });
+
+/**
+ * Wrap a tool handler to add background indexing:
+ * - Before: check trigger flag (from Stop hook) → schedule index
+ * - After: schedule background index for next cycle
+ */
+function withBackgroundIndex<T>(handler: (params: T) => Promise<{ content: Array<{ type: 'text'; text: string }>; isError?: boolean }>) {
+  return async (params: T) => {
+    // Check if Stop hook signaled new content
+    if (consumeTriggerFlag()) {
+      scheduleBackgroundIndex();
+    }
+
+    const result = await handler(params);
+
+    // Schedule background index after responding
+    scheduleBackgroundIndex();
+
+    return result;
+  };
+}
 
 // --- recall_search ---
 server.tool(
@@ -47,7 +69,7 @@ Typical workflow: recall_search (find relevant entries) → recall_read around_u
     case_sensitive: z.boolean().optional().describe('For text mode: case-sensitive matching. Default: false.'),
     regex: z.boolean().optional().describe('For text mode: treat query as regex pattern. Default: false.'),
   },
-  async (params) => {
+  withBackgroundIndex(async (params) => {
     try {
       const text = await handleRecallSearch(params);
       return { content: [{ type: 'text' as const, text }] };
@@ -56,7 +78,7 @@ Typical workflow: recall_search (find relevant entries) → recall_read around_u
       logger.error('recall_search error:', msg);
       return { content: [{ type: 'text' as const, text: `Error: ${msg}` }], isError: true };
     }
-  },
+  }),
 );
 
 // --- recall_read ---
@@ -84,7 +106,7 @@ Pagination: Each response includes a footer with page position and navigation hi
     detail_level: z.enum(['conversation', 'compact', 'full']).optional().describe('Output detail level. "conversation" (default): text + tool usage summary. "compact": text + tool names. "full": everything including tool inputs/outputs.'),
     entry_types: z.string().optional().describe('Comma-separated types to include. Default: "user,assistant,summary". Add "progress" if needed.'),
   },
-  async (params) => {
+  withBackgroundIndex(async (params) => {
     try {
       const text = await handleRecallRead(params);
       return { content: [{ type: 'text' as const, text }] };
@@ -93,7 +115,7 @@ Pagination: Each response includes a footer with page position and navigation hi
       logger.error('recall_read error:', msg);
       return { content: [{ type: 'text' as const, text: `Error: ${msg}` }], isError: true };
     }
-  },
+  }),
 );
 
 // --- recall_sessions ---
@@ -113,7 +135,7 @@ Pagination: Shows "Showing X/Y sessions" footer. Increase max_results to see mor
     max_results: z.number().int().min(1).max(50).optional().describe('Maximum sessions to return. Default: 20.'),
     include_sidechains: z.boolean().optional().describe('Include sidechain/subagent sessions. Default: false.'),
   },
-  async (params) => {
+  withBackgroundIndex(async (params) => {
     try {
       const text = await handleRecallSessions(params);
       return { content: [{ type: 'text' as const, text }] };
@@ -122,7 +144,7 @@ Pagination: Shows "Showing X/Y sessions" footer. Increase max_results to see mor
       logger.error('recall_sessions error:', msg);
       return { content: [{ type: 'text' as const, text: `Error: ${msg}` }], isError: true };
     }
-  },
+  }),
 );
 
 // --- recall_projects ---
@@ -134,7 +156,7 @@ Typical workflow: recall_projects → recall_sessions project="<dir_name>" → r
   {
     search: z.string().optional().describe('Filter projects whose path contains this text.'),
   },
-  async (params) => {
+  withBackgroundIndex(async (params) => {
     try {
       const text = await handleRecallProjects(params);
       return { content: [{ type: 'text' as const, text }] };
@@ -143,7 +165,7 @@ Typical workflow: recall_projects → recall_sessions project="<dir_name>" → r
       logger.error('recall_projects error:', msg);
       return { content: [{ type: 'text' as const, text: `Error: ${msg}` }], isError: true };
     }
-  },
+  }),
 );
 
 // --- recall_index ---
@@ -155,7 +177,7 @@ server.tool(
     project: z.string().optional().describe('Project to index. Default: current project. Use "all" for all projects.'),
     session_id: z.string().optional().describe('Index only a specific session.'),
   },
-  async (params) => {
+  withBackgroundIndex(async (params) => {
     try {
       const text = await handleRecallIndex(params);
       return { content: [{ type: 'text' as const, text }] };
@@ -164,7 +186,7 @@ server.tool(
       logger.error('recall_index error:', msg);
       return { content: [{ type: 'text' as const, text: `Error: ${msg}` }], isError: true };
     }
-  },
+  }),
 );
 
 // --- Start server ---

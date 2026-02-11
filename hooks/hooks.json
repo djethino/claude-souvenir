@@ -1,3 +1,11 @@
 {
-  "hooks": {}
+  "hooks": {
+    "Stop": [
+      {
+        "type": "command",
+        "command": "node \"$HOOK_PLUGIN_DIR/scripts/on-stop.mjs\"",
+        "timeout": 5000
+      }
+    ]
+  }
 }
