@@ -172,6 +172,8 @@ Manage project file indexing (docs, code, config).
 
 Hooks trigger background indexing on Stop, UserPromptSubmit, PostToolUse, and PreCompact events. Indexing runs asynchronously and does not block Claude's workflow.
 
+> **First run note**: The first semantic search (or `souvenir_index build`) triggers an initial indexation of all existing transcripts for the current project. If you have a long conversation history, this can take several minutes depending on your hardware and the number of sessions. Subsequent runs are incremental and near-instant — only new content is indexed.
+
 ### Source Structure
 
 ```
