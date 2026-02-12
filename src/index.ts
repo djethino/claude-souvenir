@@ -252,6 +252,10 @@ Use path to explore a subdirectory. Use pattern to filter files by extension. Us
     depth: z.number().int().min(1).max(10).optional().describe('Maximum depth to display. Default: 3.'),
     pattern: z.string().optional().describe('Filter files by pattern: "*.ts", "*.{ts,js}", or exact filename. Directories are shown only if they contain matching files.'),
     directories_only: z.boolean().optional().describe('Show only directories, no files. Default: false.'),
+    show_lines: z.boolean().optional().describe('Show line count per file (e.g. "config.ts  (142L)"). Helps identify where the main logic lives. Default: false.'),
+    show_modified: z.boolean().optional().describe('Show relative modification time per file (e.g. "2h ago"). Helps understand what was recently worked on. Default: false.'),
+    stats: z.boolean().optional().describe('Add extension breakdown summary in footer (file count and total lines per extension). Default: false.'),
+    max_files: z.number().int().min(1).max(10000).optional().describe('Maximum number of files to show. Directories are always shown. Truncated files show "N more files not shown". Prevents context flooding on large repos.'),
   },
   withBackgroundIndex(async (params) => {
     try {
