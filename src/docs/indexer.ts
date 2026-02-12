@@ -18,6 +18,7 @@ import {
 } from './store.js';
 
 const EMBED_BATCH_SIZE = 32;
+const MAX_FILE_SIZE = 512 * 1024; // 512 KB — skip files larger than this
 
 export interface DocsIndexProgress {
   phase: string;
@@ -35,6 +36,12 @@ const SKIP_DIRS = new Set([
   'node_modules', '.git', '.svn', '.hg', 'dist', 'build', 'out',
   '__pycache__', '.venv', 'venv', '.claude',
   '.godot', '.import', 'addons',
+]);
+
+/** Hidden directories (starting with .) that should still be scanned. */
+const VISIBLE_DOT_DIRS = new Set([
+  '.claude-plugin', '.github', '.vscode', '.husky',
+  '.circleci', '.devcontainer', '.docker',
 ]);
 
 const SKIP_FILES = new Set([
@@ -64,7 +71,7 @@ function listFilesRecursive(
     if (entry.isDirectory()) {
       if (!recursive) continue;
       if (SKIP_DIRS.has(entry.name)) continue;
-      if (entry.name.startsWith('.')) continue;
+      if (entry.name.startsWith('.') && !VISIBLE_DOT_DIRS.has(entry.name)) continue;
       results.push(...listFilesRecursive(fullPath, pattern, recursive));
     } else if (entry.isFile()) {
       if (SKIP_FILES.has(entry.name)) continue;
@@ -219,6 +226,13 @@ export async function buildDocsIndex(
 
     try {
       const stat = statSync(absolutePath);
+
+      // Skip files that are too large (avoids memory issues + noise)
+      if (stat.size > MAX_FILE_SIZE) {
+        skipped++;
+        continue;
+      }
+
       const fileMtime = stat.mtime.toISOString();
 
       // Check if file needs re-indexing

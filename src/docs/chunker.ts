@@ -37,12 +37,12 @@ const CATEGORY_MAP: Record<string, DocCategory> = {
   '.lua': 'code', '.sh': 'code', '.bash': 'code', '.ps1': 'code', '.bat': 'code',
   '.vue': 'code', '.svelte': 'code',
   '.css': 'code', '.scss': 'code', '.less': 'code',
-  '.html': 'code', '.xml': 'code', '.svg': 'code',
+  '.html': 'code', '.xml': 'code',
   '.sql': 'code', '.graphql': 'code', '.gql': 'code',
   '.gd': 'code', '.gdshader': 'code',
   // config
   '.json': 'config', '.yaml': 'config', '.yml': 'config',
-  '.toml': 'config', '.ini': 'config', '.env': 'config',
+  '.toml': 'config', '.ini': 'config',
   '.editorconfig': 'config',
 };
 
