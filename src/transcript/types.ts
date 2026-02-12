@@ -124,7 +124,7 @@ export interface SessionIndex {
 
 // --- Detail level for output formatting ---
 
-export type DetailLevel = 'conversation' | 'compact' | 'full';
+export type DetailLevel = 'conversation' | 'compact' | 'full' | 'files' | 'tools';
 
 // --- Search result ---
 

@@ -1,6 +1,13 @@
 import { getSessionFilePath, getSessionMetadata, resolveCurrentSession } from '../transcript/discovery.js';
 import { parseTranscript } from '../transcript/parser.js';
-import { formatEntry, formatSessionHeader } from '../transcript/formatter.js';
+import {
+  formatEntry,
+  formatSessionHeader,
+  extractFileAccess,
+  formatFilesOutput,
+  extractToolUsage,
+  formatToolsOutput,
+} from '../transcript/formatter.js';
 import { getConfig } from '../config.js';
 import { resolveProjectDir } from '../utils/paths.js';
 import type { DetailLevel } from '../transcript/types.js';
@@ -49,6 +56,11 @@ export async function handleSouvenirRead(params: {
 
   const maxEntries = Math.min(params.max_entries || 20, 200);
   const detailLevel: DetailLevel = params.detail_level || 'conversation';
+
+  // Aggregate modes: process entire transcript, no pagination
+  if (detailLevel === 'files' || detailLevel === 'tools') {
+    return await readAggregate(location.filePath, detailLevel, meta);
+  }
 
   // If around_uuid is specified, center around that entry
   if (params.around_uuid) {
@@ -322,6 +334,41 @@ async function readAroundUuid(
       output.push(text);
       output.push('');
     }
+  }
+
+  return output.join('\n');
+}
+
+/**
+ * Aggregate mode: process entire transcript and extract structured data.
+ * Used by detail_level="files" and detail_level="tools".
+ */
+async function readAggregate(
+  filePath: string,
+  mode: 'files' | 'tools',
+  meta: ReturnType<typeof getSessionMetadata>,
+): Promise<string> {
+  const allEntries: Array<{
+    entry: import('../transcript/types.js').TranscriptEntry;
+    lineNumber: number;
+    rawLength: number;
+  }> = [];
+
+  const stream = parseTranscript(filePath, { includeTypes: ['user', 'assistant'] });
+  for await (const parsed of stream) {
+    allEntries.push(parsed);
+  }
+
+  const output: string[] = [];
+  if (meta) {
+    output.push(formatSessionHeader(meta.entry));
+    output.push('---');
+  }
+
+  if (mode === 'files') {
+    output.push(formatFilesOutput(extractFileAccess(allEntries)));
+  } else {
+    output.push(formatToolsOutput(extractToolUsage(allEntries)));
   }
 
   return output.join('\n');

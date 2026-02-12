@@ -86,6 +86,8 @@ Reading modes:
 - Default (no from_line): reads the LAST entries (most recent). Best for catching up after compaction.
 - from_line=N: reads forward from line N. Follow pagination hints (Earlier/Later) to navigate.
 - around_uuid=<uuid>: centers on a search result. Use before_turns/after_turns to control how much context to include (e.g. before_turns=0, after_turns=5 to read only what follows).
+- detail_level="files": extracts all unique file paths accessed during the session, grouped by action (modified/read/searched). One-call answer to "what files did this session touch?"
+- detail_level="tools": tool usage summary with call counts and error indicators.
 
 Pagination: footer shows page position and navigation hints. Use max_entries=1 with around_uuid to read a single full entry without truncation.`,
   {
@@ -97,7 +99,7 @@ Pagination: footer shows page position and navigation hints. Use max_entries=1 w
     context_turns: z.number().int().min(1).max(20).optional().describe('When using around_uuid, number of conversation turns before and after to include. Default: 3.'),
     before_turns: z.number().int().min(0).max(20).optional().describe('When using around_uuid, number of conversation messages before the target. Overrides context_turns for the "before" direction.'),
     after_turns: z.number().int().min(0).max(20).optional().describe('When using around_uuid, number of conversation messages after the target. Overrides context_turns for the "after" direction.'),
-    detail_level: z.enum(['conversation', 'compact', 'full']).optional().describe('Output detail level. "conversation" (default): text + tool usage summary. "compact": text + tool names. "full": everything including tool inputs/outputs.'),
+    detail_level: z.enum(['conversation', 'compact', 'full', 'files', 'tools']).optional().describe('Output detail level. "conversation" (default): text + tool summary. "compact": condensed. "full": everything. "files": unique file paths accessed, grouped by action (read/write/search). "tools": tool usage counts with error indicators.'),
     entry_types: z.string().optional().describe('Comma-separated types to include. Default: "user,assistant,summary". Add "progress" if needed.'),
   },
   withBackgroundIndex(async (params) => {

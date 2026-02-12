@@ -311,3 +311,222 @@ export function formatSearchResult(
 
   return lines.join('\n');
 }
+
+// ── Aggregate extraction functions ──────────────────────────────────────────
+
+export interface FileAccessRecord {
+  path: string;
+  actions: Set<'read' | 'write' | 'search'>;
+  count: number;
+  hadError: boolean;
+}
+
+export interface ToolUsageRecord {
+  name: string;
+  count: number;
+  errorCount: number;
+}
+
+/** Tools that take file_path as input */
+const READ_TOOLS = new Set(['Read']);
+const WRITE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit']);
+const SEARCH_TOOLS = new Set(['Glob', 'Grep']);
+
+type FileAction = 'read' | 'write' | 'search';
+
+function classifyTool(baseName: string): FileAction | null {
+  if (READ_TOOLS.has(baseName)) return 'read';
+  if (WRITE_TOOLS.has(baseName)) return 'write';
+  if (SEARCH_TOOLS.has(baseName)) return 'search';
+  return null;
+}
+
+/** Strip MCP prefix: "mcp__server__ToolName" → "ToolName" */
+function getBaseName(toolName: string): string {
+  if (toolName.includes('__')) {
+    return toolName.split('__').pop()!;
+  }
+  return toolName;
+}
+
+/**
+ * Extract unique file paths accessed from transcript entries.
+ * Processes assistant entries for tool_use blocks, user entries for tool_result errors.
+ */
+export function extractFileAccess(
+  entries: Array<{ entry: TranscriptEntry; lineNumber: number }>,
+): FileAccessRecord[] {
+  const fileMap = new Map<string, FileAccessRecord>();
+  const toolIdToPath = new Map<string, string>();
+
+  for (const { entry } of entries) {
+    if (entry.type !== 'assistant') continue;
+    const asst = entry as AssistantEntry;
+
+    for (const block of asst.message.content) {
+      if (block.type !== 'tool_use') continue;
+      const tool = block as ToolUseBlock;
+      const baseName = getBaseName(tool.name);
+      const action = classifyTool(baseName);
+      if (!action) continue;
+
+      const filePath = (tool.input.file_path as string | undefined)
+        ?? (tool.input.path as string | undefined)
+        ?? null;
+
+      if (!filePath) continue;
+
+      toolIdToPath.set(tool.id, filePath);
+
+      const existing = fileMap.get(filePath);
+      if (existing) {
+        existing.actions.add(action);
+        existing.count++;
+      } else {
+        fileMap.set(filePath, {
+          path: filePath,
+          actions: new Set([action]),
+          count: 1,
+          hadError: false,
+        });
+      }
+    }
+  }
+
+  // Second pass: check user entries for tool_result errors
+  for (const { entry } of entries) {
+    if (entry.type !== 'user') continue;
+    const user = entry as UserEntry;
+    if (typeof user.message.content === 'string') continue;
+
+    for (const block of user.message.content) {
+      if (block.type !== 'tool_result') continue;
+      const result = block as ToolResultBlock;
+      if (!result.is_error) continue;
+
+      const filePath = toolIdToPath.get(result.tool_use_id);
+      if (filePath && fileMap.has(filePath)) {
+        fileMap.get(filePath)!.hadError = true;
+      }
+    }
+  }
+
+  // Sort: written first, then read, then searched
+  const records = [...fileMap.values()];
+  records.sort((a, b) => {
+    const aWrite = a.actions.has('write') ? 0 : 1;
+    const bWrite = b.actions.has('write') ? 0 : 1;
+    if (aWrite !== bWrite) return aWrite - bWrite;
+    const aRead = a.actions.has('read') ? 0 : 1;
+    const bRead = b.actions.has('read') ? 0 : 1;
+    return aRead - bRead;
+  });
+
+  return records;
+}
+
+/**
+ * Format file access records into a concise grouped output.
+ */
+export function formatFilesOutput(records: FileAccessRecord[]): string {
+  if (records.length === 0) return '(No file access detected in this session)';
+
+  const lines: string[] = [];
+  const written = records.filter((r) => r.actions.has('write'));
+  const readOnly = records.filter((r) => !r.actions.has('write') && r.actions.has('read'));
+  const searched = records.filter((r) => !r.actions.has('write') && !r.actions.has('read'));
+
+  if (written.length > 0) {
+    lines.push(`Modified (${written.length}):`);
+    for (const r of written) {
+      lines.push(`  ${r.path}${r.hadError ? '  [ERROR]' : ''}`);
+    }
+  }
+
+  if (readOnly.length > 0) {
+    if (lines.length > 0) lines.push('');
+    lines.push(`Read (${readOnly.length}):`);
+    for (const r of readOnly) {
+      lines.push(`  ${r.path}${r.hadError ? '  [ERROR]' : ''}`);
+    }
+  }
+
+  if (searched.length > 0) {
+    if (lines.length > 0) lines.push('');
+    lines.push(`Searched (${searched.length}):`);
+    for (const r of searched) {
+      lines.push(`  ${r.path}`);
+    }
+  }
+
+  lines.push('');
+  lines.push(`Total: ${records.length} unique paths (${written.length} modified, ${readOnly.length} read, ${searched.length} searched)`);
+  return lines.join('\n');
+}
+
+/**
+ * Extract tool usage counts from transcript entries.
+ */
+export function extractToolUsage(
+  entries: Array<{ entry: TranscriptEntry; lineNumber: number }>,
+): ToolUsageRecord[] {
+  const toolMap = new Map<string, ToolUsageRecord>();
+  const toolIdToName = new Map<string, string>();
+
+  for (const { entry } of entries) {
+    if (entry.type === 'assistant') {
+      const asst = entry as AssistantEntry;
+      for (const block of asst.message.content) {
+        if (block.type === 'tool_use') {
+          const tool = block as ToolUseBlock;
+          const existing = toolMap.get(tool.name);
+          if (existing) {
+            existing.count++;
+          } else {
+            toolMap.set(tool.name, { name: tool.name, count: 1, errorCount: 0 });
+          }
+          toolIdToName.set(tool.id, tool.name);
+        }
+      }
+    }
+
+    // tool_result blocks are in user entries
+    if (entry.type === 'user') {
+      const user = entry as UserEntry;
+      if (typeof user.message.content === 'string') continue;
+      for (const block of user.message.content) {
+        if (block.type === 'tool_result') {
+          const result = block as ToolResultBlock;
+          if (result.is_error) {
+            const toolName = toolIdToName.get(result.tool_use_id);
+            if (toolName && toolMap.has(toolName)) {
+              toolMap.get(toolName)!.errorCount++;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  return [...toolMap.values()].sort((a, b) => b.count - a.count);
+}
+
+/**
+ * Format tool usage records into a concise summary.
+ */
+export function formatToolsOutput(records: ToolUsageRecord[]): string {
+  if (records.length === 0) return '(No tool usage detected in this session)';
+
+  const totalCalls = records.reduce((s, r) => s + r.count, 0);
+  const totalErrors = records.reduce((s, r) => s + r.errorCount, 0);
+
+  const lines: string[] = [];
+  lines.push(`Tool usage (${totalCalls} calls, ${records.length} unique tools${totalErrors > 0 ? `, ${totalErrors} error${totalErrors > 1 ? 's' : ''}` : ''}):`);
+
+  for (const r of records) {
+    const error = r.errorCount > 0 ? ` (${r.errorCount} error${r.errorCount > 1 ? 's' : ''})` : '';
+    lines.push(`  ${r.name}: ${r.count}${error}`);
+  }
+
+  return lines.join('\n');
+}

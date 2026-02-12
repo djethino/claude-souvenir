@@ -105,6 +105,13 @@ interface TreeEntry {
   mtimeMs?: number;
   /** File extension (for stats) */
   ext?: string;
+  /** For dirs at depth boundary: peek info about hidden children */
+  boundaryInfo?: {
+    childDirs: number;
+    childFiles: number;
+    matchingFiles: number;
+    matchExt: string | null;
+  };
 }
 
 // ── Walker ───────────────────────────────────────────────────────────────────
@@ -195,7 +202,29 @@ function walkTree(
         entries.push(...sub.entries);
       } else {
         dirCount += 1;
-        entries.push({ name: item.name + '/', isDir: true, fullPath, prefixParts });
+        const entry: TreeEntry = { name: item.name + '/', isDir: true, fullPath, prefixParts };
+
+        // Peek 1 level to show what's hidden below depth boundary
+        try {
+          const peekItems = readdirSync(fullPath, { withFileTypes: true });
+          let childFiles = 0, childDirs = 0, matchingFiles = 0;
+          let matchExt: string | null = null;
+
+          for (const peek of peekItems) {
+            if (peek.isDirectory()) {
+              if (!shouldSkipDir(peek.name)) childDirs++;
+            } else if (peek.isFile()) {
+              childFiles++;
+              if (opts.pattern && matchPattern(peek.name, opts.pattern)) {
+                matchingFiles++;
+                if (!matchExt) matchExt = extname(peek.name).toLowerCase() || null;
+              }
+            }
+          }
+          entry.boundaryInfo = { childDirs, childFiles, matchingFiles, matchExt };
+        } catch { /* permission denied → no annotation */ }
+
+        entries.push(entry);
       }
     } else {
       fileCount += 1;
@@ -302,11 +331,33 @@ function formatTree(
 
     // Build suffix annotations
     const suffixes: string[] = [];
-    if (!entry.isDir && opts.showLines && entry.lineCount !== undefined) {
-      suffixes.push(`${entry.lineCount}L`);
-    }
-    if (!entry.isDir && opts.showModified && entry.mtimeMs !== undefined) {
-      suffixes.push(formatRelativeTime(entry.mtimeMs));
+    if (entry.isDir && entry.boundaryInfo) {
+      const info = entry.boundaryInfo;
+      const parts: string[] = [];
+      if (info.childDirs > 0) {
+        parts.push(`${info.childDirs} dir${info.childDirs > 1 ? 's' : ''}`);
+      }
+      if (opts.pattern) {
+        if (info.matchingFiles > 0) {
+          parts.push(`${info.matchingFiles} ${info.matchExt || 'match'}`);
+        } else if (info.childFiles > 0) {
+          parts.push('no match');
+        }
+      } else {
+        if (info.childFiles > 0) {
+          parts.push(`${info.childFiles} file${info.childFiles > 1 ? 's' : ''}`);
+        }
+      }
+      if (parts.length > 0) {
+        suffixes.push('... ' + parts.join(', '));
+      }
+    } else if (!entry.isDir) {
+      if (opts.showLines && entry.lineCount !== undefined) {
+        suffixes.push(`${entry.lineCount}L`);
+      }
+      if (opts.showModified && entry.mtimeMs !== undefined) {
+        suffixes.push(formatRelativeTime(entry.mtimeMs));
+      }
     }
 
     const suffix = suffixes.length > 0 ? '  (' + suffixes.join(', ') + ')' : '';
