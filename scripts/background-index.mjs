@@ -17,7 +17,7 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync } from 'fs';
 import { join, dirname } from 'path';
 import { homedir } from 'os';
-import { fileURLToPath } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
 
 const SOUVENIR_DIR = join(homedir(), '.claude', 'claude-souvenir');
 const LOCK_FILE = join(SOUVENIR_DIR, 'bg-index.lock');
@@ -64,11 +64,11 @@ process.env.CWD = cwd;
 
 // ── Run indexation ──────────────────────────────────────────────────────────
 async function run() {
-  const { getConfig } = await import(`file:///${join(buildDir, 'config.js').replace(/\\/g, '/')}`);
-  const { createEmbeddingProvider } = await import(`file:///${join(buildDir, 'tools', 'helpers.js').replace(/\\/g, '/')}`);
-  const { buildIndex } = await import(`file:///${join(buildDir, 'db', 'indexer.js').replace(/\\/g, '/')}`);
-  const { buildDocsIndex } = await import(`file:///${join(buildDir, 'docs', 'indexer.js').replace(/\\/g, '/')}`);
-  const { docsDbExists, getDocSources } = await import(`file:///${join(buildDir, 'docs', 'store.js').replace(/\\/g, '/')}`);
+  const { getConfig } = await import(pathToFileURL(join(buildDir, 'config.js')).href);
+  const { createEmbeddingProvider } = await import(pathToFileURL(join(buildDir, 'tools', 'helpers.js')).href);
+  const { buildIndex } = await import(pathToFileURL(join(buildDir, 'db', 'indexer.js')).href);
+  const { buildDocsIndex } = await import(pathToFileURL(join(buildDir, 'docs', 'indexer.js')).href);
+  const { docsDbExists, getDocSources } = await import(pathToFileURL(join(buildDir, 'docs', 'store.js')).href);
 
   const config = getConfig();
   if (!config.currentProject) {

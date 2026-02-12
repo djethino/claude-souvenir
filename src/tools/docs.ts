@@ -99,7 +99,7 @@ async function handleAdd(
     const fromThis = files.filter((f) =>
       type === 'file'
         ? f.relativePath === relativePath
-        : f.relativePath.startsWith(relativePath + '/') || f.relativePath.startsWith(relativePath + '\\'),
+        : f.relativePath.startsWith(relativePath + '/'),
     );
 
     const lines = [

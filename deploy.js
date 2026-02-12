@@ -6,11 +6,12 @@
  */
 
 import { readFileSync, existsSync, mkdirSync, cpSync, rmSync, statSync } from 'fs';
-import { join, resolve } from 'path';
+import { join, resolve, dirname, basename } from 'path';
 import { homedir } from 'os';
 import { execSync } from 'child_process';
+import { fileURLToPath } from 'url';
 
-const pluginDir = resolve(import.meta.dirname);
+const pluginDir = resolve(dirname(fileURLToPath(import.meta.url)));
 const pluginJson = JSON.parse(readFileSync(join(pluginDir, '.claude-plugin', 'plugin.json'), 'utf-8'));
 const { name, version } = pluginJson;
 
@@ -62,8 +63,8 @@ function deploy() {
   cpSync(pluginDir, cacheDir, {
     recursive: true,
     filter: (src) => {
-      const name = src.split(/[\\/]/).pop() || '';
-      return !exclude.has(name);
+      const part = basename(src);
+      return !exclude.has(part);
     },
   });
 
