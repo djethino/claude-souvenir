@@ -67,6 +67,8 @@ async function run() {
   const { getConfig } = await import(`file:///${join(buildDir, 'config.js').replace(/\\/g, '/')}`);
   const { createEmbeddingProvider } = await import(`file:///${join(buildDir, 'tools', 'helpers.js').replace(/\\/g, '/')}`);
   const { buildIndex } = await import(`file:///${join(buildDir, 'db', 'indexer.js').replace(/\\/g, '/')}`);
+  const { buildDocsIndex } = await import(`file:///${join(buildDir, 'docs', 'indexer.js').replace(/\\/g, '/')}`);
+  const { docsDbExists, getDocSources } = await import(`file:///${join(buildDir, 'docs', 'store.js').replace(/\\/g, '/')}`);
 
   const config = getConfig();
   if (!config.currentProject) {
@@ -76,9 +78,23 @@ async function run() {
   const provider = createEmbeddingProvider(config);
   try {
     await provider.initialize();
+
+    // 1. Index transcripts (global DB)
     const result = await buildIndex(provider, [config.currentProject], { rebuild: false });
     if (result.totalEmbedded > 0) {
-      process.stderr.write(`[claude-souvenir] Background index: ${result.totalEmbedded} new chunks\n`);
+      process.stderr.write(`[claude-souvenir] Background index: ${result.totalEmbedded} new transcript chunks\n`);
+    }
+
+    // 2. Index docs (local DB) if sources are configured
+    const projectRoot = config.cwd;
+    if (projectRoot && docsDbExists(projectRoot)) {
+      const sources = getDocSources(projectRoot);
+      if (sources.length > 0) {
+        const docsResult = await buildDocsIndex(projectRoot, provider, { rebuild: false });
+        if (docsResult.totalEmbedded > 0) {
+          process.stderr.write(`[claude-souvenir] Background index: ${docsResult.totalEmbedded} new doc chunks\n`);
+        }
+      }
     }
   } finally {
     await provider.dispose();

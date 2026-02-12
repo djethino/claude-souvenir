@@ -153,10 +153,15 @@ Pagination: Shows "Showing X/Y sessions" footer. Increase max_results to see mor
 // --- souvenir_projects ---
 server.tool(
   'souvenir_projects',
-  `List all Claude Code projects that have conversation history. Shows project path, directory name (used as identifier in other tools), number of sessions, and date range. The current project is marked with [current]. Use this to discover available projects before using other tools.
+  `List all Claude Code projects that have conversation history. Shows project path, directory name (used as identifier in other tools), number of sessions, and date range. The current project is marked with [current]. Projects whose original path no longer exists are marked [orphan].
+
+Actions:
+- "list" (default): Show all projects with status. Also detects orphaned index data (projects in the semantic index but no longer on disk).
+- "clean": Remove index data for orphaned projects. Frees space in the semantic search database. Transcript files in ~/.claude/projects/ are preserved.
 
 Typical workflow: souvenir_projects → souvenir_sessions project="<dir_name>" → souvenir_read or souvenir_search.`,
   {
+    action: z.enum(['list', 'clean']).optional().describe('Default: "list". Use "clean" to remove orphaned project data from the semantic index.'),
     search: z.string().optional().describe('Filter projects whose path contains this text.'),
   },
   withBackgroundIndex(async (params) => {
@@ -204,13 +209,14 @@ Actions:
 - "status": Show index statistics (chunks, files, sections, pending changes).
 - "build": Index new/changed files incrementally. Use rebuild=true to re-index everything.
 - "clear": Remove all indexed data (sources are preserved).
+- "sections": Show markdown section table of contents for a file. Provide path. Returns heading hierarchy with line numbers for navigation.
 
 Categories are auto-detected by extension: doc (.md, .txt), code (.ts, .py, .go...), config (.json, .yaml...).
 Override with the category parameter if needed.
 
-Typical workflow: souvenir_docs add path="src" → souvenir_docs add path="docs" → souvenir_docs build → souvenir_search source="docs"`,
+Typical workflow: souvenir_docs add path="src" → souvenir_docs add path="docs" → souvenir_docs build → souvenir_search source="docs". For markdown navigation: souvenir_docs sections path="docs/guide.md".`,
   {
-    action: z.enum(['add', 'remove', 'list', 'status', 'build', 'clear']).describe('Action to perform.'),
+    action: z.enum(['add', 'remove', 'list', 'status', 'build', 'clear', 'sections']).describe('Action to perform.'),
     path: z.string().optional().describe('For "add": file or directory path relative to project root. For "remove": path to untrack.'),
     pattern: z.string().optional().describe('For "add" with directory: glob pattern to filter files (e.g. "*.md", "*.{ts,js}"). Default: all supported extensions.'),
     category: z.enum(['doc', 'code', 'config']).optional().describe('Override auto-detection. Force all files from this source to a specific category.'),

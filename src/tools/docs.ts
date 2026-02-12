@@ -13,12 +13,13 @@ import {
   clearDocFile,
   docsDbExists,
   getDocsDb,
+  getDocSections,
 } from '../docs/store.js';
 import { buildDocsIndex, resolveSourceFiles } from '../docs/indexer.js';
 import { detectCategory } from '../docs/chunker.js';
 
 export async function handleSouvenirDocs(params: {
-  action: 'add' | 'remove' | 'list' | 'status' | 'build' | 'clear';
+  action: 'add' | 'remove' | 'list' | 'status' | 'build' | 'clear' | 'sections';
   path?: string;
   pattern?: string;
   category?: DocCategory;
@@ -45,8 +46,10 @@ export async function handleSouvenirDocs(params: {
       return handleBuild(projectRoot, config, params.rebuild ?? false);
     case 'clear':
       return handleClear(projectRoot);
+    case 'sections':
+      return handleSections(projectRoot, params);
     default:
-      return `Unknown action: "${params.action}". Use "add", "remove", "list", "status", "build", or "clear".`;
+      return `Unknown action: "${params.action}". Use "add", "remove", "list", "status", "build", "clear", or "sections".`;
   }
 }
 
@@ -326,4 +329,43 @@ async function handleClear(projectRoot: string): Promise<string> {
 
   clearAllDocs(projectRoot);
   return 'All docs index data cleared (chunks, sections, index state). Sources are preserved. Run "build" to re-index.';
+}
+
+// ---------------------------------------------------------------------------
+// Sections (markdown TOC navigation)
+// ---------------------------------------------------------------------------
+
+async function handleSections(
+  projectRoot: string,
+  params: { path?: string },
+): Promise<string> {
+  if (!params.path) {
+    return 'Error: "path" parameter is required for "sections" action. Provide a markdown file path.';
+  }
+
+  if (!docsDbExists(projectRoot)) {
+    return 'No docs database found. Index the file first with souvenir_docs action="add" then action="build".';
+  }
+
+  const relativePath = relative(projectRoot, resolve(projectRoot, params.path)).replace(/\\/g, '/');
+  const sections = getDocSections(projectRoot, relativePath);
+
+  if (sections.length === 0) {
+    return `No sections found for "${relativePath}". The file may not be indexed or may not contain markdown headers. Run souvenir_docs action="build" if needed.`;
+  }
+
+  const lines = [`Sections for ${relativePath} (${sections.length} headers):\n`];
+
+  for (const s of sections) {
+    const indent = '  '.repeat(s.level - 1);
+    const lineRange = s.end_line
+      ? `L${s.start_line}-${s.end_line}`
+      : `L${s.start_line}+`;
+    lines.push(`${indent}${'#'.repeat(s.level)} ${s.heading}  [${lineRange}]`);
+  }
+
+  lines.push('');
+  lines.push('Use the Read tool with file_path and offset/limit to navigate to a specific section.');
+
+  return lines.join('\n');
 }
