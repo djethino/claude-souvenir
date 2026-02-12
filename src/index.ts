@@ -198,27 +198,18 @@ Indexing runs automatically in the background after each interaction. Use this t
 // --- souvenir_docs ---
 server.tool(
   'souvenir_docs',
-  `Index project files (docs, code, config) for semantic search via souvenir_search. Once indexed, you can find code by meaning — not just by string pattern. Ask conceptual questions about the codebase ("where is validation done?", "find legacy patterns", "how does auth work?") that Grep cannot answer.
+  `This tool powers souvenir_search source="code"/"docs"/"config"/"project". Without it, semantic code search has nothing to search through. Add project files here so you can then ask conceptual questions via souvenir_search ("where is auth checked?", "find deprecated patterns", "how does error handling work?") that Grep cannot answer.
 
-Files are automatically versioned every ~30s when changes are detected. Use "history", "diff", and "restore" to browse and recover previous versions (3-day retention).
+Also acts as a safety net: files are automatically versioned every ~30s. If a destructive action happens (bad checkout, accidental delete, broken refactor), use "history"/"diff"/"restore" to recover any file from the last 3 days.
 
-Actions:
-- "add": Track a file or directory for indexing. Provide path (relative to project root). For directories, optionally set pattern (e.g. "*.md") and category.
-- "remove": Stop tracking a source. Provide source_id (from "list") or path.
-- "list": Show all tracked sources and resolved file counts.
-- "status": Show index statistics (chunks, files, sections, snapshots, pending changes).
-- "build": Index new/changed files incrementally. Use rebuild=true to re-index everything.
-- "clear": Remove all indexed data (sources are preserved).
-- "sections": Show markdown section table of contents for a file. Provide path. Returns heading hierarchy with line numbers for navigation.
-- "history": Show file version history. Provide path for a specific file, or omit for all versioned files.
-- "diff": Compare a saved version to the current file on disk. Provide path and optionally snapshot_id (default: latest snapshot).
-- "restore": Restore a file from a saved version. Provide path and snapshot_id. A backup of the current state is saved automatically before overwriting.
-- "vacuum": Compact the database file to reclaim disk space from deleted data (snapshots, cleared chunks).
+Setup (once per project): "add" path="src" → "add" path="docs" → "build". After that, background indexing keeps everything up to date.
 
-Categories are auto-detected by extension: doc (.md, .txt), code (.ts, .py, .go...), config (.json, .yaml...).
-Override with the category parameter if needed.
+Actions — Setup: "add", "remove", "list", "build" (incremental), "clear".
+Actions — Navigation: "status", "sections" (markdown TOC with line numbers).
+Actions — Versioning: "history", "diff", "restore".
+Actions — Maintenance: "vacuum" (compact DB).
 
-Typical workflow: souvenir_docs add path="src" → souvenir_docs add path="docs" → souvenir_docs build → souvenir_search source="docs". For markdown navigation: souvenir_docs sections path="docs/guide.md".`,
+Categories auto-detected by extension: doc (.md, .txt), code (.ts, .py, .go...), config (.json, .yaml...). Override with category parameter.`,
   {
     action: z.enum(['add', 'remove', 'list', 'status', 'build', 'clear', 'sections', 'history', 'diff', 'restore', 'vacuum']).describe('Action to perform.'),
     path: z.string().optional().describe('For "add"/"remove"/"sections"/"history"/"diff"/"restore": file or directory path relative to project root.'),
@@ -243,14 +234,18 @@ Typical workflow: souvenir_docs add path="src" → souvenir_docs add path="docs"
 // --- souvenir_tree ---
 server.tool(
   'souvenir_tree',
-  `Display the directory tree of the current project. Useful for quickly understanding the codebase structure.
+  `Get a clean, noise-free overview of the project structure in one call — no need to chain Glob, ls, or find. Use this FIRST when discovering a codebase, checking what exists in a directory, or understanding how a project is organized.
 
-Automatically skips noise directories: node_modules, .git, build, dist, __pycache__, .venv, etc.
-Shows hidden directories selectively: .claude-plugin, .github, .vscode are shown; other dot-directories are hidden.
+Unlike raw directory listings, this automatically hides noise (node_modules, .git, build, dist, __pycache__, .venv...) and selectively shows useful hidden dirs (.github, .vscode, .claude-plugin).
 
-Output format: Standard ASCII tree with connectors, ending with a file/directory count summary.
+Key features beyond a simple tree:
+- pattern: filter by extension ("*.ts", "*.{ts,js}") — shows only matching files, prunes empty dirs
+- show_lines: see line counts per file — instantly spot where the main logic lives
+- show_modified: see when files were last touched — understand what was recently worked on
+- stats: get a stack breakdown by extension in the footer
+- directories_only: high-level architecture overview
 
-Use path to explore a subdirectory. Use pattern to filter files by extension. Use directories_only for a high-level structure overview. Enable show_lines to find where the main logic lives, show_modified to see recent changes, or stats for a stack breakdown by extension.`,
+Output: Standard ASCII tree with connectors + file/directory count summary.`,
   {
     path: z.string().optional().describe('Subdirectory to display (relative to project root). Default: project root.'),
     depth: z.number().int().min(1).max(10).optional().describe('Maximum depth to display. Default: 3.'),
