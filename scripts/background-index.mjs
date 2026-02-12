@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * Background indexation script for claude-recall hooks.
+ * Background indexation script for claude-souvenir hooks.
  * Called async by Stop, PostToolUse, UserPromptSubmit, PreCompact hooks.
  *
  * Uses a lock file + timestamp to debounce across hook invocations
@@ -19,12 +19,12 @@ import { join, dirname } from 'path';
 import { homedir } from 'os';
 import { fileURLToPath } from 'url';
 
-const RECALL_DIR = join(homedir(), '.claude', 'claude-recall');
-const LOCK_FILE = join(RECALL_DIR, 'bg-index.lock');
+const SOUVENIR_DIR = join(homedir(), '.claude', 'claude-souvenir');
+const LOCK_FILE = join(SOUVENIR_DIR, 'bg-index.lock');
 const MIN_INTERVAL_MS = 30_000; // 30s debounce
 
 // ── Debounce check ──────────────────────────────────────────────────────────
-mkdirSync(RECALL_DIR, { recursive: true });
+mkdirSync(SOUVENIR_DIR, { recursive: true });
 
 try {
   if (existsSync(LOCK_FILE)) {
@@ -78,7 +78,7 @@ async function run() {
     await provider.initialize();
     const result = await buildIndex(provider, [config.currentProject], { rebuild: false });
     if (result.totalEmbedded > 0) {
-      process.stderr.write(`[claude-recall] Background index: ${result.totalEmbedded} new chunks\n`);
+      process.stderr.write(`[claude-souvenir] Background index: ${result.totalEmbedded} new chunks\n`);
     }
   } finally {
     await provider.dispose();
@@ -86,7 +86,7 @@ async function run() {
 }
 
 run().catch((err) => {
-  process.stderr.write(`[claude-recall] Background index error: ${err?.message || err}\n`);
+  process.stderr.write(`[claude-souvenir] Background index error: ${err?.message || err}\n`);
 }).finally(() => {
   // Clean lock when done (allow next run)
   try { unlinkSync(LOCK_FILE); } catch { /* ignore */ }

@@ -3,7 +3,7 @@ import { formatSessionListEntry } from '../transcript/formatter.js';
 import { getConfig } from '../config.js';
 import { resolveProjectDir } from '../utils/paths.js';
 
-export async function handleRecallSessions(params: {
+export async function handleSouvenirSessions(params: {
   project?: string;
   search?: string;
   date_from?: string;

@@ -5,7 +5,7 @@ import { buildIndex } from '../db/indexer.js';
 import { getDb, getIndexStatus, getStoredProvider, clearAll } from '../db/store.js';
 import { getOrCreateProvider } from './helpers.js';
 
-export async function handleRecallIndex(params: {
+export async function handleSouvenirIndex(params: {
   action: 'status' | 'build' | 'rebuild';
   project?: string;
   session_id?: string;
@@ -30,7 +30,7 @@ function getStatusReport(config: ReturnType<typeof getConfig>, projectFilter?: s
     // Initialize DB just to read status (no embedding provider needed)
     getDb(config.embeddingDimensions);
   } catch (err) {
-    return 'No semantic index found. Run recall_index with action="build" to create one.';
+    return 'No semantic index found. Run souvenir_index with action="build" to create one.';
   }
 
   const stored = getStoredProvider();
@@ -49,7 +49,7 @@ function getStatusReport(config: ReturnType<typeof getConfig>, projectFilter?: s
   lines.push('');
 
   if (status.projects.length === 0) {
-    lines.push('  No projects indexed yet. Run recall_index with action="build".');
+    lines.push('  No projects indexed yet. Run souvenir_index with action="build".');
   } else {
     for (const p of status.projects) {
       const index = loadSessionIndex(p.projectDir);

@@ -5,7 +5,7 @@ import { getConfig } from '../config.js';
 import { resolveProjectDir } from '../utils/paths.js';
 import type { DetailLevel } from '../transcript/types.js';
 
-export async function handleRecallRead(params: {
+export async function handleSouvenirRead(params: {
   session_id: string;
   project?: string;
   around_uuid?: string;
@@ -36,7 +36,7 @@ export async function handleRecallRead(params: {
   const searchDir = searchAllProjects ? undefined : (projectDir || config.currentProject || undefined);
   const location = getSessionFilePath(sessionId, searchDir);
   if (!location) {
-    return `Error: Session "${sessionId}" not found in ${searchAllProjects ? 'any project' : projectDir ? `project "${params.project}"` : 'current project'}. Use recall_sessions to list valid session IDs, or specify the project parameter to search in a different project.`;
+    return `Error: Session "${sessionId}" not found in ${searchAllProjects ? 'any project' : projectDir ? `project "${params.project}"` : 'current project'}. Use souvenir_sessions to list valid session IDs, or specify the project parameter to search in a different project.`;
   }
 
   // Get session metadata
@@ -166,7 +166,7 @@ async function readPage(
 
       // Add drill-down hint if entry was truncated (only in multi-entry mode)
       if (!singleEntry && text.includes('[...truncated:') && entry.uuid) {
-        text += `\n  >> Full entry: recall_read around_uuid="${entry.uuid}" max_entries=1 detail_level=full`;
+        text += `\n  >> Full entry: souvenir_read around_uuid="${entry.uuid}" max_entries=1 detail_level=full`;
       }
 
       output.push(text);
@@ -316,7 +316,7 @@ async function readAroundUuid(
 
       // Drill-down hint for truncated entries (when showing multiple entries)
       if (!singleEntry && text.includes('[...truncated:') && entry.uuid) {
-        text += `\n      >> Full entry: recall_read around_uuid="${entry.uuid}" max_entries=1 detail_level=full`;
+        text += `\n      >> Full entry: souvenir_read around_uuid="${entry.uuid}" max_entries=1 detail_level=full`;
       }
 
       output.push(text);

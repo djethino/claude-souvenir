@@ -5,15 +5,15 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod';
 import { logger } from './utils/logger.js';
 import { setCurrentProjectFromRoots } from './config.js';
-import { handleRecallSearch } from './tools/search.js';
-import { handleRecallRead } from './tools/read.js';
-import { handleRecallSessions } from './tools/sessions.js';
-import { handleRecallProjects } from './tools/projects.js';
-import { handleRecallIndex } from './tools/index-mgmt.js';
+import { handleSouvenirSearch } from './tools/search.js';
+import { handleSouvenirRead } from './tools/read.js';
+import { handleSouvenirSessions } from './tools/sessions.js';
+import { handleSouvenirProjects } from './tools/projects.js';
+import { handleSouvenirIndex } from './tools/index-mgmt.js';
 import { scheduleBackgroundIndex } from './indexer/background.js';
 
 const server = new McpServer({
-  name: 'claude-recall',
+  name: 'claude-souvenir',
   version: '0.1.0',
 });
 
@@ -30,9 +30,9 @@ function withBackgroundIndex<T>(handler: (params: T) => Promise<{ content: Array
   };
 }
 
-// --- recall_search ---
+// --- souvenir_search ---
 server.tool(
-  'recall_search',
+  'souvenir_search',
   `Search through past Claude Code conversation transcripts. Returns ranked results with context snippets, timestamps, and session info.
 
 Modes:
@@ -42,11 +42,11 @@ Modes:
 
 IMPORTANT: For conceptual queries ("what did we decide about X", "discussion about Y"), ALWAYS use hybrid or semantic mode. Text mode requires the exact words to appear in the transcript.
 
-Each result includes a session_id and entry_uuid. To read full context around a result, use recall_read with around_uuid=<entry_uuid> and session_id=<session_id>.
+Each result includes a session_id and entry_uuid. To read full context around a result, use souvenir_read with around_uuid=<entry_uuid> and session_id=<session_id>.
 
 Pagination: Results include "Page X/Y" footer. Use offset parameter to get next pages.
 
-Typical workflow: recall_search (find relevant entries) → recall_read around_uuid (read context). Or: recall_sessions → recall_read session_id (browse chronologically).`,
+Typical workflow: souvenir_search (find relevant entries) → souvenir_read around_uuid (read context). Or: souvenir_sessions → souvenir_read session_id (browse chronologically).`,
   {
     query: z.string().describe('Search query. Describe what you\'re looking for in natural language. For text mode only: substring or regex pattern.'),
     mode: z.enum(['text', 'semantic', 'hybrid']).optional().describe('Search mode. Default: "hybrid". Use "text" only for exact literal matches (variable names, error codes, UUIDs).'),
@@ -63,22 +63,22 @@ Typical workflow: recall_search (find relevant entries) → recall_read around_u
   },
   withBackgroundIndex(async (params) => {
     try {
-      const text = await handleRecallSearch(params);
+      const text = await handleSouvenirSearch(params);
       return { content: [{ type: 'text' as const, text }] };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      logger.error('recall_search error:', msg);
+      logger.error('souvenir_search error:', msg);
       return { content: [{ type: 'text' as const, text: `Error: ${msg}` }], isError: true };
     }
   }),
 );
 
-// --- recall_read ---
+// --- souvenir_read ---
 server.tool(
-  'recall_read',
-  `Read conversation entries from a specific Claude Code session transcript. Returns formatted messages with timestamps, roles, and content. Use this after recall_search to read the full context around a search result, or to browse a session chronologically. Automatically skips internal entries (file snapshots, thinking blocks) and condenses tool calls for readability. Use detail_level to control verbosity and before_turns/after_turns for asymmetric message navigation.
+  'souvenir_read',
+  `Read conversation entries from a specific Claude Code session transcript. Returns formatted messages with timestamps, roles, and content. Use this after souvenir_search to read the full context around a search result, or to browse a session chronologically. Automatically skips internal entries (file snapshots, thinking blocks) and condenses tool calls for readability. Use detail_level to control verbosity and before_turns/after_turns for asymmetric message navigation.
 
-IMPORTANT: session_id must come from recall_search results or recall_sessions output. Do NOT guess or fabricate session IDs.
+IMPORTANT: session_id must come from souvenir_search results or souvenir_sessions output. Do NOT guess or fabricate session IDs.
 
 Reading modes:
 - Default (no from_line): reads the LAST entries (most recent). Best for catching up after context compaction.
@@ -100,22 +100,22 @@ Pagination: Each response includes a footer with page position and navigation hi
   },
   withBackgroundIndex(async (params) => {
     try {
-      const text = await handleRecallRead(params);
+      const text = await handleSouvenirRead(params);
       return { content: [{ type: 'text' as const, text }] };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      logger.error('recall_read error:', msg);
+      logger.error('souvenir_read error:', msg);
       return { content: [{ type: 'text' as const, text: `Error: ${msg}` }], isError: true };
     }
   }),
 );
 
-// --- recall_sessions ---
+// --- souvenir_sessions ---
 server.tool(
-  'recall_sessions',
+  'souvenir_sessions',
   `List all conversation sessions for a project with their metadata (first prompt, summary, dates, message count). Use this to find which session to search or read. Results are sorted by most recent first by default. Includes orphan sessions (transcript files not in the index).
 
-Typical workflow: recall_projects → recall_sessions (pick a session) → recall_read or recall_search with session_id.
+Typical workflow: souvenir_projects → souvenir_sessions (pick a session) → souvenir_read or souvenir_search with session_id.
 
 Pagination: Shows "Showing X/Y sessions" footer. Increase max_results to see more.`,
   {
@@ -129,41 +129,41 @@ Pagination: Shows "Showing X/Y sessions" footer. Increase max_results to see mor
   },
   withBackgroundIndex(async (params) => {
     try {
-      const text = await handleRecallSessions(params);
+      const text = await handleSouvenirSessions(params);
       return { content: [{ type: 'text' as const, text }] };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      logger.error('recall_sessions error:', msg);
+      logger.error('souvenir_sessions error:', msg);
       return { content: [{ type: 'text' as const, text: `Error: ${msg}` }], isError: true };
     }
   }),
 );
 
-// --- recall_projects ---
+// --- souvenir_projects ---
 server.tool(
-  'recall_projects',
+  'souvenir_projects',
   `List all Claude Code projects that have conversation history. Shows project path, directory name (used as identifier in other tools), number of sessions, and date range. The current project is marked with [current]. Use this to discover available projects before using other tools.
 
-Typical workflow: recall_projects → recall_sessions project="<dir_name>" → recall_read or recall_search.`,
+Typical workflow: souvenir_projects → souvenir_sessions project="<dir_name>" → souvenir_read or souvenir_search.`,
   {
     search: z.string().optional().describe('Filter projects whose path contains this text.'),
   },
   withBackgroundIndex(async (params) => {
     try {
-      const text = await handleRecallProjects(params);
+      const text = await handleSouvenirProjects(params);
       return { content: [{ type: 'text' as const, text }] };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      logger.error('recall_projects error:', msg);
+      logger.error('souvenir_projects error:', msg);
       return { content: [{ type: 'text' as const, text: `Error: ${msg}` }], isError: true };
     }
   }),
 );
 
-// --- recall_index ---
+// --- souvenir_index ---
 server.tool(
-  'recall_index',
-  `Manage the semantic search index used by recall_search in "semantic" or "hybrid" mode. Use action "status" to check what's indexed, "build" to index new/updated sessions incrementally, or "rebuild" to re-index everything from scratch. First-time indexing of a large project may take several minutes.`,
+  'souvenir_index',
+  `Manage the semantic search index used by souvenir_search in "semantic" or "hybrid" mode. Use action "status" to check what's indexed, "build" to index new/updated sessions incrementally, or "rebuild" to re-index everything from scratch. First-time indexing of a large project may take several minutes.`,
   {
     action: z.enum(['status', 'build', 'rebuild']).describe('"status": show indexing state. "build": incrementally index new content. "rebuild": drop and re-index everything.'),
     project: z.string().optional().describe('Project to index. Default: current project. Use "all" for all projects.'),
@@ -171,11 +171,11 @@ server.tool(
   },
   withBackgroundIndex(async (params) => {
     try {
-      const text = await handleRecallIndex(params);
+      const text = await handleSouvenirIndex(params);
       return { content: [{ type: 'text' as const, text }] };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      logger.error('recall_index error:', msg);
+      logger.error('souvenir_index error:', msg);
       return { content: [{ type: 'text' as const, text: `Error: ${msg}` }], isError: true };
     }
   }),
@@ -183,10 +183,10 @@ server.tool(
 
 // --- Start server ---
 async function main() {
-  logger.info('Starting claude-recall MCP server...');
+  logger.info('Starting claude-souvenir MCP server...');
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  logger.info('claude-recall MCP server running on stdio');
+  logger.info('claude-souvenir MCP server running on stdio');
 
   // Request workspace roots from Claude Code as fallback for project detection.
   // Primary detection uses process.cwd(), roots is a backup via MCP protocol.

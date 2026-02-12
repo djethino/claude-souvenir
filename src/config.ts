@@ -5,7 +5,7 @@ import { logger } from './utils/logger.js';
 
 export type EmbeddingProviderType = 'ollama' | 'openai';
 
-export interface RecallConfig {
+export interface SouvenirConfig {
   /** Current working directory (from Claude Code) */
   cwd: string;
   /** Current project directory name (e.g. D--projet-claude-plugins) */
@@ -22,7 +22,7 @@ export interface RecallConfig {
   ollamaModel: string;
 }
 
-let _config: RecallConfig | null = null;
+let _config: SouvenirConfig | null = null;
 
 /**
  * Try to resolve a path to a project directory name.
@@ -42,11 +42,11 @@ function resolvePathToProject(path: string): string | null {
  * Initialize and return the configuration.
  * currentProject may be null initially and set later via setCurrentProjectFromRoots().
  */
-export function getConfig(): RecallConfig {
+export function getConfig(): SouvenirConfig {
   if (_config) return _config;
 
   const cwd = process.env.CWD || process.cwd();
-  const provider = (process.env.RECALL_PROVIDER || 'ollama') as EmbeddingProviderType;
+  const provider = (process.env.SOUVENIR_PROVIDER || 'ollama') as EmbeddingProviderType;
 
   // Try CWD-based detection (works if CWD env is properly set by Claude Code)
   const detectedProject = resolvePathToProject(cwd);
@@ -60,10 +60,10 @@ export function getConfig(): RecallConfig {
     cwd,
     currentProject: detectedProject,
     embeddingProvider: provider,
-    openaiApiKey: process.env.RECALL_OPENAI_API_KEY || null,
-    embeddingDimensions: parseInt(process.env.RECALL_EMBEDDING_DIMENSIONS || '768', 10),
-    ollamaUrl: process.env.RECALL_OLLAMA_URL || 'http://localhost:11434',
-    ollamaModel: process.env.RECALL_OLLAMA_MODEL || 'embeddinggemma',
+    openaiApiKey: process.env.SOUVENIR_OPENAI_API_KEY || null,
+    embeddingDimensions: parseInt(process.env.SOUVENIR_EMBEDDING_DIMENSIONS || '768', 10),
+    ollamaUrl: process.env.SOUVENIR_OLLAMA_URL || 'http://localhost:11434',
+    ollamaModel: process.env.SOUVENIR_OLLAMA_MODEL || 'embeddinggemma',
   };
 
   return _config;

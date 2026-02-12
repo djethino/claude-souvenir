@@ -46,7 +46,7 @@ function extractSmartSnippet(content: string, query: string, maxLen: number = 25
   return snippet.replace(/\n/g, ' ');
 }
 
-export async function handleRecallSearch(params: {
+export async function handleSouvenirSearch(params: {
   query: string;
   mode?: 'text' | 'semantic' | 'hybrid';
   project?: string;
@@ -200,11 +200,11 @@ async function performSemanticSearch(
       try {
         getDb(config.embeddingDimensions);
       } catch {
-        return 'No semantic index found. Run recall_index with action="build" first to create the index.';
+        return 'No semantic index found. Run souvenir_index with action="build" first to create the index.';
       }
       const stored = getStoredProvider();
       if (!stored) {
-        return 'No semantic index found. Run recall_index with action="build" first.';
+        return 'No semantic index found. Run souvenir_index with action="build" first.';
       }
     }
 
@@ -228,7 +228,7 @@ async function performSemanticSearch(
     });
 
     if (vecResults.length === 0) {
-      return `No semantic results found for "${params.query}". The index may be empty for the specified project. Run recall_index with action="status" to check.`;
+      return `No semantic results found for "${params.query}". The index may be empty for the specified project. Run souvenir_index with action="status" to check.`;
     }
 
     // Convert all results to SearchResult format (no pagination yet)

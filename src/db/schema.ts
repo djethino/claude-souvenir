@@ -1,5 +1,5 @@
 /**
- * SQLite schema for the recall vector database.
+ * SQLite schema for the souvenir vector database.
  */
 
 export const SCHEMA_VERSION = 1;

@@ -1,7 +1,7 @@
 import { listProjectDirs, getProjectInfo } from '../transcript/discovery.js';
 import { getConfig } from '../config.js';
 
-export async function handleRecallProjects(params: {
+export async function handleSouvenirProjects(params: {
   search?: string;
 }): Promise<string> {
   const config = getConfig();

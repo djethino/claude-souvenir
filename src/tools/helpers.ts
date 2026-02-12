@@ -1,4 +1,4 @@
-import type { RecallConfig } from '../config.js';
+import type { SouvenirConfig } from '../config.js';
 import type { EmbeddingProvider } from '../embedding/provider.js';
 import { OllamaEmbeddingProvider } from '../embedding/ollama.js';
 import { OpenAIEmbeddingProvider } from '../embedding/openai.js';
@@ -6,7 +6,7 @@ import { OpenAIEmbeddingProvider } from '../embedding/openai.js';
 /**
  * Create an embedding provider based on config.
  */
-export function createEmbeddingProvider(config: RecallConfig): EmbeddingProvider {
+export function createEmbeddingProvider(config: SouvenirConfig): EmbeddingProvider {
   switch (config.embeddingProvider) {
     case 'ollama':
       return new OllamaEmbeddingProvider(config.ollamaUrl, config.ollamaModel);
@@ -14,7 +14,7 @@ export function createEmbeddingProvider(config: RecallConfig): EmbeddingProvider
     case 'openai':
       if (!config.openaiApiKey) {
         throw new Error(
-          'OpenAI provider requires RECALL_OPENAI_API_KEY environment variable. ' +
+          'OpenAI provider requires SOUVENIR_OPENAI_API_KEY environment variable. ' +
           'Set it in your .mcp.json env section or system environment.',
         );
       }
@@ -37,7 +37,7 @@ let _singletonProviderType: string | null = null;
  * The provider stays in memory to avoid reloading the model (~300MB) on every call.
  * If the provider type changes (e.g. local → openai), the old one is disposed and a new one is created.
  */
-export function getOrCreateProvider(config: RecallConfig): EmbeddingProvider {
+export function getOrCreateProvider(config: SouvenirConfig): EmbeddingProvider {
   if (_singletonProvider && _singletonProviderType === config.embeddingProvider) {
     return _singletonProvider;
   }

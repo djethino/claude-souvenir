@@ -267,7 +267,7 @@ export function formatSessionListEntry(meta: SessionIndexEntry, index: number): 
 
 /**
  * Format a search result snippet.
- * Includes session_id and entry_uuid for easy drill-down with recall_read.
+ * Includes session_id and entry_uuid for easy drill-down with souvenir_read.
  */
 export function formatSearchResult(
   result: {

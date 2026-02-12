@@ -8,7 +8,7 @@ const MAX_BATCH_SIZE = 100;
 
 /**
  * OpenAI API embedding provider.
- * Requires RECALL_OPENAI_API_KEY environment variable.
+ * Requires SOUVENIR_OPENAI_API_KEY environment variable.
  */
 export class OpenAIEmbeddingProvider implements EmbeddingProvider {
   readonly name = `openai (${MODEL})`;
@@ -31,7 +31,7 @@ export class OpenAIEmbeddingProvider implements EmbeddingProvider {
 
     if (!this.apiKey) {
       throw new Error(
-        'OpenAI embedding provider requires RECALL_OPENAI_API_KEY environment variable.',
+        'OpenAI embedding provider requires SOUVENIR_OPENAI_API_KEY environment variable.',
       );
     }
 

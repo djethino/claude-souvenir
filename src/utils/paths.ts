@@ -5,7 +5,7 @@ import { join, resolve, sep } from 'path';
  * Get the Claude Code base directory (~/.claude).
  */
 export function getClaudeDir(): string {
-  return process.env.RECALL_CLAUDE_DIR || join(homedir(), '.claude');
+  return process.env.SOUVENIR_CLAUDE_DIR || join(homedir(), '.claude');
 }
 
 /**
@@ -16,17 +16,17 @@ export function getProjectsDir(): string {
 }
 
 /**
- * Get the recall database directory (~/.claude/claude-recall).
+ * Get the souvenir database directory (~/.claude/claude-souvenir).
  */
-export function getRecallDir(): string {
-  return join(getClaudeDir(), 'claude-recall');
+export function getSouvenirDir(): string {
+  return join(getClaudeDir(), 'claude-souvenir');
 }
 
 /**
- * Get the recall database path.
+ * Get the souvenir database path.
  */
 export function getDbPath(): string {
-  return process.env.RECALL_DB_PATH || join(getRecallDir(), 'recall.db');
+  return process.env.SOUVENIR_DB_PATH || join(getSouvenirDir(), 'souvenir.db');
 }
 
 /**

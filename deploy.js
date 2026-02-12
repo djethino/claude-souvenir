@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * Deploy claude-recall plugin to Claude Code plugins cache.
+ * Deploy claude-souvenir plugin to Claude Code plugins cache.
  * Usage: node deploy.js [--uninstall]
  */
 

@@ -11,7 +11,7 @@ const LEVELS: Record<LogLevel, number> = {
   error: 3,
 };
 
-let currentLevel: LogLevel = (process.env.RECALL_LOG_LEVEL as LogLevel) || 'warn';
+let currentLevel: LogLevel = (process.env.SOUVENIR_LOG_LEVEL as LogLevel) || 'warn';
 
 function shouldLog(level: LogLevel): boolean {
   return LEVELS[level] >= LEVELS[currentLevel];
@@ -19,7 +19,7 @@ function shouldLog(level: LogLevel): boolean {
 
 function formatMessage(level: LogLevel, ...args: unknown[]): string {
   const timestamp = new Date().toISOString().slice(11, 23);
-  const prefix = `[recall ${timestamp} ${level.toUpperCase()}]`;
+  const prefix = `[souvenir${timestamp} ${level.toUpperCase()}]`;
   const message = args
     .map((a) => (typeof a === 'string' ? a : JSON.stringify(a)))
     .join(' ');
