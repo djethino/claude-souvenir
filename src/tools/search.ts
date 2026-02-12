@@ -9,6 +9,8 @@ import { buildIndex } from '../db/indexer.js';
 import { logger } from '../utils/logger.js';
 import { applySessionDensityBoost } from '../search/density-boost.js';
 import type { SearchResult } from '../transcript/types.js';
+import { searchDocsSemantic, docsDbExists, getDocsChunkCount } from '../docs/store.js';
+import type { DocCategory, DocVecSearchResult } from '../docs/store.js';
 
 /**
  * Extract a smart snippet from content, trying to center on query words.
@@ -46,9 +48,12 @@ function extractSmartSnippet(content: string, query: string, maxLen: number = 25
   return snippet.replace(/\n/g, ' ');
 }
 
+export type SearchSource = 'transcripts' | 'docs' | 'code' | 'config' | 'project' | 'all';
+
 export async function handleSouvenirSearch(params: {
   query: string;
   mode?: 'text' | 'semantic' | 'hybrid';
+  source?: SearchSource;
   project?: string;
   session_id?: string;
   role?: 'user' | 'assistant' | 'both';
@@ -62,6 +67,17 @@ export async function handleSouvenirSearch(params: {
 }): Promise<string> {
   const config = getConfig();
   const mode = params.mode || 'hybrid';
+  const source = params.source || 'transcripts';
+
+  // Sources that search in docs DB
+  const searchDocs = source === 'docs' || source === 'code' || source === 'config' || source === 'project' || source === 'all';
+  // Sources that search in transcripts DB
+  const searchTranscripts = source === 'transcripts' || source === 'all';
+
+  // For docs-only sources, delegate to docs search
+  if (searchDocs && !searchTranscripts) {
+    return await performDocsSearch(params, config, source, mode);
+  }
 
   // Resolve "current" session_id
   if (params.session_id === 'current') {
@@ -87,19 +103,27 @@ export async function handleSouvenirSearch(params: {
 
   const maxResults = Math.min(params.max_results || 10, 50);
 
+  let result: string;
+
   if (mode === 'text') {
-    return await performTextSearch(params, projectDirs, maxResults);
+    result = await performTextSearch(params, projectDirs, maxResults);
+  } else if (mode === 'semantic') {
+    result = await performSemanticSearch(params, projectDirs, maxResults);
+  } else if (mode === 'hybrid') {
+    result = await performHybridSearch(params, projectDirs, maxResults);
+  } else {
+    return `Unknown search mode: "${mode}". Use "text", "semantic", or "hybrid".`;
   }
 
-  if (mode === 'semantic') {
-    return await performSemanticSearch(params, projectDirs, maxResults);
+  // Cross-reference hint: check docs DB for related content
+  if (source === 'transcripts') {
+    const docsHint = await getDocsXrefHint(params.query, config);
+    if (docsHint) {
+      result += `\n${docsHint}`;
+    }
   }
 
-  if (mode === 'hybrid') {
-    return await performHybridSearch(params, projectDirs, maxResults);
-  }
-
-  return `Unknown search mode: "${mode}". Use "text", "semantic", or "hybrid".`;
+  return result;
 }
 
 async function performTextSearch(
@@ -447,6 +471,199 @@ async function getSemanticHint(query: string, projectDirs: string[]): Promise<st
     return null;
   } catch {
     // Hint is non-critical — fail silently
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Docs search (source = docs/code/config/project)
+// ---------------------------------------------------------------------------
+
+function formatRelativeTime(dateStr: string): string {
+  const d = new Date(dateStr);
+  const now = Date.now();
+  const diffMs = now - d.getTime();
+  if (diffMs < 0) return 'just now';
+  const hours = Math.floor(diffMs / (1000 * 60 * 60));
+  if (hours < 1) return `${Math.floor(diffMs / (1000 * 60))}min ago`;
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `${days}d ago`;
+  return `${Math.floor(days / 30)}mo ago`;
+}
+
+function formatDocResult(
+  result: DocVecSearchResult,
+  index: number,
+): string {
+  const score = (1 - result.distance).toFixed(2);
+  const modified = result.file_modified ? formatRelativeTime(result.file_modified) : '???';
+
+  const lines = [
+    `--- Result ${index + 1} (score: ${score}) ---`,
+    `File: ${result.file_path} [${result.category}]`,
+    `  Lines ${result.start_line}-${result.end_line} | Modified: ${modified}`,
+  ];
+
+  if (result.section_path) {
+    lines.push(`  Section: ${result.section_path}`);
+  }
+
+  // Snippet: first 250 chars of content
+  const snippet = result.content_text.length > 250
+    ? result.content_text.slice(0, 250).replace(/\n/g, ' ') + '...'
+    : result.content_text.replace(/\n/g, ' ');
+  lines.push(`> ${snippet}`);
+
+  return lines.join('\n');
+}
+
+async function performDocsSearch(
+  params: {
+    query: string;
+    mode?: 'text' | 'semantic' | 'hybrid';
+    source?: SearchSource;
+    max_results?: number;
+    offset?: number;
+  },
+  config: ReturnType<typeof getConfig>,
+  source: SearchSource,
+  mode: string,
+): Promise<string> {
+  const projectRoot = config.cwd;
+
+  if (!docsDbExists(projectRoot)) {
+    return 'No docs database found. Use souvenir_docs action="add" to track project files first.';
+  }
+
+  // Determine category filter
+  let categoryFilter: DocCategory | undefined;
+  if (source === 'docs') categoryFilter = 'doc';
+  else if (source === 'code') categoryFilter = 'code';
+  else if (source === 'config') categoryFilter = 'config';
+  // 'project' = all categories in docs DB, no filter
+
+  if (mode === 'text') {
+    return 'Text search in docs is not yet supported. Use mode="semantic" or mode="hybrid" for docs search.';
+  }
+
+  // Semantic or hybrid search in docs
+  const provider = getOrCreateProvider(config);
+  if (!provider.isReady()) {
+    await provider.initialize();
+  }
+
+  const queryEmbedding = await provider.embedQuery(params.query);
+  const maxResults = Math.min(params.max_results || 10, 50);
+  const offset = params.offset || 0;
+
+  const vecResults = searchDocsSemantic(projectRoot, queryEmbedding, {
+    topK: maxResults + offset,
+    category: categoryFilter,
+  });
+
+  if (vecResults.length === 0) {
+    const label = categoryFilter ? `${categoryFilter} files` : 'project files';
+    return `No results found for "${params.query}" in ${label}. Check that files are indexed with souvenir_docs action="status".`;
+  }
+
+  const sliced = vecResults.slice(offset, offset + maxResults);
+  const total = vecResults.length;
+  const endIndex = offset + sliced.length;
+  const hasMore = endIndex < total;
+
+  const sourceLabel = categoryFilter || 'project';
+  const header = `Found ${total} result(s) in ${sourceLabel} files for "${params.query}" (showing ${offset + 1}-${endIndex}):\n`;
+  const formatted = sliced.map((r, i) => formatDocResult(r, offset + i));
+
+  let footer = hasMore
+    ? `\n--- Page ${Math.ceil(endIndex / maxResults)}/${Math.ceil(total / maxResults)} | ${total - endIndex} more results | Next page: offset=${endIndex} ---`
+    : `\n--- All ${total} results shown ---`;
+
+  // Cross-reference: check transcripts for related content
+  const xrefHint = await getTranscriptsXrefHint(params.query, config);
+  if (xrefHint) {
+    footer += `\n${xrefHint}`;
+  }
+
+  return header + '\n' + formatted.join('\n\n') + footer;
+}
+
+// ---------------------------------------------------------------------------
+// Cross-referencing hints
+// ---------------------------------------------------------------------------
+
+/**
+ * Quick KNN probe in docs DB when searching transcripts.
+ * Shows count + best score + most recent file modification.
+ */
+async function getDocsXrefHint(
+  query: string,
+  config: ReturnType<typeof getConfig>,
+): Promise<string | null> {
+  try {
+    const projectRoot = config.cwd;
+    if (!docsDbExists(projectRoot)) return null;
+
+    const chunkCount = getDocsChunkCount(projectRoot);
+    if (chunkCount === 0) return null;
+
+    const provider = getOrCreateProvider(config);
+    if (!provider.isReady()) {
+      await provider.initialize();
+    }
+
+    const queryEmbedding = await provider.embedQuery(query);
+    const probeResults = searchDocsSemantic(projectRoot, queryEmbedding, { topK: 5 });
+
+    if (probeResults.length > 0) {
+      const bestScore = (1 - probeResults[0].distance).toFixed(2);
+      const bestFile = probeResults[0].file_path;
+      const modified = probeResults[0].file_modified
+        ? formatRelativeTime(probeResults[0].file_modified)
+        : '';
+      return `--- Docs hint: ${probeResults.length}+ results in project files (best: ${bestScore} in ${bestFile}${modified ? `, modified ${modified}` : ''}). Use source="project" to search docs/code. ---`;
+    }
+
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Quick KNN probe in transcripts DB when searching docs.
+ * Shows count + best score + recency.
+ */
+async function getTranscriptsXrefHint(
+  query: string,
+  config: ReturnType<typeof getConfig>,
+): Promise<string | null> {
+  try {
+    const projectDir = config.currentProject;
+    if (!projectDir) return null;
+
+    const count = getProjectChunkCount(projectDir);
+    if (count === 0) return null;
+
+    const provider = getOrCreateProvider(config);
+    if (!provider.isReady()) {
+      await provider.initialize();
+    }
+
+    const queryEmbedding = await provider.embedQuery(query);
+    const probeResults = searchSemantic(queryEmbedding, { topK: 5, projectDir });
+
+    if (probeResults.length > 0) {
+      const bestScore = (1 - probeResults[0].distance).toFixed(2);
+      const ts = probeResults[0].timestamp
+        ? formatRelativeTime(probeResults[0].timestamp)
+        : '';
+      return `--- Transcripts hint: ${probeResults.length}+ results in conversations (best: ${bestScore}${ts ? `, ${ts}` : ''}). Use source="transcripts" to search past discussions. ---`;
+    }
+
+    return null;
+  } catch {
     return null;
   }
 }

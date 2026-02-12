@@ -10,6 +10,7 @@ import { handleSouvenirRead } from './tools/read.js';
 import { handleSouvenirSessions } from './tools/sessions.js';
 import { handleSouvenirProjects } from './tools/projects.js';
 import { handleSouvenirIndex } from './tools/index-mgmt.js';
+import { handleSouvenirDocs } from './tools/docs.js';
 import { scheduleBackgroundIndex } from './indexer/background.js';
 
 const server = new McpServer({
@@ -33,23 +34,33 @@ function withBackgroundIndex<T>(handler: (params: T) => Promise<{ content: Array
 // --- souvenir_search ---
 server.tool(
   'souvenir_search',
-  `Search through past Claude Code conversation transcripts. Returns ranked results with context snippets, timestamps, and session info.
+  `Search through conversation transcripts AND/OR project files (docs, code, config). Returns ranked results with context snippets, timestamps, and session/file info.
+
+Sources:
+- "transcripts" (default): search past Claude Code conversations. Results include cross-reference hints if project docs are indexed.
+- "docs": search only indexed documentation files (.md, .txt, .rst).
+- "code": search only indexed code files (.ts, .py, .go, etc.).
+- "config": search only indexed config files (.json, .yaml, etc.).
+- "project": search all indexed project files (docs + code + config).
+- "all": search both transcripts AND project files.
 
 Modes:
-- "hybrid" (default): combines text matching AND meaning-based search. Best for most queries. Use this when looking for topics, discussions, or concepts.
-- "text": exact substring or regex matching only. Use ONLY when you need a specific literal string (e.g. a variable name, error message, UUID).
-- "semantic": meaning-based only. Understands natural language queries in any language, finds conceptually related content even without exact word matches.
+- "hybrid" (default): combines text matching AND meaning-based search. Best for most queries.
+- "text": exact substring or regex matching only. Use ONLY for specific literal strings. Only works with source="transcripts".
+- "semantic": meaning-based only. Understands natural language queries in any language.
 
-IMPORTANT: For conceptual queries ("what did we decide about X", "discussion about Y"), ALWAYS use hybrid or semantic mode. Text mode requires the exact words to appear in the transcript.
+IMPORTANT: For conceptual queries ("what did we decide about X", "discussion about Y"), ALWAYS use hybrid or semantic mode.
 
-Each result includes a session_id and entry_uuid. To read full context around a result, use souvenir_read with around_uuid=<entry_uuid> and session_id=<session_id>.
+Each transcript result includes a session_id and entry_uuid. Use souvenir_read with around_uuid to read context.
+Each docs result includes file_path and line range. Navigate project files directly.
 
-Pagination: Results include "Page X/Y" footer. Use offset parameter to get next pages.
+Cross-referencing: When searching one source, results include hints about matches in the other source (count + best score + recency).
 
-Typical workflow: souvenir_search (find relevant entries) → souvenir_read around_uuid (read context). Or: souvenir_sessions → souvenir_read session_id (browse chronologically).`,
+Typical workflow: souvenir_search (find relevant entries) → souvenir_read around_uuid (read context). For docs: souvenir_docs add path="src" → souvenir_docs build → souvenir_search source="code".`,
   {
     query: z.string().describe('Search query. Describe what you\'re looking for in natural language. For text mode only: substring or regex pattern.'),
     mode: z.enum(['text', 'semantic', 'hybrid']).optional().describe('Search mode. Default: "hybrid". Use "text" only for exact literal matches (variable names, error codes, UUIDs).'),
+    source: z.enum(['transcripts', 'docs', 'code', 'config', 'project', 'all']).optional().describe('Where to search. Default: "transcripts". Use "project" for all indexed project files, "all" for everything.'),
     project: z.string().optional().describe('Project directory name (e.g. "D--projet-claude-plugins") or path. Default: current project. Use "all" for all projects.'),
     session_id: z.string().optional().describe('Limit search to a specific session UUID. Use "current" to auto-resolve the most recent session.'),
     role: z.enum(['user', 'assistant', 'both']).optional().describe('Filter by message role. Default: "both".'),
@@ -176,6 +187,43 @@ server.tool(
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       logger.error('souvenir_index error:', msg);
+      return { content: [{ type: 'text' as const, text: `Error: ${msg}` }], isError: true };
+    }
+  }),
+);
+
+// --- souvenir_docs ---
+server.tool(
+  'souvenir_docs',
+  `Manage project documentation and code indexing for semantic search. This indexes LOCAL project files (docs, code, config) into a separate database from conversation transcripts.
+
+Actions:
+- "add": Track a file or directory for indexing. Provide path (relative to project root). For directories, optionally set pattern (e.g. "*.md") and category.
+- "remove": Stop tracking a source. Provide source_id (from "list") or path.
+- "list": Show all tracked sources and resolved file counts.
+- "status": Show index statistics (chunks, files, sections, pending changes).
+- "build": Index new/changed files incrementally. Use rebuild=true to re-index everything.
+- "clear": Remove all indexed data (sources are preserved).
+
+Categories are auto-detected by extension: doc (.md, .txt), code (.ts, .py, .go...), config (.json, .yaml...).
+Override with the category parameter if needed.
+
+Typical workflow: souvenir_docs add path="src" → souvenir_docs add path="docs" → souvenir_docs build → souvenir_search source="docs"`,
+  {
+    action: z.enum(['add', 'remove', 'list', 'status', 'build', 'clear']).describe('Action to perform.'),
+    path: z.string().optional().describe('For "add": file or directory path relative to project root. For "remove": path to untrack.'),
+    pattern: z.string().optional().describe('For "add" with directory: glob pattern to filter files (e.g. "*.md", "*.{ts,js}"). Default: all supported extensions.'),
+    category: z.enum(['doc', 'code', 'config']).optional().describe('Override auto-detection. Force all files from this source to a specific category.'),
+    source_id: z.number().int().optional().describe('For "remove": source ID to remove (from "list" output).'),
+    rebuild: z.boolean().optional().describe('For "build": drop and re-index everything. Default: false (incremental).'),
+  },
+  withBackgroundIndex(async (params) => {
+    try {
+      const text = await handleSouvenirDocs(params);
+      return { content: [{ type: 'text' as const, text }] };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.error('souvenir_docs error:', msg);
       return { content: [{ type: 'text' as const, text: `Error: ${msg}` }], isError: true };
     }
   }),
