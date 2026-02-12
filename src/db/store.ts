@@ -57,6 +57,14 @@ export function getDb(dimensions?: number): Database.Database {
   // Wait up to 5s if another process holds the write lock (avoids SQLITE_BUSY)
   _db.pragma('busy_timeout = 5000');
 
+  // Enable incremental auto-vacuum to reclaim space after deletions
+  const autoVacuum = (_db.pragma('auto_vacuum') as Array<{ auto_vacuum: number }>)[0]?.auto_vacuum;
+  if (autoVacuum !== 2) {
+    _db.pragma('auto_vacuum = INCREMENTAL');
+    _db.exec('VACUUM');
+    logger.info('Enabled incremental auto_vacuum (one-time migration)');
+  }
+
   // Create schema
   _db.exec(CREATE_TABLES);
   _db.exec(createVecTable(_dimensions));
@@ -294,6 +302,8 @@ export function clearProject(projectDir: string): void {
     // Clear index state for files in this project
     db.prepare('DELETE FROM index_state WHERE file_path LIKE ?').run(`%${projectDir}%`);
   })();
+
+  incrementalVacuum();
 }
 
 /**
@@ -307,6 +317,28 @@ export function clearAll(): void {
     db.prepare('DELETE FROM chunks').run();
     db.prepare('DELETE FROM index_state').run();
   })();
+
+  incrementalVacuum();
+}
+
+/**
+ * Reclaim disk space from deleted rows (incremental auto-vacuum).
+ */
+export function incrementalVacuum(): void {
+  try {
+    const db = getDb();
+    db.pragma('incremental_vacuum');
+  } catch (err) {
+    logger.error('Incremental vacuum error:', err);
+  }
+}
+
+/**
+ * Full VACUUM — compacts the entire database. Slower but reclaims all free space.
+ */
+export function fullVacuum(): void {
+  const db = getDb();
+  db.exec('VACUUM');
 }
 
 /**

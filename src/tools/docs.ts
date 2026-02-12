@@ -21,13 +21,14 @@ import {
   getSnapshotContent,
   insertSnapshot,
   getSnapshotStats,
+  docsFullVacuum,
 } from '../docs/store.js';
 import { buildDocsIndex, resolveSourceFiles } from '../docs/indexer.js';
 import { detectCategory } from '../docs/chunker.js';
 import { computeDiff, formatUnifiedDiff } from '../docs/diff.js';
 
 export async function handleSouvenirDocs(params: {
-  action: 'add' | 'remove' | 'list' | 'status' | 'build' | 'clear' | 'sections' | 'history' | 'diff' | 'restore';
+  action: 'add' | 'remove' | 'list' | 'status' | 'build' | 'clear' | 'sections' | 'history' | 'diff' | 'restore' | 'vacuum';
   path?: string;
   pattern?: string;
   category?: DocCategory;
@@ -63,8 +64,10 @@ export async function handleSouvenirDocs(params: {
       return handleFileDiff(projectRoot, params);
     case 'restore':
       return handleRestore(projectRoot, params);
+    case 'vacuum':
+      return handleVacuum(projectRoot);
     default:
-      return `Unknown action: "${params.action}". Use "add", "remove", "list", "status", "build", "clear", "sections", "history", "diff", or "restore".`;
+      return `Unknown action: "${params.action}". Use "add", "remove", "list", "status", "build", "clear", "sections", "history", "diff", "restore", or "vacuum".`;
   }
 }
 
@@ -586,4 +589,28 @@ async function handleRestore(
   lines.push('Use souvenir_docs action="history" path="..." to see all versions.');
 
   return lines.join('\n');
+}
+
+// ---------------------------------------------------------------------------
+// Vacuum (compact database)
+// ---------------------------------------------------------------------------
+
+async function handleVacuum(projectRoot: string): Promise<string> {
+  if (!docsDbExists(projectRoot)) {
+    return 'No docs database found. Nothing to vacuum.';
+  }
+
+  const statusBefore = getDocsIndexStatus(projectRoot);
+  const sizeBefore = statusBefore.dbSizeBytes;
+
+  docsFullVacuum(projectRoot);
+
+  const statusAfter = getDocsIndexStatus(projectRoot);
+  const sizeAfter = statusAfter.dbSizeBytes;
+
+  const savedKb = ((sizeBefore - sizeAfter) / 1024).toFixed(1);
+  const beforeKb = (sizeBefore / 1024).toFixed(1);
+  const afterKb = (sizeAfter / 1024).toFixed(1);
+
+  return `Docs database vacuumed: ${beforeKb} KB → ${afterKb} KB (${savedKb} KB reclaimed).`;
 }

@@ -176,9 +176,10 @@ Indexing runs automatically in the background after each interaction. Use this t
 
 - "status": show what's indexed and what's pending.
 - "build": index new/updated sessions now (incremental).
-- "rebuild": drop everything and re-index from scratch. First-time indexing may take several minutes.`,
+- "rebuild": drop everything and re-index from scratch. First-time indexing may take several minutes.
+- "vacuum": compact the database file to reclaim disk space from deleted data.`,
   {
-    action: z.enum(['status', 'build', 'rebuild']).describe('"status": show indexing state. "build": incrementally index new content. "rebuild": drop and re-index everything.'),
+    action: z.enum(['status', 'build', 'rebuild', 'vacuum']).describe('"status": show indexing state. "build": incrementally index new content. "rebuild": drop and re-index everything. "vacuum": compact database file.'),
     project: z.string().optional().describe('Project to index. Default: current project. Use "all" for all projects.'),
     session_id: z.string().optional().describe('Index only a specific session.'),
   },
@@ -212,13 +213,14 @@ Actions:
 - "history": Show file version history. Provide path for a specific file, or omit for all versioned files.
 - "diff": Compare a saved version to the current file on disk. Provide path and optionally snapshot_id (default: latest snapshot).
 - "restore": Restore a file from a saved version. Provide path and snapshot_id. A backup of the current state is saved automatically before overwriting.
+- "vacuum": Compact the database file to reclaim disk space from deleted data (snapshots, cleared chunks).
 
 Categories are auto-detected by extension: doc (.md, .txt), code (.ts, .py, .go...), config (.json, .yaml...).
 Override with the category parameter if needed.
 
 Typical workflow: souvenir_docs add path="src" → souvenir_docs add path="docs" → souvenir_docs build → souvenir_search source="docs". For markdown navigation: souvenir_docs sections path="docs/guide.md".`,
   {
-    action: z.enum(['add', 'remove', 'list', 'status', 'build', 'clear', 'sections', 'history', 'diff', 'restore']).describe('Action to perform.'),
+    action: z.enum(['add', 'remove', 'list', 'status', 'build', 'clear', 'sections', 'history', 'diff', 'restore', 'vacuum']).describe('Action to perform.'),
     path: z.string().optional().describe('For "add"/"remove"/"sections"/"history"/"diff"/"restore": file or directory path relative to project root.'),
     pattern: z.string().optional().describe('For "add" with directory: glob pattern to filter files (e.g. "*.md", "*.{ts,js}"). Default: all supported extensions.'),
     category: z.enum(['doc', 'code', 'config']).optional().describe('Override auto-detection. Force all files from this source to a specific category.'),

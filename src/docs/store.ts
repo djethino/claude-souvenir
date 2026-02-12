@@ -106,6 +106,14 @@ export function getDocsDb(projectRoot: string, dimensions?: number): Database.Da
   _docsDb.pragma('journal_mode = WAL');
   _docsDb.pragma('busy_timeout = 5000');
 
+  // Enable incremental auto-vacuum to reclaim space after deletions
+  const autoVacuum = (_docsDb.pragma('auto_vacuum') as Array<{ auto_vacuum: number }>)[0]?.auto_vacuum;
+  if (autoVacuum !== 2) {
+    _docsDb.pragma('auto_vacuum = INCREMENTAL');
+    _docsDb.exec('VACUUM');
+    logger.info('Docs DB: enabled incremental auto_vacuum (one-time migration)');
+  }
+
   _docsDb.exec(DOCS_CREATE_TABLES);
   _docsDb.exec(createDocsVecTable(_docsDimensions));
 
@@ -361,6 +369,32 @@ export function clearAllDocs(projectRoot: string): void {
     db.prepare('DELETE FROM doc_sections').run();
     db.prepare('DELETE FROM doc_index_state').run();
   })();
+
+  docsIncrementalVacuum(projectRoot);
+}
+
+// ---------------------------------------------------------------------------
+// Vacuum
+// ---------------------------------------------------------------------------
+
+/**
+ * Reclaim disk space from deleted rows (incremental auto-vacuum).
+ */
+export function docsIncrementalVacuum(projectRoot: string): void {
+  try {
+    const db = getDocsDb(projectRoot);
+    db.pragma('incremental_vacuum');
+  } catch (err) {
+    logger.error('Docs incremental vacuum error:', err);
+  }
+}
+
+/**
+ * Full VACUUM — compacts the entire database. Slower but reclaims all free space.
+ */
+export function docsFullVacuum(projectRoot: string): void {
+  const db = getDocsDb(projectRoot);
+  db.exec('VACUUM');
 }
 
 // ---------------------------------------------------------------------------
@@ -499,6 +533,11 @@ export function cleanupOldSnapshots(projectRoot: string, maxAgeDays: number): nu
   const db = getDocsDb(projectRoot);
   const cutoff = new Date(Date.now() - maxAgeDays * 24 * 60 * 60 * 1000).toISOString();
   const result = db.prepare('DELETE FROM doc_snapshots WHERE created_at < ?').run(cutoff);
+
+  if (result.changes > 0) {
+    docsIncrementalVacuum(projectRoot);
+  }
+
   return result.changes;
 }
 

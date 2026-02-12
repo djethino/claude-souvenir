@@ -1,12 +1,13 @@
+import { statSync as fsStatSync } from 'fs';
 import { getConfig } from '../config.js';
-import { resolveProjectDir } from '../utils/paths.js';
+import { resolveProjectDir, getDbPath } from '../utils/paths.js';
 import { listProjectDirs, loadSessionIndex } from '../transcript/discovery.js';
 import { buildIndex } from '../db/indexer.js';
-import { getDb, getIndexStatus, getStoredProvider, clearAll } from '../db/store.js';
+import { getDb, getIndexStatus, getStoredProvider, clearAll, fullVacuum } from '../db/store.js';
 import { getOrCreateProvider } from './helpers.js';
 
 export async function handleSouvenirIndex(params: {
-  action: 'status' | 'build' | 'rebuild';
+  action: 'status' | 'build' | 'rebuild' | 'vacuum';
   project?: string;
   session_id?: string;
 }): Promise<string> {
@@ -20,8 +21,11 @@ export async function handleSouvenirIndex(params: {
     case 'rebuild':
       return await runBuild(config, { ...params, action: params.action as 'build' | 'rebuild' });
 
+    case 'vacuum':
+      return runVacuum(config);
+
     default:
-      return `Unknown action: "${params.action}". Use "status", "build", or "rebuild".`;
+      return `Unknown action: "${params.action}". Use "status", "build", "rebuild", or "vacuum".`;
   }
 }
 
@@ -111,4 +115,27 @@ async function runBuild(
   } catch (err) {
     return `Indexing error: ${err instanceof Error ? err.message : String(err)}`;
   }
+}
+
+function runVacuum(config: ReturnType<typeof getConfig>): string {
+  try {
+    getDb(config.embeddingDimensions);
+  } catch {
+    return 'No index database found. Nothing to vacuum.';
+  }
+
+  const dbPath = getDbPath();
+  let sizeBefore = 0;
+  try { sizeBefore = fsStatSync(dbPath).size; } catch { /* ignore */ }
+
+  fullVacuum();
+
+  let sizeAfter = 0;
+  try { sizeAfter = fsStatSync(dbPath).size; } catch { /* ignore */ }
+
+  const savedMb = ((sizeBefore - sizeAfter) / 1024 / 1024).toFixed(1);
+  const beforeMb = (sizeBefore / 1024 / 1024).toFixed(1);
+  const afterMb = (sizeAfter / 1024 / 1024).toFixed(1);
+
+  return `Index database vacuumed: ${beforeMb} MB → ${afterMb} MB (${savedMb} MB reclaimed).`;
 }
