@@ -18,7 +18,7 @@ import {
 } from './store.js';
 
 const EMBED_BATCH_SIZE = 32;
-const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5 MB — only skip truly abusive files (dumps, generated data)
+const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB — only skip truly abusive files (dumps, generated data)
 
 export interface DocsIndexProgress {
   phase: string;
