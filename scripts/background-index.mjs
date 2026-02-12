@@ -14,7 +14,7 @@
  * - Incremental → only indexes new content
  */
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, writeSync, mkdirSync, unlinkSync, openSync, closeSync } from 'fs';
 import { join, dirname } from 'path';
 import { homedir } from 'os';
 import { fileURLToPath, pathToFileURL } from 'url';
@@ -23,9 +23,10 @@ const SOUVENIR_DIR = join(homedir(), '.claude', 'claude-souvenir');
 const LOCK_FILE = join(SOUVENIR_DIR, 'bg-index.lock');
 const MIN_INTERVAL_MS = 30_000; // 30s debounce
 
-// ── Debounce check ──────────────────────────────────────────────────────────
+// ── Debounce check (atomic via O_EXCL) ──────────────────────────────────────
 mkdirSync(SOUVENIR_DIR, { recursive: true });
 
+// Check if a recent lock exists (debounce)
 try {
   if (existsSync(LOCK_FILE)) {
     const content = readFileSync(LOCK_FILE, 'utf-8').trim();
@@ -33,13 +34,26 @@ try {
     if (!isNaN(lastRun) && (Date.now() - lastRun) < MIN_INTERVAL_MS) {
       process.exit(0); // Too recent, skip
     }
+    // Lock expired — remove it so we can re-acquire atomically
+    try { unlinkSync(LOCK_FILE); } catch { /* another process may have deleted it */ }
   }
 } catch {
   // Ignore read errors, proceed
 }
 
-// Write lock immediately (before async work starts)
-writeFileSync(LOCK_FILE, String(Date.now()), 'utf-8');
+// Atomic lock acquisition: O_CREAT | O_EXCL | O_WRONLY — fails if file already exists
+try {
+  const fd = openSync(LOCK_FILE, 'wx');
+  const buf = Buffer.from(String(Date.now()), 'utf-8');
+  writeSync(fd, buf);
+  closeSync(fd);
+} catch (err) {
+  if (err.code === 'EEXIST') {
+    // Another process acquired the lock between our check and this open
+    process.exit(0);
+  }
+  // Other error — proceed anyway (best effort)
+}
 
 // ── Resolve current project from hook stdin ─────────────────────────────────
 let cwd;

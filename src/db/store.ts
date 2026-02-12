@@ -54,6 +54,8 @@ export function getDb(dimensions?: number): Database.Database {
 
   // Enable WAL mode for better concurrent read performance
   _db.pragma('journal_mode = WAL');
+  // Wait up to 5s if another process holds the write lock (avoids SQLITE_BUSY)
+  _db.pragma('busy_timeout = 5000');
 
   // Create schema
   _db.exec(CREATE_TABLES);

@@ -87,6 +87,7 @@ export function getDocsDb(projectRoot: string, dimensions?: number): Database.Da
 
   sqliteVec.load(_docsDb);
   _docsDb.pragma('journal_mode = WAL');
+  _docsDb.pragma('busy_timeout = 5000');
 
   _docsDb.exec(DOCS_CREATE_TABLES);
   _docsDb.exec(createDocsVecTable(_docsDimensions));
