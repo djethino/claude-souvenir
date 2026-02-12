@@ -8,6 +8,7 @@ Claude Souvenir gives Claude persistent memory across sessions:
 
 - **Search past conversations** — Find what was discussed, decided, or built in any previous session
 - **Search project files** — Index docs, code, and config files for semantic search within the current project
+- **File versioning** — Automatic snapshots every ~30s when files change, with history browsing, diff, and restore (3-day retention)
 - **Read session transcripts** — Browse or jump to specific moments in past conversations
 - **Cross-project search** — Search across all projects or filter by project, date, role
 - **Background indexing** — Automatically indexes new content via hooks (Stop, UserPromptSubmit, PostToolUse, PreCompact)
@@ -24,6 +25,9 @@ Claude Souvenir gives Claude persistent memory across sessions:
 | "Recover context after compaction" | `souvenir_search query="..." session_id="current"` |
 | "Show me the project structure" | `souvenir_tree` or `souvenir_tree depth=2 stats=true` |
 | "What TypeScript files exist in src?" | `souvenir_tree path="src" pattern="*.ts" show_lines=true` |
+| "What versions of this file exist?" | `souvenir_docs action="history" path="src/index.ts"` |
+| "What changed since the last snapshot?" | `souvenir_docs action="diff" path="src/index.ts"` |
+| "Recover a file after a destructive action" | `souvenir_docs action="restore" path="src/index.ts" snapshot_id=5` |
 
 ## Installation
 
@@ -161,18 +165,27 @@ Display the directory tree of the current project with smart defaults.
 
 ### souvenir_docs
 
-Manage project file indexing (docs, code, config).
+Manage project file indexing (docs, code, config) and file versioning.
 
 | Parameter | Description |
 |-----------|-------------|
-| `action` | `add`, `remove`, `list`, `status`, `build`, `clear`, `sections` |
-| `path` | File or directory to track (relative to project root) |
+| `action` | `add`, `remove`, `list`, `status`, `build`, `clear`, `sections`, `history`, `diff`, `restore` |
+| `path` | File or directory path (relative to project root) |
 | `pattern` | Glob filter for directories (e.g. `"*.md"`) |
 | `category` | Override auto-detection: `doc`, `code`, or `config` |
 | `source_id` | For remove: source ID from list output |
 | `rebuild` | For build: re-index everything |
+| `snapshot_id` | For diff/restore: snapshot ID from history output |
 
 **Sections**: Use `action="sections"` with a markdown file path to get the heading hierarchy with line numbers.
+
+**File Versioning**: Indexed files are automatically snapshotted every ~30s when changes are detected during background indexing. Snapshots are stored in the project's docs DB with a 3-day retention period.
+
+| Action | Description |
+|--------|-------------|
+| `history` | Show version history for a file (or list all versioned files if no path given) |
+| `diff` | Compare a snapshot to the current file on disk. Defaults to latest snapshot if no `snapshot_id` |
+| `restore` | Overwrite the file with a snapshot's content. A backup of the current state is saved automatically before restoring |
 
 ## Architecture
 
@@ -217,8 +230,11 @@ src/
 │   ├── indexer.ts         # Transcript semantic indexer
 │   └── background.ts     # Background indexing scheduler
 ├── docs/
-│   ├── indexer.ts         # Project file indexer
-│   └── store.ts           # Docs DB operations
+│   ├── indexer.ts         # Project file indexer + snapshot capture
+│   ├── store.ts           # Docs DB operations + snapshot CRUD
+│   ├── diff.ts            # LCS-based unified diff (zero deps)
+│   ├── schema.ts          # SQLite schema (v2: chunks, sections, snapshots)
+│   └── chunker.ts         # File → chunk splitting by category
 ├── db/
 │   ├── store.ts           # Global DB operations
 │   └── embedding.ts       # Ollama embedding provider
@@ -236,7 +252,7 @@ src/
 - **Runtime dependencies**: `@modelcontextprotocol/sdk`, `zod`, `better-sqlite3`, `sqlite-vec`
 - **Node.js**: >= 18.0.0
 - **Hook variable**: `${CLAUDE_PLUGIN_ROOT}` for path resolution
-- **Auto-detected categories**: `.md .txt .rst` (doc), `.ts .js .py .go .rs .java .c .cpp .h` (code), `.json .yaml .yml .toml .env` (config)
+- **Auto-detected categories**: `.md .txt .rst .adoc` (doc), `.ts .js .py .go .rs .java .c .cpp .h .cs .rb .php .lua .sh .vue .svelte .css .html .xml .sql .gd` (code), `.json .yaml .yml .toml .ini .editorconfig` (config)
 
 ## See Also
 
