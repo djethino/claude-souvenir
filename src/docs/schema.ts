@@ -3,7 +3,7 @@
  * Stored at <project>/.claude/ASymptOmatik/souvenir/docs.db
  */
 
-export const DOCS_SCHEMA_VERSION = 1;
+export const DOCS_SCHEMA_VERSION = 2;
 
 export const DOCS_CREATE_TABLES = `
   CREATE TABLE IF NOT EXISTS metadata (
@@ -51,9 +51,20 @@ export const DOCS_CREATE_TABLES = `
     indexed_at TEXT NOT NULL
   );
 
+  CREATE TABLE IF NOT EXISTS doc_snapshots (
+    snapshot_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    file_path TEXT NOT NULL,
+    content TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    file_size INTEGER NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
   CREATE INDEX IF NOT EXISTS idx_doc_chunks_file ON doc_chunks(file_path);
   CREATE INDEX IF NOT EXISTS idx_doc_chunks_category ON doc_chunks(category);
   CREATE INDEX IF NOT EXISTS idx_doc_sections_file ON doc_sections(file_path);
+  CREATE INDEX IF NOT EXISTS idx_snapshots_path ON doc_snapshots(file_path);
+  CREATE INDEX IF NOT EXISTS idx_snapshots_created ON doc_snapshots(created_at);
 `;
 
 /**

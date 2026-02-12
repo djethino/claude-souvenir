@@ -50,6 +50,23 @@ export interface DocIndexStateRow {
   indexed_at: string;
 }
 
+export interface DocSnapshotRow {
+  snapshot_id: number;
+  file_path: string;
+  content: string;
+  content_hash: string;
+  file_size: number;
+  created_at: string;
+}
+
+export interface DocSnapshotMeta {
+  snapshot_id: number;
+  file_path: string;
+  content_hash: string;
+  file_size: number;
+  created_at: string;
+}
+
 // ---------------------------------------------------------------------------
 // DB connection (singleton per project path)
 // ---------------------------------------------------------------------------
@@ -414,6 +431,101 @@ export function setDocsStoredProvider(projectRoot: string, name: string, dimensi
   db.prepare('INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)')
     .run('embedding_dimensions', String(dimensions));
 }
+
+// ---------------------------------------------------------------------------
+// Snapshots (file versioning)
+// ---------------------------------------------------------------------------
+
+export function insertSnapshot(
+  projectRoot: string,
+  filePath: string,
+  content: string,
+  contentHash: string,
+  fileSize: number,
+): boolean {
+  const db = getDocsDb(projectRoot);
+
+  // Skip if the latest snapshot for this file has the same hash (no change)
+  const latest = db.prepare(
+    'SELECT content_hash FROM doc_snapshots WHERE file_path = ? ORDER BY created_at DESC LIMIT 1',
+  ).get(filePath) as { content_hash: string } | undefined;
+
+  if (latest && latest.content_hash === contentHash) {
+    return false;
+  }
+
+  db.prepare(
+    'INSERT INTO doc_snapshots (file_path, content, content_hash, file_size, created_at) VALUES (?, ?, ?, ?, ?)',
+  ).run(filePath, content, contentHash, fileSize, new Date().toISOString());
+
+  return true;
+}
+
+export function getSnapshotsForFile(
+  projectRoot: string,
+  filePath: string,
+  limit = 50,
+): DocSnapshotMeta[] {
+  const db = getDocsDb(projectRoot);
+  return db.prepare(
+    'SELECT snapshot_id, file_path, content_hash, file_size, created_at FROM doc_snapshots WHERE file_path = ? ORDER BY created_at DESC LIMIT ?',
+  ).all(filePath, limit) as DocSnapshotMeta[];
+}
+
+export function getVersionedFiles(
+  projectRoot: string,
+): Array<{ file_path: string; snapshot_count: number; latest: string; oldest: string }> {
+  const db = getDocsDb(projectRoot);
+  return db.prepare(`
+    SELECT file_path, COUNT(*) as snapshot_count,
+           MAX(created_at) as latest, MIN(created_at) as oldest
+    FROM doc_snapshots
+    GROUP BY file_path
+    ORDER BY latest DESC
+  `).all() as Array<{ file_path: string; snapshot_count: number; latest: string; oldest: string }>;
+}
+
+export function getSnapshotContent(
+  projectRoot: string,
+  snapshotId: number,
+): DocSnapshotRow | null {
+  const db = getDocsDb(projectRoot);
+  return db.prepare(
+    'SELECT * FROM doc_snapshots WHERE snapshot_id = ?',
+  ).get(snapshotId) as DocSnapshotRow | null;
+}
+
+export function cleanupOldSnapshots(projectRoot: string, maxAgeDays: number): number {
+  const db = getDocsDb(projectRoot);
+  const cutoff = new Date(Date.now() - maxAgeDays * 24 * 60 * 60 * 1000).toISOString();
+  const result = db.prepare('DELETE FROM doc_snapshots WHERE created_at < ?').run(cutoff);
+  return result.changes;
+}
+
+export function getSnapshotStats(projectRoot: string): {
+  totalSnapshots: number;
+  totalFiles: number;
+  totalSizeBytes: number;
+} {
+  const db = getDocsDb(projectRoot);
+
+  const total = db.prepare('SELECT COUNT(*) as cnt FROM doc_snapshots')
+    .get() as { cnt: number };
+  const files = db.prepare('SELECT COUNT(DISTINCT file_path) as cnt FROM doc_snapshots')
+    .get() as { cnt: number };
+  const size = db.prepare('SELECT COALESCE(SUM(LENGTH(content)), 0) as total FROM doc_snapshots')
+    .get() as { total: number };
+
+  return {
+    totalSnapshots: total.cnt,
+    totalFiles: files.cnt,
+    totalSizeBytes: size.total,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Chunk count (utility)
+// ---------------------------------------------------------------------------
 
 export function getDocsChunkCount(projectRoot: string, category?: DocCategory): number {
   try {

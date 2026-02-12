@@ -1,5 +1,6 @@
-import { statSync, readdirSync } from 'fs';
+import { statSync, readdirSync, readFileSync } from 'fs';
 import { join, relative, resolve } from 'path';
+import { createHash } from 'crypto';
 import { logger } from '../utils/logger.js';
 import { chunkFile, detectCategory, isSupportedExtension } from './chunker.js';
 import type { EmbeddingProvider } from '../embedding/provider.js';
@@ -15,6 +16,8 @@ import {
   clearAllDocs,
   getDocsStoredProvider,
   setDocsStoredProvider,
+  insertSnapshot,
+  cleanupOldSnapshots,
 } from './store.js';
 
 const EMBED_BATCH_SIZE = 32;
@@ -244,6 +247,15 @@ export async function buildDocsIndex(
         }
       }
 
+      // Snapshot file content before re-indexing (versioning)
+      try {
+        const content = readFileSync(absolutePath, 'utf-8');
+        const contentHash = createHash('sha256').update(content).digest('hex');
+        insertSnapshot(projectRoot, relativePath, content, contentHash, stat.size);
+      } catch (snapErr) {
+        logger.error(`Snapshot error for ${relativePath}:`, snapErr);
+      }
+
       // Clear previous data for this file (re-index)
       clearDocFile(projectRoot, relativePath);
 
@@ -288,6 +300,16 @@ export async function buildDocsIndex(
         errors.push(`${relativePath}: ${msg.slice(0, 200)}`);
       }
     }
+  }
+
+  // Cleanup old snapshots (3-day TTL)
+  try {
+    const cleaned = cleanupOldSnapshots(projectRoot, 3);
+    if (cleaned > 0) {
+      logger.info(`Cleaned up ${cleaned} old snapshot(s)`);
+    }
+  } catch (cleanErr) {
+    logger.error('Snapshot cleanup error:', cleanErr);
   }
 
   logger.info(

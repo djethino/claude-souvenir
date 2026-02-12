@@ -1,5 +1,6 @@
-import { existsSync, statSync } from 'fs';
+import { existsSync, statSync, readFileSync, writeFileSync } from 'fs';
 import { resolve, relative } from 'path';
+import { createHash } from 'crypto';
 import { getConfig } from '../config.js';
 import { getOrCreateProvider } from './helpers.js';
 import { logger } from '../utils/logger.js';
@@ -15,17 +16,24 @@ import {
   docsDbExists,
   getDocsDb,
   getDocSections,
+  getSnapshotsForFile,
+  getVersionedFiles,
+  getSnapshotContent,
+  insertSnapshot,
+  getSnapshotStats,
 } from '../docs/store.js';
 import { buildDocsIndex, resolveSourceFiles } from '../docs/indexer.js';
 import { detectCategory } from '../docs/chunker.js';
+import { computeDiff, formatUnifiedDiff } from '../docs/diff.js';
 
 export async function handleSouvenirDocs(params: {
-  action: 'add' | 'remove' | 'list' | 'status' | 'build' | 'clear' | 'sections';
+  action: 'add' | 'remove' | 'list' | 'status' | 'build' | 'clear' | 'sections' | 'history' | 'diff' | 'restore';
   path?: string;
   pattern?: string;
   category?: DocCategory;
   source_id?: number;
   rebuild?: boolean;
+  snapshot_id?: number;
 }): Promise<string> {
   const config = getConfig();
   const projectRoot = config.cwd;
@@ -49,8 +57,14 @@ export async function handleSouvenirDocs(params: {
       return handleClear(projectRoot);
     case 'sections':
       return handleSections(projectRoot, params);
+    case 'history':
+      return handleHistory(projectRoot, params);
+    case 'diff':
+      return handleFileDiff(projectRoot, params);
+    case 'restore':
+      return handleRestore(projectRoot, params);
     default:
-      return `Unknown action: "${params.action}". Use "add", "remove", "list", "status", "build", "clear", or "sections".`;
+      return `Unknown action: "${params.action}". Use "add", "remove", "list", "status", "build", "clear", "sections", "history", "diff", or "restore".`;
   }
 }
 
@@ -248,6 +262,13 @@ async function handleStatus(projectRoot: string): Promise<string> {
     lines.push('\n  No sources configured.');
   }
 
+  // Snapshot stats
+  const snapStats = getSnapshotStats(projectRoot);
+  if (snapStats.totalSnapshots > 0) {
+    const snapSizeKb = (snapStats.totalSizeBytes / 1024).toFixed(1);
+    lines.push(`\n  Snapshots: ${snapStats.totalSnapshots} versions across ${snapStats.totalFiles} file(s) (${snapSizeKb} KB)`);
+  }
+
   // Check for pending changes
   const files = resolveSourceFiles(projectRoot);
   let pendingCount = 0;
@@ -367,6 +388,202 @@ async function handleSections(
 
   lines.push('');
   lines.push('Use the Read tool with file_path and offset/limit to navigate to a specific section.');
+
+  return lines.join('\n');
+}
+
+// ---------------------------------------------------------------------------
+// History (file version history)
+// ---------------------------------------------------------------------------
+
+async function handleHistory(
+  projectRoot: string,
+  params: { path?: string },
+): Promise<string> {
+  if (!docsDbExists(projectRoot)) {
+    return 'No docs database found. Index files first to start capturing versions.';
+  }
+
+  if (params.path) {
+    // Show snapshots for a specific file
+    const relativePath = relative(projectRoot, resolve(projectRoot, params.path)).replace(/\\/g, '/');
+    const snapshots = getSnapshotsForFile(projectRoot, relativePath);
+
+    if (snapshots.length === 0) {
+      return `No version history for "${relativePath}". The file must be indexed and modified at least once to have snapshots.`;
+    }
+
+    const lines = [`Version history for ${relativePath} (${snapshots.length} version(s)):\n`];
+
+    for (const s of snapshots) {
+      const sizeKb = (s.file_size / 1024).toFixed(1);
+      const hashShort = s.content_hash.slice(0, 8);
+      lines.push(`  #${s.snapshot_id}  ${s.created_at.slice(0, 19)}  ${sizeKb} KB  [${hashShort}]`);
+    }
+
+    lines.push('');
+    lines.push('Use souvenir_docs action="diff" path="..." snapshot_id=N to compare a version to the current file.');
+    lines.push('Use souvenir_docs action="restore" path="..." snapshot_id=N to restore a version.');
+
+    return lines.join('\n');
+  }
+
+  // Show all versioned files
+  const versionedFiles = getVersionedFiles(projectRoot);
+
+  if (versionedFiles.length === 0) {
+    return 'No file versions captured yet. Run souvenir_docs action="build" to start capturing snapshots.';
+  }
+
+  const lines = [`Versioned files (${versionedFiles.length}):\n`];
+
+  for (const f of versionedFiles) {
+    const latestShort = f.latest.slice(0, 19);
+    lines.push(`  ${f.file_path}  (${f.snapshot_count} version(s), latest: ${latestShort})`);
+  }
+
+  lines.push('');
+  lines.push('Use souvenir_docs action="history" path="<file>" to see all versions of a specific file.');
+
+  return lines.join('\n');
+}
+
+// ---------------------------------------------------------------------------
+// Diff (compare snapshot to current file)
+// ---------------------------------------------------------------------------
+
+async function handleFileDiff(
+  projectRoot: string,
+  params: { path?: string; snapshot_id?: number },
+): Promise<string> {
+  if (!params.path) {
+    return 'Error: "path" parameter is required for "diff" action.';
+  }
+
+  if (!docsDbExists(projectRoot)) {
+    return 'No docs database found. Index files first.';
+  }
+
+  const relativePath = relative(projectRoot, resolve(projectRoot, params.path)).replace(/\\/g, '/');
+  const absolutePath = resolve(projectRoot, params.path);
+
+  // Get the snapshot to compare
+  let snapshotContent: string;
+  let snapshotLabel: string;
+
+  if (params.snapshot_id) {
+    const snapshot = getSnapshotContent(projectRoot, params.snapshot_id);
+    if (!snapshot) {
+      return `Error: Snapshot ID ${params.snapshot_id} not found.`;
+    }
+    if (snapshot.file_path !== relativePath) {
+      return `Error: Snapshot #${params.snapshot_id} belongs to "${snapshot.file_path}", not "${relativePath}".`;
+    }
+    snapshotContent = snapshot.content;
+    snapshotLabel = `${relativePath} (snapshot #${params.snapshot_id}, ${snapshot.created_at.slice(0, 19)})`;
+  } else {
+    // Use the latest snapshot
+    const snapshots = getSnapshotsForFile(projectRoot, relativePath, 1);
+    if (snapshots.length === 0) {
+      return `No snapshots found for "${relativePath}". The file must be indexed and modified to have versions.`;
+    }
+    const latest = getSnapshotContent(projectRoot, snapshots[0].snapshot_id);
+    if (!latest) {
+      return 'Error: Could not retrieve latest snapshot content.';
+    }
+    snapshotContent = latest.content;
+    snapshotLabel = `${relativePath} (snapshot #${latest.snapshot_id}, ${latest.created_at.slice(0, 19)})`;
+  }
+
+  // Read current file
+  if (!existsSync(absolutePath)) {
+    return `File "${relativePath}" no longer exists on disk. Use "restore" to recover it from a snapshot.`;
+  }
+
+  let currentContent: string;
+  try {
+    currentContent = readFileSync(absolutePath, 'utf-8');
+  } catch (err) {
+    return `Error reading current file: ${err instanceof Error ? err.message : String(err)}`;
+  }
+
+  // Compute diff
+  const diff = computeDiff(snapshotContent, currentContent);
+
+  if (diff.hunks.length === 0) {
+    return `No differences between snapshot and current file "${relativePath}".`;
+  }
+
+  return formatUnifiedDiff(diff, snapshotLabel, `${relativePath} (current)`);
+}
+
+// ---------------------------------------------------------------------------
+// Restore (restore file from snapshot)
+// ---------------------------------------------------------------------------
+
+async function handleRestore(
+  projectRoot: string,
+  params: { path?: string; snapshot_id?: number },
+): Promise<string> {
+  if (!params.path) {
+    return 'Error: "path" parameter is required for "restore" action.';
+  }
+  if (!params.snapshot_id) {
+    return 'Error: "snapshot_id" parameter is required for "restore" action. Use "history" to find snapshot IDs.';
+  }
+
+  if (!docsDbExists(projectRoot)) {
+    return 'No docs database found.';
+  }
+
+  const relativePath = relative(projectRoot, resolve(projectRoot, params.path)).replace(/\\/g, '/');
+  const absolutePath = resolve(projectRoot, params.path);
+
+  // Get the snapshot to restore
+  const snapshot = getSnapshotContent(projectRoot, params.snapshot_id);
+  if (!snapshot) {
+    return `Error: Snapshot ID ${params.snapshot_id} not found.`;
+  }
+  if (snapshot.file_path !== relativePath) {
+    return `Error: Snapshot #${params.snapshot_id} belongs to "${snapshot.file_path}", not "${relativePath}".`;
+  }
+
+  // Safety net: save current file state as a snapshot before overwriting
+  let backupSnapshotCreated = false;
+  if (existsSync(absolutePath)) {
+    try {
+      const currentContent = readFileSync(absolutePath, 'utf-8');
+      const currentHash = createHash('sha256').update(currentContent).digest('hex');
+      const currentStat = statSync(absolutePath);
+      backupSnapshotCreated = insertSnapshot(
+        projectRoot,
+        relativePath,
+        currentContent,
+        currentHash,
+        currentStat.size,
+      );
+    } catch (err) {
+      logger.error(`Failed to create backup snapshot for ${relativePath}:`, err);
+    }
+  }
+
+  // Write the snapshot content to the file
+  try {
+    writeFileSync(absolutePath, snapshot.content, 'utf-8');
+  } catch (err) {
+    return `Error writing file: ${err instanceof Error ? err.message : String(err)}`;
+  }
+
+  const lines = [
+    `Restored "${relativePath}" from snapshot #${params.snapshot_id} (${snapshot.created_at.slice(0, 19)}).`,
+  ];
+
+  if (backupSnapshotCreated) {
+    lines.push('A backup of the previous state was saved as a new snapshot.');
+  }
+
+  lines.push('');
+  lines.push('Use souvenir_docs action="history" path="..." to see all versions.');
 
   return lines.join('\n');
 }

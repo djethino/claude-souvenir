@@ -199,26 +199,32 @@ server.tool(
   'souvenir_docs',
   `Index project files (docs, code, config) for semantic search via souvenir_search. Once indexed, you can find code by meaning — not just by string pattern. Ask conceptual questions about the codebase ("where is validation done?", "find legacy patterns", "how does auth work?") that Grep cannot answer.
 
+Files are automatically versioned every ~30s when changes are detected. Use "history", "diff", and "restore" to browse and recover previous versions (3-day retention).
+
 Actions:
 - "add": Track a file or directory for indexing. Provide path (relative to project root). For directories, optionally set pattern (e.g. "*.md") and category.
 - "remove": Stop tracking a source. Provide source_id (from "list") or path.
 - "list": Show all tracked sources and resolved file counts.
-- "status": Show index statistics (chunks, files, sections, pending changes).
+- "status": Show index statistics (chunks, files, sections, snapshots, pending changes).
 - "build": Index new/changed files incrementally. Use rebuild=true to re-index everything.
 - "clear": Remove all indexed data (sources are preserved).
 - "sections": Show markdown section table of contents for a file. Provide path. Returns heading hierarchy with line numbers for navigation.
+- "history": Show file version history. Provide path for a specific file, or omit for all versioned files.
+- "diff": Compare a saved version to the current file on disk. Provide path and optionally snapshot_id (default: latest snapshot).
+- "restore": Restore a file from a saved version. Provide path and snapshot_id. A backup of the current state is saved automatically before overwriting.
 
 Categories are auto-detected by extension: doc (.md, .txt), code (.ts, .py, .go...), config (.json, .yaml...).
 Override with the category parameter if needed.
 
 Typical workflow: souvenir_docs add path="src" → souvenir_docs add path="docs" → souvenir_docs build → souvenir_search source="docs". For markdown navigation: souvenir_docs sections path="docs/guide.md".`,
   {
-    action: z.enum(['add', 'remove', 'list', 'status', 'build', 'clear', 'sections']).describe('Action to perform.'),
-    path: z.string().optional().describe('For "add": file or directory path relative to project root. For "remove": path to untrack.'),
+    action: z.enum(['add', 'remove', 'list', 'status', 'build', 'clear', 'sections', 'history', 'diff', 'restore']).describe('Action to perform.'),
+    path: z.string().optional().describe('For "add"/"remove"/"sections"/"history"/"diff"/"restore": file or directory path relative to project root.'),
     pattern: z.string().optional().describe('For "add" with directory: glob pattern to filter files (e.g. "*.md", "*.{ts,js}"). Default: all supported extensions.'),
     category: z.enum(['doc', 'code', 'config']).optional().describe('Override auto-detection. Force all files from this source to a specific category.'),
     source_id: z.number().int().optional().describe('For "remove": source ID to remove (from "list" output).'),
     rebuild: z.boolean().optional().describe('For "build": drop and re-index everything. Default: false (incremental).'),
+    snapshot_id: z.number().int().optional().describe('For "diff": compare this snapshot to current file. For "restore": snapshot ID to restore (from "history" output).'),
   },
   withBackgroundIndex(async (params) => {
     try {
