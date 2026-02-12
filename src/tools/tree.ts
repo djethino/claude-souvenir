@@ -56,6 +56,35 @@ function matchPattern(filename: string, pattern: string): boolean {
   return filename === pattern;
 }
 
+// ── Binary file detection ────────────────────────────────────────────────────
+
+/** Extensions that are binary — line counting makes no sense */
+const BINARY_EXTENSIONS = new Set([
+  // Databases
+  '.db', '.sqlite', '.sqlite3', '.db-wal', '.db-shm',
+  // Images
+  '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.ico', '.webp', '.svg', '.tiff', '.avif',
+  // Fonts
+  '.woff', '.woff2', '.ttf', '.otf', '.eot',
+  // Audio/Video
+  '.mp3', '.mp4', '.wav', '.ogg', '.webm', '.flac', '.avi', '.mkv', '.mov',
+  // Archives
+  '.zip', '.gz', '.tar', '.bz2', '.7z', '.rar', '.xz',
+  // Compiled/binary
+  '.exe', '.dll', '.so', '.dylib', '.o', '.a', '.wasm',
+  '.pyc', '.pyo', '.class',
+  // Documents
+  '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
+  // Other binary
+  '.bin', '.dat', '.pak', '.map',
+  // Lock files (often huge, not useful to count)
+  '.lock',
+]);
+
+function isBinaryExtension(ext: string): boolean {
+  return BINARY_EXTENSIONS.has(ext);
+}
+
 // ── Line counting ────────────────────────────────────────────────────────────
 
 /** Count lines in a file efficiently (streaming, no full load) */
@@ -263,7 +292,7 @@ function walkTree(
 
 /** Populate line counts for all file entries (async, parallel batches) */
 async function populateLineCounts(entries: TreeEntry[]): Promise<void> {
-  const fileEntries = entries.filter((e) => !e.isDir);
+  const fileEntries = entries.filter((e) => !e.isDir && !isBinaryExtension(e.ext ?? ''));
   // Process in batches of 50 to avoid too many open file handles
   const BATCH = 50;
   for (let i = 0; i < fileEntries.length; i += BATCH) {
@@ -286,7 +315,7 @@ interface ExtStats {
 function computeStats(entries: TreeEntry[]): ExtStats[] {
   const map = new Map<string, { count: number; totalLines: number }>();
   for (const entry of entries) {
-    if (entry.isDir || !entry.ext) continue;
+    if (entry.isDir || !entry.ext || isBinaryExtension(entry.ext)) continue;
     const existing = map.get(entry.ext);
     if (existing) {
       existing.count++;
