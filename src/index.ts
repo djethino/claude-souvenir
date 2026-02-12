@@ -11,6 +11,7 @@ import { handleSouvenirSessions } from './tools/sessions.js';
 import { handleSouvenirProjects } from './tools/projects.js';
 import { handleSouvenirIndex } from './tools/index-mgmt.js';
 import { handleSouvenirDocs } from './tools/docs.js';
+import { handleSouvenirTree } from './tools/tree.js';
 import { scheduleBackgroundIndex } from './indexer/background.js';
 
 const server = new McpServer({
@@ -230,6 +231,35 @@ Typical workflow: souvenir_docs add path="src" → souvenir_docs add path="docs"
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       logger.error('souvenir_docs error:', msg);
+      return { content: [{ type: 'text' as const, text: `Error: ${msg}` }], isError: true };
+    }
+  }),
+);
+
+// --- souvenir_tree ---
+server.tool(
+  'souvenir_tree',
+  `Display the directory tree of the current project. Useful for quickly understanding the codebase structure.
+
+Automatically skips noise directories: node_modules, .git, build, dist, __pycache__, .venv, etc.
+Shows hidden directories selectively: .claude-plugin, .github, .vscode are shown; other dot-directories are hidden.
+
+Output format: Standard ASCII tree with connectors, ending with a file/directory count summary.
+
+Use path to explore a subdirectory. Use pattern to filter files by extension. Use directories_only for a high-level structure overview.`,
+  {
+    path: z.string().optional().describe('Subdirectory to display (relative to project root). Default: project root.'),
+    depth: z.number().int().min(1).max(10).optional().describe('Maximum depth to display. Default: 3.'),
+    pattern: z.string().optional().describe('Filter files by pattern: "*.ts", "*.{ts,js}", or exact filename. Directories are shown only if they contain matching files.'),
+    directories_only: z.boolean().optional().describe('Show only directories, no files. Default: false.'),
+  },
+  withBackgroundIndex(async (params) => {
+    try {
+      const text = await handleSouvenirTree(params);
+      return { content: [{ type: 'text' as const, text }] };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.error('souvenir_tree error:', msg);
       return { content: [{ type: 'text' as const, text: `Error: ${msg}` }], isError: true };
     }
   }),
