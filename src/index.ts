@@ -35,33 +35,19 @@ function withBackgroundIndex<T>(handler: (params: T) => Promise<{ content: Array
 // --- souvenir_search ---
 server.tool(
   'souvenir_search',
-  `Search through conversation transcripts AND/OR project files (docs, code, config). Returns ranked results with context snippets, timestamps, and session/file info.
+  `Search conversation transcripts and/or project files. Returns ranked results with context snippets, timestamps, and source info.
 
-Sources:
-- "transcripts" (default): search past Claude Code conversations. Results include cross-reference hints if project docs are indexed.
-- "docs": search only indexed documentation files (.md, .txt, .rst).
-- "code": search only indexed code files (.ts, .py, .go, etc.).
-- "config": search only indexed config files (.json, .yaml, etc.).
-- "project": search all indexed project files (docs + code + config).
-- "all": search both transcripts AND project files.
+ALWAYS use the default hybrid mode — it handles both exact strings and natural language queries. Only switch to "text" if you need regex, or to "semantic" to exclude literal matches.
 
-Modes:
-- "hybrid" (default): combines text matching AND meaning-based search. Best for most queries.
-- "text": exact substring or regex matching only. Use ONLY for specific literal strings. Only works with source="transcripts".
-- "semantic": meaning-based only. Understands natural language queries in any language.
+Sources: "transcripts" (default) for past conversations, "project" for all indexed project files (docs+code+config), "all" for both. Use "docs", "code", or "config" to narrow to a specific file category.
 
-IMPORTANT: For conceptual queries ("what did we decide about X", "discussion about Y"), ALWAYS use hybrid or semantic mode.
+Results include session_id + entry_uuid (transcripts) or file_path + line range (docs). Cross-reference hints show matches in the other source when available.
 
-Each transcript result includes a session_id and entry_uuid. Use souvenir_read with around_uuid to read context.
-Each docs result includes file_path and line range. Navigate project files directly.
-
-Cross-referencing: When searching one source, results include hints about matches in the other source (count + best score + recency).
-
-Typical workflow: souvenir_search (find relevant entries) → souvenir_read around_uuid (read context). For docs: souvenir_docs add path="src" → souvenir_docs build → souvenir_search source="code".`,
+Workflow: souvenir_search → souvenir_read around_uuid for full context.`,
   {
-    query: z.string().describe('Search query. Describe what you\'re looking for in natural language. For text mode only: substring or regex pattern.'),
-    mode: z.enum(['text', 'semantic', 'hybrid']).optional().describe('Search mode. Default: "hybrid". Use "text" only for exact literal matches (variable names, error codes, UUIDs).'),
-    source: z.enum(['transcripts', 'docs', 'code', 'config', 'project', 'all']).optional().describe('Where to search. Default: "transcripts". Use "project" for all indexed project files, "all" for everything.'),
+    query: z.string().describe('What you are looking for. Works with natural language, exact terms, function names, error messages — hybrid mode handles all of these.'),
+    mode: z.enum(['text', 'semantic', 'hybrid']).optional().describe('Default: "hybrid" (text + semantic combined). Use "text" only for regex patterns. Use "semantic" for pure meaning-based search.'),
+    source: z.enum(['transcripts', 'docs', 'code', 'config', 'project', 'all']).optional().describe('Default: "transcripts". Use "all" to search conversations AND project files together. Use "project" for indexed files only.'),
     project: z.string().optional().describe('Project directory name (e.g. "D--projet-claude-plugins") or path. Default: current project. Use "all" for all projects.'),
     session_id: z.string().optional().describe('Limit search to a specific session UUID. Use "current" to auto-resolve the most recent session.'),
     role: z.enum(['user', 'assistant', 'both']).optional().describe('Filter by message role. Default: "both".'),
@@ -88,20 +74,20 @@ Typical workflow: souvenir_search (find relevant entries) → souvenir_read arou
 // --- souvenir_read ---
 server.tool(
   'souvenir_read',
-  `Read conversation entries from a specific Claude Code session transcript. Returns formatted messages with timestamps, roles, and content. Use this after souvenir_search to read the full context around a search result, or to browse a session chronologically. Automatically skips internal entries (file snapshots, thinking blocks) and condenses tool calls for readability. Use detail_level to control verbosity and before_turns/after_turns for asymmetric message navigation.
+  `Read a Claude Code session transcript. Returns clean, formatted messages — internal noise (file snapshots, thinking blocks) is automatically filtered out, and tool calls are condensed into readable summaries.
 
-IMPORTANT: session_id must come from souvenir_search results or souvenir_sessions output. Do NOT guess or fabricate session IDs.
+IMPORTANT: session_id must come from souvenir_search or souvenir_sessions. Do NOT guess session IDs.
 
 Reading modes:
-- Default (no from_line): reads the LAST entries (most recent). Best for catching up after context compaction.
-- from_line=N: reads forward from line N. Use pagination hints (Earlier/Later) to navigate in both directions.
-- around_uuid: centers around a specific entry UUID from a search result.
+- Default (no from_line): reads the LAST entries (most recent). Best for catching up after compaction.
+- from_line=N: reads forward from line N. Follow pagination hints (Earlier/Later) to navigate.
+- around_uuid=<uuid>: centers on a search result. Use before_turns/after_turns to control how much context to include (e.g. before_turns=0, after_turns=5 to read only what follows).
 
-Pagination: Each response includes a footer with page position and navigation hints for adjacent pages (entry count + character size preview). Use max_entries=1 with around_uuid to read a single entry without truncation. Truncated entries include a drill-down hint.`,
+Pagination: footer shows page position and navigation hints. Use max_entries=1 with around_uuid to read a single full entry without truncation.`,
   {
-    session_id: z.string().describe('Session UUID to read from. Use "current" to auto-resolve the most recent session.'),
+    session_id: z.string().describe('Session UUID to read from. Use "current" for the most recent session.'),
     project: z.string().optional().describe('Project directory name. Default: current project (also searches other projects if not found).'),
-    around_uuid: z.string().optional().describe('Center the output around this entry UUID (from a search result). Returns context_turns before and after. Use with before_turns=0, after_turns=0, max_entries=1 to read a single entry without truncation.'),
+    around_uuid: z.string().optional().describe('Center output around this entry UUID (from a search result). Use max_entries=1 to read the full entry without truncation.'),
     from_line: z.number().int().min(1).optional().describe('Start reading from this JSONL line number (1-based). When omitted, reads from the END of the session (most recent entries). Use values from pagination hints (Earlier/Later) to navigate.'),
     max_entries: z.number().int().min(1).max(200).optional().describe('Maximum conversation entries to return per page. Default: 20. Use 1 with around_uuid for full single-entry view without truncation.'),
     context_turns: z.number().int().min(1).max(20).optional().describe('When using around_uuid, number of conversation turns before and after to include. Default: 3.'),
@@ -180,7 +166,13 @@ Typical workflow: souvenir_projects → souvenir_sessions project="<dir_name>" �
 // --- souvenir_index ---
 server.tool(
   'souvenir_index',
-  `Manage the semantic search index used by souvenir_search in "semantic" or "hybrid" mode. Use action "status" to check what's indexed, "build" to index new/updated sessions incrementally, or "rebuild" to re-index everything from scratch. First-time indexing of a large project may take several minutes.`,
+  `Manage the semantic search index that powers hybrid and semantic search modes. Without this index, only text mode works.
+
+Indexing runs automatically in the background after each interaction. Use this tool to check status, force immediate indexing, or rebuild from scratch.
+
+- "status": show what's indexed and what's pending.
+- "build": index new/updated sessions now (incremental).
+- "rebuild": drop everything and re-index from scratch. First-time indexing may take several minutes.`,
   {
     action: z.enum(['status', 'build', 'rebuild']).describe('"status": show indexing state. "build": incrementally index new content. "rebuild": drop and re-index everything.'),
     project: z.string().optional().describe('Project to index. Default: current project. Use "all" for all projects.'),
@@ -201,7 +193,7 @@ server.tool(
 // --- souvenir_docs ---
 server.tool(
   'souvenir_docs',
-  `Manage project documentation and code indexing for semantic search. This indexes LOCAL project files (docs, code, config) into a separate database from conversation transcripts.
+  `Index project files (docs, code, config) to make them searchable via souvenir_search with source="docs", "code", "config", or "project".
 
 Actions:
 - "add": Track a file or directory for indexing. Provide path (relative to project root). For directories, optionally set pattern (e.g. "*.md") and category.
@@ -246,7 +238,7 @@ Shows hidden directories selectively: .claude-plugin, .github, .vscode are shown
 
 Output format: Standard ASCII tree with connectors, ending with a file/directory count summary.
 
-Use path to explore a subdirectory. Use pattern to filter files by extension. Use directories_only for a high-level structure overview.`,
+Use path to explore a subdirectory. Use pattern to filter files by extension. Use directories_only for a high-level structure overview. Enable show_lines to find where the main logic lives, show_modified to see recent changes, or stats for a stack breakdown by extension.`,
   {
     path: z.string().optional().describe('Subdirectory to display (relative to project root). Default: project root.'),
     depth: z.number().int().min(1).max(10).optional().describe('Maximum depth to display. Default: 3.'),
