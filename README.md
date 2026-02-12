@@ -162,6 +162,8 @@ Manage project file indexing (docs, code, config).
 - **Global DB** (`~/.claude/claude-souvenir/souvenir.db`) — Transcript index, shared across all projects
 - **Local DB** (`<project>/.souvenir/docs.db`) — Project file index, per-project
 
+This follows Claude Code's own data partitioning: transcripts live in the user profile (`~/.claude/`), so the transcript index stays alongside them. Project files belong to the project, so their index stays in the project directory (`.souvenir/`). No project data leaks into the global store, no cross-project data leaks into a project folder.
+
 ### Embedding
 
 - **Model**: EmbeddingGemma via Ollama (768 dimensions, BF16)
