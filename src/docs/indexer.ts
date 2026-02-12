@@ -33,7 +33,7 @@ export interface DocsIndexProgress {
 /** Default directories/files to skip during recursive scan. */
 const SKIP_DIRS = new Set([
   'node_modules', '.git', '.svn', '.hg', 'dist', 'build', 'out',
-  '__pycache__', '.venv', 'venv', '.souvenir', '.claude',
+  '__pycache__', '.venv', 'venv', '.claude',
   '.godot', '.import', 'addons',
 ]);
 
@@ -64,7 +64,7 @@ function listFilesRecursive(
     if (entry.isDirectory()) {
       if (!recursive) continue;
       if (SKIP_DIRS.has(entry.name)) continue;
-      if (entry.name.startsWith('.') && entry.name !== '.souvenir') continue;
+      if (entry.name.startsWith('.')) continue;
       results.push(...listFilesRecursive(fullPath, pattern, recursive));
     } else if (entry.isFile()) {
       if (SKIP_FILES.has(entry.name)) continue;

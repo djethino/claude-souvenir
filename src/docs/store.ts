@@ -59,7 +59,7 @@ let _docsDbPath: string | null = null;
 let _docsDimensions: number = 768;
 
 function getLocalDocsDbPath(projectRoot: string): string {
-  return join(projectRoot, '.souvenir', 'docs.db');
+  return join(projectRoot, '.claude', 'ASymptOmatik', 'souvenir', 'docs.db');
 }
 
 export function getDocsDb(projectRoot: string, dimensions?: number): Database.Database {

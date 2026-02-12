@@ -19,7 +19,7 @@ import { join, dirname } from 'path';
 import { homedir } from 'os';
 import { fileURLToPath, pathToFileURL } from 'url';
 
-const SOUVENIR_DIR = join(homedir(), '.claude', 'claude-souvenir');
+const SOUVENIR_DIR = join(homedir(), '.claude', 'ASymptOmatik', 'souvenir');
 const LOCK_FILE = join(SOUVENIR_DIR, 'bg-index.lock');
 const MIN_INTERVAL_MS = 30_000; // 30s debounce
 

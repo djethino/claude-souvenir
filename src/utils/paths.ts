@@ -16,10 +16,10 @@ export function getProjectsDir(): string {
 }
 
 /**
- * Get the souvenir database directory (~/.claude/claude-souvenir).
+ * Get the souvenir database directory (~/.claude/ASymptOmatik/souvenir).
  */
 export function getSouvenirDir(): string {
-  return join(getClaudeDir(), 'claude-souvenir');
+  return join(getClaudeDir(), 'ASymptOmatik', 'souvenir');
 }
 
 /**

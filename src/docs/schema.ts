@@ -1,6 +1,6 @@
 /**
  * SQLite schema for the local docs/code vector database.
- * Stored at <project>/.souvenir/docs.db
+ * Stored at <project>/.claude/ASymptOmatik/souvenir/docs.db
  */
 
 export const DOCS_SCHEMA_VERSION = 1;

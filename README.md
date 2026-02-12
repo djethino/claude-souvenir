@@ -157,7 +157,7 @@ Display the directory tree of the current project with smart defaults.
 | `stats` | Add extension breakdown in footer (count + total lines per extension). Default: false |
 | `max_files` | Cap file output (1-10000). Directories always shown. Truncated count reported in footer |
 
-**Skipped automatically**: `node_modules`, `.git`, `build`, `dist`, `__pycache__`, `.venv`, `.souvenir`, `.claude`, and other noise directories. Hidden dot-directories are skipped except `.claude-plugin`, `.github`, `.vscode`, `.husky`, `.circleci`, `.devcontainer`, `.docker`.
+**Skipped automatically**: `node_modules`, `.git`, `build`, `dist`, `__pycache__`, `.venv`, `.claude`, and other noise directories. Hidden dot-directories are skipped except `.claude-plugin`, `.github`, `.vscode`, `.husky`, `.circleci`, `.devcontainer`, `.docker`.
 
 ### souvenir_docs
 
@@ -178,10 +178,10 @@ Manage project file indexing (docs, code, config).
 
 ### Two-Database Design
 
-- **Global DB** (`~/.claude/claude-souvenir/souvenir.db`) — Transcript index, shared across all projects
-- **Local DB** (`<project>/.souvenir/docs.db`) — Project file index, per-project
+- **Global DB** (`~/.claude/ASymptOmatik/souvenir/souvenir.db`) — Transcript index, shared across all projects
+- **Local DB** (`<project>/.claude/ASymptOmatik/souvenir/docs.db`) — Project file index, per-project
 
-This follows Claude Code's own data partitioning: transcripts live in the user profile (`~/.claude/`), so the transcript index stays alongside them. Project files belong to the project, so their index stays in the project directory (`.souvenir/`). No project data leaks into the global store, no cross-project data leaks into a project folder.
+All plugin data lives under `.claude/ASymptOmatik/`, the shared namespace for ASymptOmatik plugins. This follows Claude Code's own data partitioning: transcripts live in the user profile (`~/.claude/`), so the transcript index stays alongside them. Project file indexes stay in the project's `.claude/` directory. No project data leaks into the global store, no cross-project data leaks into a project folder.
 
 ### Embedding
 

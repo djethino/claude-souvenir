@@ -25,7 +25,7 @@ const SKIP_DIRS = new Set([
   'node_modules', '.git', '.svn', '.hg',
   'dist', 'build', 'out', '.next', '.nuxt',
   '__pycache__', '.venv', 'venv', '.tox',
-  '.souvenir', '.claude',
+  '.claude',
   '.godot', '.import',
   'coverage', '.nyc_output', '.cache',
 ]);
