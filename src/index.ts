@@ -39,7 +39,11 @@ server.tool(
 
 ALWAYS use the default hybrid mode — it handles both exact strings and natural language queries. Only switch to "text" if you need regex, or to "semantic" to exclude literal matches.
 
-Sources: "transcripts" (default) for past conversations, "project" for all indexed project files (docs+code+config), "all" for both. Use "docs", "code", or "config" to narrow to a specific file category.
+Sources:
+- "transcripts" (default): past conversations.
+- "code": semantic search through indexed code — finds patterns by meaning, not just by string. Use Grep for exact literal matches, use this for conceptual queries ("find error handling", "where is auth checked", "deprecated patterns", "fallback logic").
+- "docs": indexed documentation. "config": indexed config files.
+- "project": all indexed project files (docs+code+config). "all": transcripts + project files.
 
 Results include session_id + entry_uuid (transcripts) or file_path + line range (docs). Cross-reference hints show matches in the other source when available.
 
@@ -193,7 +197,7 @@ Indexing runs automatically in the background after each interaction. Use this t
 // --- souvenir_docs ---
 server.tool(
   'souvenir_docs',
-  `Index project files (docs, code, config) to make them searchable via souvenir_search with source="docs", "code", "config", or "project".
+  `Index project files (docs, code, config) for semantic search via souvenir_search. Once indexed, you can find code by meaning — not just by string pattern. Ask conceptual questions about the codebase ("where is validation done?", "find legacy patterns", "how does auth work?") that Grep cannot answer.
 
 Actions:
 - "add": Track a file or directory for indexing. Provide path (relative to project root). For directories, optionally set pattern (e.g. "*.md") and category.
