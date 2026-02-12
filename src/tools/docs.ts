@@ -9,6 +9,7 @@ import {
   removeDocSource,
   getDocSources,
   getDocsIndexStatus,
+  getDocIndexState,
   clearAllDocs,
   clearDocFile,
   docsDbExists,
@@ -253,7 +254,7 @@ async function handleStatus(projectRoot: string): Promise<string> {
   for (const f of files) {
     try {
       const stat = statSync(f.absolutePath);
-      const indexState = (await import('../docs/store.js')).getDocIndexState(projectRoot, f.relativePath);
+      const indexState = getDocIndexState(projectRoot, f.relativePath);
       if (!indexState || indexState.file_size !== stat.size || indexState.file_mtime !== stat.mtime.toISOString()) {
         pendingCount++;
       }
