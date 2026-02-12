@@ -22,6 +22,8 @@ Claude Souvenir gives Claude persistent memory across sessions:
 | "What files were discussed in that session?" | `souvenir_read session_id="..." detail_level="full"` |
 | "Find all sessions for this project" | `souvenir_sessions` |
 | "Recover context after compaction" | `souvenir_search query="..." session_id="current"` |
+| "Show me the project structure" | `souvenir_tree` or `souvenir_tree depth=2 stats=true` |
+| "What TypeScript files exist in src?" | `souvenir_tree path="src" pattern="*.ts" show_lines=true` |
 
 ## Installation
 
@@ -140,6 +142,23 @@ Manage the semantic search index for transcripts.
 | `project` | Project filter. Use `"all"` for all projects |
 | `session_id` | Index a specific session only |
 
+### souvenir_tree
+
+Display the directory tree of the current project with smart defaults.
+
+| Parameter | Description |
+|-----------|-------------|
+| `path` | Subdirectory to display (relative to project root). Default: project root |
+| `depth` | Maximum depth 1-10. Default: 3 |
+| `pattern` | Filter files by pattern: `"*.ts"`, `"*.{ts,js}"`, or exact filename. Directories with no matching files are pruned |
+| `directories_only` | Show only directories, no files. Default: false |
+| `show_lines` | Show line count per file (e.g. `config.ts  (142L)`). Default: false |
+| `show_modified` | Show relative modification time (e.g. `2h ago`). Default: false |
+| `stats` | Add extension breakdown in footer (count + total lines per extension). Default: false |
+| `max_files` | Cap file output (1-10000). Directories always shown. Truncated count reported in footer |
+
+**Skipped automatically**: `node_modules`, `.git`, `build`, `dist`, `__pycache__`, `.venv`, `.souvenir`, `.claude`, and other noise directories. Hidden dot-directories are skipped except `.claude-plugin`, `.github`, `.vscode`, `.husky`, `.circleci`, `.devcontainer`, `.docker`.
+
 ### souvenir_docs
 
 Manage project file indexing (docs, code, config).
@@ -188,7 +207,8 @@ src/
 │   ├── sessions.ts       # souvenir_sessions handler
 │   ├── projects.ts       # souvenir_projects handler
 │   ├── index-mgmt.ts     # souvenir_index handler
-│   └── docs.ts           # souvenir_docs handler
+│   ├── docs.ts           # souvenir_docs handler
+│   └── tree.ts           # souvenir_tree handler
 ├── transcript/
 │   ├── discovery.ts      # Project + session discovery
 │   ├── parser.ts         # JSONL transcript parser
