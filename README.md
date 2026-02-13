@@ -208,6 +208,16 @@ Hooks trigger background indexing on Stop, UserPromptSubmit, PostToolUse, and Pr
 
 > **First run note**: The first semantic search (or `souvenir_index build`) triggers an initial indexation of all existing transcripts for the current project. If you have a long conversation history, this can take several minutes depending on your hardware and the number of sessions. Subsequent runs are incremental and near-instant — only new content is indexed.
 
+### Multi-Agent & Multi-Project
+
+Souvenir is built for environments where multiple Claude instances work in parallel (subagents, concurrent sessions) and across multiple projects.
+
+- **Global transcript index**: All sessions from all projects are indexed in a single database (`souvenir.db`). A search can span the current project, a specific project, or all projects — subagent and sidechain transcripts are included when `include_subagents=true`.
+- **Per-project doc index**: Each project has its own `docs.db`. Project file indexes never leak across project boundaries. Workspaces with multiple projects each maintain independent doc indexes.
+- **SQLite WAL mode**: Both databases use Write-Ahead Logging, which allows concurrent readers without blocking. Multiple agents can search simultaneously while background indexing writes new data.
+- **Incremental indexing**: Each session's index state is tracked independently (`index_state` table). If a subagent creates a new session, background indexing picks it up automatically on the next hook trigger. No manual intervention needed.
+- **Cross-agent visibility**: When one agent searches, it can find content from any other agent's sessions — decisions made in a subagent are discoverable from the main agent, and vice versa.
+
 ### Source Structure
 
 ```
