@@ -254,10 +254,26 @@ src/
 - **Hook variable**: `${CLAUDE_PLUGIN_ROOT}` for path resolution
 - **Auto-detected categories**: `.md .txt .rst .adoc` (doc), `.ts .js .py .go .rs .java .c .cpp .h .cs .rb .php .lua .sh .vue .svelte .css .html .xml .sql .gd` (code), `.json .yaml .yml .toml .ini .editorconfig` (config)
 
-## See Also
+## Ecosystem
 
-- **[claude-metacognition](https://github.com/djethino/claude-metacognition)** — Metacognitive reflection hooks: pre-task questions, post-task verification, post-compaction context. Complements souvenir with behavioral guidance.
-- **[claude-code-safety-net](https://github.com/kenryu42/claude-code-safety-net)** — Blocks destructive commands. Security layer for Claude Code.
+Souvenir is part of a plugin suite that addresses Claude's structural limitations at different layers.
+
+| Layer | Plugin | Role |
+|-------|--------|------|
+| **Memory** | **claude-souvenir** (this plugin) | The *what*. Indexes conversations and project files for semantic search. Gives Claude access to everything that was said and done. |
+| **Behavior** | **[claude-metacognition](https://github.com/djethino/claude-metacognition)** | The *when*. Injects reflection questions, preserves context after compaction, and nudges Claude to use souvenir at the right moments. |
+| **Safety** | **[claude-code-safety-net](https://github.com/kenryu42/claude-code-safety-net)** | The *guardrail*. Blocks destructive commands (`rm -rf`, `git push --force`). |
+
+### How souvenir and metacognition interact
+
+Souvenir is a passive memory layer — it indexes and serves data, but never decides when Claude should search. That decision comes from metacognition, which detects souvenir's presence and:
+
+- At **new session start**: injects a project tree and suggests `souvenir_search` for past work context
+- After **context compaction**: reminds Claude that the summary is incomplete and that `souvenir_search` can recover lost discussions and decisions
+
+This matters because compaction is exactly when Claude *most* needs memory assistance, but also when it's *least* likely to think of using it (tunnel vision on the summarized task). Metacognition provides that nudge.
+
+Without metacognition, souvenir works fully — all MCP tools remain available. But Claude will rarely use them proactively after compaction, which is their primary value. Without souvenir, metacognition still provides reflection and context preservation, but loses the ability to recover deep context from past sessions.
 
 ## License
 
