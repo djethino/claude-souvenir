@@ -12,7 +12,7 @@ After context compaction, it gets worse: the summary captures *what* was done bu
 |---------|--------------------|
 | "We discussed this yesterday" → "I don't have access to previous conversations" | `souvenir_search` → answer in seconds |
 | After compaction: lost decisions, re-does work | Full transcript searchable, recovers exact context |
-| File overwritten by mistake → gone | Automatic snapshots, diff and restore |
+| Indexed file overwritten by mistake → gone | Automatic snapshots, diff and restore for tracked files |
 | New session on existing project → starts blind | Indexed project files, searchable by meaning not just keywords |
 
 Souvenir was built from a concrete frustration: watching Claude ask the same questions session after session, and lose hard-won context every time compaction hit.
@@ -23,7 +23,7 @@ Claude Souvenir gives Claude persistent memory across sessions:
 
 - **Search past conversations** — Find what was discussed, decided, or built in any previous session
 - **Search project files** — Index docs, code, and config files for semantic search within the current project
-- **File versioning** — Automatic snapshots every ~30s when files change, with history browsing, diff, and restore (3-day retention)
+- **File versioning** — Automatic snapshots every ~30s for files added to the index (`souvenir_docs add`), with history browsing, diff, and restore (3-day retention)
 - **Read session transcripts** — Browse or jump to specific moments in past conversations
 - **Cross-project search** — Search across all projects or filter by project, date, role
 - **Background indexing** — Automatically indexes new content via hooks (Stop, UserPromptSubmit, PostToolUse, PreCompact)
@@ -237,38 +237,46 @@ Souvenir is built for environments where multiple Claude instances work in paral
 
 ```
 src/
-├── index.ts              # MCP server + tool definitions
-├── config.ts             # Project detection + configuration
+├── index.ts               # MCP server + tool definitions
+├── config.ts              # Project detection + configuration
 ├── tools/
-│   ├── search.ts         # souvenir_search handler
-│   ├── read.ts           # souvenir_read handler
-│   ├── sessions.ts       # souvenir_sessions handler
-│   ├── projects.ts       # souvenir_projects handler
-│   ├── index-mgmt.ts     # souvenir_index handler
-│   ├── docs.ts           # souvenir_docs handler
-│   └── tree.ts           # souvenir_tree handler
+│   ├── search.ts          # souvenir_search handler
+│   ├── read.ts            # souvenir_read handler
+│   ├── sessions.ts        # souvenir_sessions handler
+│   ├── projects.ts        # souvenir_projects handler
+│   ├── index-mgmt.ts      # souvenir_index handler
+│   ├── docs.ts            # souvenir_docs handler
+│   ├── tree.ts            # souvenir_tree handler
+│   └── helpers.ts         # Shared tool utilities
 ├── transcript/
-│   ├── discovery.ts      # Project + session discovery
-│   ├── parser.ts         # JSONL transcript parser
-│   └── formatter.ts      # Output formatting + pagination
+│   ├── discovery.ts       # Project + session discovery
+│   ├── parser.ts          # JSONL transcript parser
+│   ├── formatter.ts       # Output formatting + pagination
+│   └── types.ts           # Transcript type definitions
 ├── indexer/
-│   ├── indexer.ts         # Transcript semantic indexer
-│   └── background.ts     # Background indexing scheduler
-├── docs/
-│   ├── indexer.ts         # Project file indexer + snapshot capture
-│   ├── store.ts           # Docs DB operations + snapshot CRUD
-│   ├── diff.ts            # LCS-based unified diff (zero deps)
-│   ├── schema.ts          # SQLite schema (v2: chunks, sections, snapshots)
-│   └── chunker.ts         # File → chunk splitting by category
+│   └── background.ts      # Background indexing scheduler (hooks)
 ├── db/
-│   ├── store.ts           # Global DB operations
-│   └── embedding.ts       # Ollama embedding provider
+│   ├── indexer.ts          # Transcript semantic indexer
+│   ├── store.ts            # Global DB operations (SQLite + sqlite-vec)
+│   └── schema.ts           # Global DB schema
+├── docs/
+│   ├── indexer.ts          # Project file indexer + snapshot capture
+│   ├── store.ts            # Docs DB operations + snapshot CRUD
+│   ├── diff.ts             # LCS-based unified diff (zero deps)
+│   ├── schema.ts           # Docs DB schema (chunks, sections, snapshots)
+│   └── chunker.ts          # File → chunk splitting by category
+├── embedding/
+│   ├── ollama.ts           # Ollama embedding provider (default)
+│   ├── openai.ts           # OpenAI-compatible embedding provider
+│   ├── provider.ts         # Embedding provider interface
+│   └── chunker.ts          # Text → embedding chunk splitting
 ├── search/
-│   ├── text.ts            # Text/regex search engine
-│   ├── semantic.ts        # Semantic vector search
-│   └── hybrid.ts          # Hybrid scorer
+│   ├── text-search.ts      # Text/regex search engine
+│   ├── semantic-search.ts  # Semantic vector search
+│   └── density-boost.ts    # Result scoring + density boosting
 └── utils/
-    └── logger.ts          # Debug logging
+    ├── logger.ts           # Debug logging
+    └── paths.ts            # Path normalization utilities
 ```
 
 ## Technical Details
@@ -277,7 +285,7 @@ src/
 - **Runtime dependencies**: `@modelcontextprotocol/sdk`, `zod`, `better-sqlite3`, `sqlite-vec`
 - **Node.js**: >= 18.0.0
 - **Hook variable**: `${CLAUDE_PLUGIN_ROOT}` for path resolution
-- **Auto-detected categories**: `.md .txt .rst .adoc` (doc), `.ts .js .py .go .rs .java .c .cpp .h .cs .rb .php .lua .sh .vue .svelte .css .html .xml .sql .gd` (code), `.json .yaml .yml .toml .ini .editorconfig` (config)
+- **Auto-detected categories**: `.md .txt .rst .adoc` (doc), `.ts .tsx .js .jsx .mjs .cjs .py .go .rs .java .c .cpp .h .hpp .cs .rb .php .swift .kt .lua .sh .bash .ps1 .bat .vue .svelte .css .scss .less .html .xml .sql .graphql .gql .gd .gdshader` (code), `.json .yaml .yml .toml .ini .editorconfig` (config)
 
 ## Ecosystem
 
