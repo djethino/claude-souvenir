@@ -1,6 +1,21 @@
 # Claude Souvenir
 
-MCP server plugin for Claude Code that provides semantic search across conversation history and project files.
+MCP server plugin that gives Claude Code persistent memory across sessions. Semantic search over conversations, project files, and automatic file versioning.
+
+## Why
+
+Claude Code has no memory between sessions. Every conversation starts from zero — previous decisions, discussions, and context are gone. The user ends up re-explaining the same things, and Claude ends up re-discovering what was already established.
+
+After context compaction, it gets worse: the summary captures *what* was done but loses *why* — the trade-offs considered, the approaches rejected, the edge cases discovered along the way. Claude fills these gaps with plausible reasoning that may contradict what was actually decided.
+
+| Without | With souvenir |
+|---------|--------------------|
+| "We discussed this yesterday" → "I don't have access to previous conversations" | `souvenir_search` → answer in seconds |
+| After compaction: lost decisions, re-does work | Full transcript searchable, recovers exact context |
+| File overwritten by mistake → gone | Automatic snapshots, diff and restore |
+| New session on existing project → starts blind | Indexed project files, searchable by meaning not just keywords |
+
+Souvenir was built from a concrete frustration: watching Claude ask the same questions session after session, and lose hard-won context every time compaction hit.
 
 ## What It Does
 
