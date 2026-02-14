@@ -48,10 +48,16 @@ Claude Souvenir gives Claude persistent memory across sessions:
 
 ### Prerequisites
 
-- **Ollama** running locally with the `embeddinggemma` model:
-  ```bash
-  ollama pull embeddinggemma
-  ```
+Souvenir uses embeddings for semantic search. By default, it runs locally via [Ollama](https://ollama.com) — no API key needed, no data leaves your machine.
+
+1. **Install Ollama** from [ollama.com](https://ollama.com/download)
+2. **Pull the embedding model**:
+   ```bash
+   ollama pull embeddinggemma
+   ```
+3. **Keep Ollama running** — souvenir connects to it at `http://localhost:11434`
+
+> The model is auto-pulled on first use if missing, but pre-pulling avoids a delay on the first search.
 
 ### From Marketplace
 
@@ -87,6 +93,40 @@ After installation, use `/claude-souvenir:souvenir-docs` to quickly add files to
 /souvenir-docs status
 /souvenir-docs list
 ```
+
+## Configuration
+
+Souvenir works out of the box with default settings. Environment variables are available for custom setups:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `SOUVENIR_OLLAMA_URL` | `http://localhost:11434` | Ollama server URL (for remote or non-standard port) |
+| `SOUVENIR_OLLAMA_MODEL` | `embeddinggemma` | Ollama embedding model name |
+| `SOUVENIR_PROVIDER` | `ollama` | Embedding provider: `ollama` or `openai` |
+| `SOUVENIR_OPENAI_API_KEY` | — | Required when using `openai` provider |
+| `SOUVENIR_EMBEDDING_DIMENSIONS` | `768` | Embedding vector dimensions |
+
+Set environment variables in your Claude Code MCP server configuration (`~/.claude/settings.json`):
+
+```json
+{
+  "mcpServers": {
+    "claude-souvenir": {
+      "env": {
+        "SOUVENIR_OLLAMA_URL": "http://192.168.1.100:11434"
+      }
+    }
+  }
+}
+```
+
+## First Use
+
+The first semantic search (or `souvenir_index build`) triggers an initial indexation of all existing transcripts for the current project. If you have a long conversation history, this can take a few minutes depending on your hardware and the number of sessions.
+
+During indexation, progress is displayed in real time. You can press **Esc** to stop waiting — indexation continues in the background. Use `mode="text"` for immediate keyword-based results while the index builds.
+
+Subsequent searches are incremental and near-instant — only new content gets indexed.
 
 ## MCP Tools
 
@@ -220,8 +260,6 @@ All plugin data lives under `.claude/ASymptOmatik/`, the shared namespace for AS
 ### Background Indexing
 
 Hooks trigger background indexing on Stop, UserPromptSubmit, PostToolUse, and PreCompact events. Indexing runs asynchronously and does not block Claude's workflow.
-
-> **First run note**: The first semantic search (or `souvenir_index build`) triggers an initial indexation of all existing transcripts for the current project. If you have a long conversation history, this can take several minutes depending on your hardware and the number of sessions. Subsequent runs are incremental and near-instant — only new content is indexed.
 
 ### Multi-Agent & Multi-Project
 

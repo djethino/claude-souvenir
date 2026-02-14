@@ -2,6 +2,47 @@ import type { SouvenirConfig } from '../config.js';
 import type { EmbeddingProvider } from '../embedding/provider.js';
 import { OllamaEmbeddingProvider } from '../embedding/ollama.js';
 import { OpenAIEmbeddingProvider } from '../embedding/openai.js';
+import type { IndexProgress } from '../db/indexer.js';
+import type { RequestHandlerExtra } from '@modelcontextprotocol/sdk/shared/protocol.js';
+import type { ServerRequest, ServerNotification } from '@modelcontextprotocol/sdk/types.js';
+
+// ---------------------------------------------------------------------------
+// MCP progress notifications for long-running operations
+// ---------------------------------------------------------------------------
+
+/** MCP tool handler extra parameter (re-exported from SDK for convenience). */
+export type ToolExtra = RequestHandlerExtra<ServerRequest, ServerNotification>;
+
+/**
+ * Create an onProgress callback that sends MCP progress notifications.
+ * Returns undefined if no progressToken is available (client doesn't support it).
+ * Includes a user-facing hint about Esc on the first notification.
+ */
+export function createProgressNotifier(
+  extra: ToolExtra | undefined,
+): ((progress: IndexProgress) => void) | undefined {
+  if (!extra?._meta?.progressToken) return undefined;
+
+  const token = extra._meta.progressToken;
+  let firstSent = false;
+
+  return (p: IndexProgress) => {
+    const hint = !firstSent
+      ? ' — Press Esc to stop waiting (indexation continues in background). Use mode="text" for immediate results.'
+      : '';
+    firstSent = true;
+
+    extra.sendNotification({
+      method: 'notifications/progress' as const,
+      params: {
+        progressToken: token,
+        progress: p.current,
+        total: p.total,
+        message: `${p.phase}: ${p.current}/${p.total}${p.detail ? ` (${p.detail})` : ''}${hint}`,
+      },
+    }).catch(() => {});  // Fire-and-forget, don't block indexing
+  };
+}
 
 /**
  * Create an embedding provider based on config.

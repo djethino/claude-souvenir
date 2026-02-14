@@ -13,20 +13,22 @@ import { handleSouvenirIndex } from './tools/index-mgmt.js';
 import { handleSouvenirDocs } from './tools/docs.js';
 import { handleSouvenirTree } from './tools/tree.js';
 import { scheduleBackgroundIndex } from './indexer/background.js';
+import type { ToolExtra } from './tools/helpers.js';
 
 const server = new McpServer({
   name: 'claude-souvenir',
   version: '0.1.0',
 });
 
+type ToolResult = { content: Array<{ type: 'text'; text: string }>; isError?: boolean };
+
 /**
- * Wrap a tool handler to add background indexing:
- * - Before: check trigger flag (from Stop hook) → schedule index
- * - After: schedule background index for next cycle
+ * Wrap a tool handler to add background indexing and pass through MCP extra.
+ * The extra parameter provides progress notifications and abort signal.
  */
-function withBackgroundIndex<T>(handler: (params: T) => Promise<{ content: Array<{ type: 'text'; text: string }>; isError?: boolean }>) {
-  return async (params: T) => {
-    const result = await handler(params);
+function withBackgroundIndex<T>(handler: (params: T, extra: ToolExtra) => Promise<ToolResult>) {
+  return async (params: T, extra: ToolExtra) => {
+    const result = await handler(params, extra);
     scheduleBackgroundIndex();
     return result;
   };
@@ -63,9 +65,9 @@ Workflow: souvenir_search → souvenir_read around_uuid for full context.`,
     case_sensitive: z.boolean().optional().describe('For text mode: case-sensitive matching. Default: false.'),
     regex: z.boolean().optional().describe('For text mode: treat query as regex pattern. Default: false.'),
   },
-  withBackgroundIndex(async (params) => {
+  withBackgroundIndex(async (params, extra) => {
     try {
-      const text = await handleSouvenirSearch(params);
+      const text = await handleSouvenirSearch(params, extra);
       return { content: [{ type: 'text' as const, text }] };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -102,7 +104,7 @@ Pagination: footer shows page position and navigation hints. Use max_entries=1 w
     detail_level: z.enum(['conversation', 'compact', 'full', 'files', 'tools']).optional().describe('Output detail level. "conversation" (default): text + tool summary. "compact": condensed. "full": everything. "files": unique file paths accessed, grouped by action (read/write/search). "tools": tool usage counts with error indicators.'),
     entry_types: z.string().optional().describe('Comma-separated types to include. Default: "user,assistant,summary". Add "progress" if needed.'),
   },
-  withBackgroundIndex(async (params) => {
+  withBackgroundIndex(async (params, _extra) => {
     try {
       const text = await handleSouvenirRead(params);
       return { content: [{ type: 'text' as const, text }] };
@@ -131,7 +133,7 @@ Pagination: Shows "Showing X/Y sessions" footer. Increase max_results to see mor
     max_results: z.number().int().min(1).max(50).optional().describe('Maximum sessions to return. Default: 20.'),
     include_sidechains: z.boolean().optional().describe('Include sidechain/subagent sessions. Default: false.'),
   },
-  withBackgroundIndex(async (params) => {
+  withBackgroundIndex(async (params, _extra) => {
     try {
       const text = await handleSouvenirSessions(params);
       return { content: [{ type: 'text' as const, text }] };
@@ -157,7 +159,7 @@ Typical workflow: souvenir_projects → souvenir_sessions project="<dir_name>" �
     action: z.enum(['list', 'clean']).optional().describe('Default: "list". Use "clean" to remove orphaned project data from the semantic index.'),
     search: z.string().optional().describe('Filter projects whose path contains this text.'),
   },
-  withBackgroundIndex(async (params) => {
+  withBackgroundIndex(async (params, _extra) => {
     try {
       const text = await handleSouvenirProjects(params);
       return { content: [{ type: 'text' as const, text }] };
@@ -185,9 +187,9 @@ Indexing runs automatically in the background after each interaction. Use this t
     project: z.string().optional().describe('Project to index. Default: current project. Use "all" for all projects.'),
     session_id: z.string().optional().describe('Index only a specific session.'),
   },
-  withBackgroundIndex(async (params) => {
+  withBackgroundIndex(async (params, extra) => {
     try {
-      const text = await handleSouvenirIndex(params);
+      const text = await handleSouvenirIndex(params, extra);
       return { content: [{ type: 'text' as const, text }] };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -221,7 +223,7 @@ Categories auto-detected by extension: doc (.md, .txt), code (.ts, .py, .go...),
     rebuild: z.boolean().optional().describe('For "build": drop and re-index everything. Default: false (incremental).'),
     snapshot_id: z.number().int().optional().describe('For "diff": compare this snapshot to current file. For "restore": snapshot ID to restore (from "history" output).'),
   },
-  withBackgroundIndex(async (params) => {
+  withBackgroundIndex(async (params, _extra) => {
     try {
       const text = await handleSouvenirDocs(params);
       return { content: [{ type: 'text' as const, text }] };
@@ -258,7 +260,7 @@ Output: Standard ASCII tree with connectors + file/directory count summary.`,
     stats: z.boolean().optional().describe('Add extension breakdown summary in footer (file count and total lines per extension). Default: false.'),
     max_files: z.number().int().min(1).max(10000).optional().describe('Maximum number of files to show. Directories are always shown. Truncated files show "N more files not shown". Prevents context flooding on large repos.'),
   },
-  withBackgroundIndex(async (params) => {
+  withBackgroundIndex(async (params, _extra) => {
     try {
       const text = await handleSouvenirTree(params);
       return { content: [{ type: 'text' as const, text }] };

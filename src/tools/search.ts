@@ -11,6 +11,8 @@ import { applySessionDensityBoost } from '../search/density-boost.js';
 import type { SearchResult } from '../transcript/types.js';
 import { searchDocsSemantic, docsDbExists, getDocsChunkCount } from '../docs/store.js';
 import type { DocCategory, DocVecSearchResult } from '../docs/store.js';
+import type { ToolExtra } from './helpers.js';
+import { createProgressNotifier } from './helpers.js';
 
 /**
  * Extract a smart snippet from content, trying to center on query words.
@@ -64,7 +66,7 @@ export async function handleSouvenirSearch(params: {
   offset?: number;
   case_sensitive?: boolean;
   regex?: boolean;
-}): Promise<string> {
+}, extra?: ToolExtra): Promise<string> {
   const config = getConfig();
   const mode = params.mode || 'hybrid';
   const source = params.source || 'transcripts';
@@ -108,9 +110,9 @@ export async function handleSouvenirSearch(params: {
   if (mode === 'text') {
     result = await performTextSearch(params, projectDirs, maxResults);
   } else if (mode === 'semantic') {
-    result = await performSemanticSearch(params, projectDirs, maxResults);
+    result = await performSemanticSearch(params, projectDirs, maxResults, extra);
   } else if (mode === 'hybrid') {
-    result = await performHybridSearch(params, projectDirs, maxResults);
+    result = await performHybridSearch(params, projectDirs, maxResults, extra);
   } else {
     return `Unknown search mode: "${mode}". Use "text", "semantic", or "hybrid".`;
   }
@@ -202,6 +204,7 @@ async function performSemanticSearch(
   },
   projectDirs: string[],
   maxResults: number,
+  extra?: ToolExtra,
 ): Promise<string> {
   const config = getConfig();
 
@@ -215,7 +218,10 @@ async function performSemanticSearch(
     // Auto-index for single-project searches (the common case)
     if (projectDirs.length === 1) {
       try {
-        await buildIndex(provider, projectDirs, { rebuild: false });
+        await buildIndex(provider, projectDirs, {
+          rebuild: false,
+          onProgress: createProgressNotifier(extra),
+        });
       } catch (err) {
         logger.warn('Auto-index failed, continuing with existing index:', err);
       }
@@ -311,6 +317,7 @@ async function performHybridSearch(
   },
   projectDirs: string[],
   maxResults: number,
+  extra?: ToolExtra,
 ): Promise<string> {
   // Run text and semantic search in parallel
   const textPromise = textSearch({
@@ -341,7 +348,10 @@ async function performHybridSearch(
       // Auto-index for single-project (same as performSemanticSearch)
       if (projectDirs.length === 1) {
         try {
-          await buildIndex(provider, projectDirs, { rebuild: false });
+          await buildIndex(provider, projectDirs, {
+            rebuild: false,
+            onProgress: createProgressNotifier(extra),
+          });
         } catch (err) {
           logger.warn('Auto-index failed in hybrid mode:', err);
         }

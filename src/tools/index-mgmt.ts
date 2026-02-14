@@ -4,13 +4,14 @@ import { resolveProjectDir, getDbPath } from '../utils/paths.js';
 import { listProjectDirs, loadSessionIndex } from '../transcript/discovery.js';
 import { buildIndex } from '../db/indexer.js';
 import { getDb, getIndexStatus, getStoredProvider, clearAll, fullVacuum } from '../db/store.js';
-import { getOrCreateProvider } from './helpers.js';
+import { getOrCreateProvider, createProgressNotifier } from './helpers.js';
+import type { ToolExtra } from './helpers.js';
 
 export async function handleSouvenirIndex(params: {
   action: 'status' | 'build' | 'rebuild' | 'vacuum';
   project?: string;
   session_id?: string;
-}): Promise<string> {
+}, extra?: ToolExtra): Promise<string> {
   const config = getConfig();
 
   switch (params.action) {
@@ -19,7 +20,7 @@ export async function handleSouvenirIndex(params: {
 
     case 'build':
     case 'rebuild':
-      return await runBuild(config, { ...params, action: params.action as 'build' | 'rebuild' });
+      return await runBuild(config, { ...params, action: params.action as 'build' | 'rebuild' }, extra);
 
     case 'vacuum':
       return runVacuum(config);
@@ -71,6 +72,7 @@ function getStatusReport(config: ReturnType<typeof getConfig>, projectFilter?: s
 async function runBuild(
   config: ReturnType<typeof getConfig>,
   params: { action: 'build' | 'rebuild'; project?: string; session_id?: string },
+  extra?: ToolExtra,
 ): Promise<string> {
   // Resolve project dirs
   let projectDirs: string[];
@@ -93,6 +95,7 @@ async function runBuild(
     const result = await buildIndex(provider, projectDirs, {
       sessionId: params.session_id,
       rebuild: isRebuild,
+      onProgress: createProgressNotifier(extra),
     });
 
     const lines = [
