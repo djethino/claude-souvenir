@@ -166,6 +166,7 @@ export async function buildDocsIndex(
   options: {
     rebuild?: boolean;
     onProgress?: (progress: DocsIndexProgress) => void;
+    signal?: AbortSignal;
   } = {},
 ): Promise<{
   totalChunks: number;
@@ -174,7 +175,7 @@ export async function buildDocsIndex(
   skipped: number;
   errors: string[];
 }> {
-  const { rebuild = false, onProgress } = options;
+  const { rebuild = false, onProgress, signal } = options;
 
   // Initialize database
   getDocsDb(projectRoot, provider.dimensions);
@@ -218,6 +219,8 @@ export async function buildDocsIndex(
   const errors: string[] = [];
 
   for (let fi = 0; fi < files.length; fi++) {
+    if (signal?.aborted) break;
+
     const { absolutePath, relativePath, category } = files[fi];
 
     onProgress?.({

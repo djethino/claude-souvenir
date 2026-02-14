@@ -35,6 +35,7 @@ export async function buildIndex(
     includeSubagents?: boolean;
     rebuild?: boolean;
     onProgress?: (progress: IndexProgress) => void;
+    signal?: AbortSignal;
   } = {},
 ): Promise<{
   totalChunks: number;
@@ -43,7 +44,7 @@ export async function buildIndex(
   skipped: number;
   errors: string[];
 }> {
-  const { sessionId, includeSubagents = true, rebuild = false, onProgress } = options;
+  const { sessionId, includeSubagents = true, rebuild = false, onProgress, signal } = options;
 
   // Initialize database
   getDb(provider.dimensions);
@@ -98,6 +99,8 @@ export async function buildIndex(
     onProgress?.({ phase: `Processing ${projectDir}`, current: 0, total: totalFiles });
 
     for (let fi = 0; fi < files.length; fi++) {
+      if (signal?.aborted) break;
+
       const filePath = files[fi];
       const fileSessionId = basename(filePath, '.jsonl');
 

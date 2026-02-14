@@ -101,3 +101,15 @@ export function getOrCreateProvider(config: SouvenirConfig): EmbeddingProvider {
 export function isProviderLoaded(): boolean {
   return _singletonProvider !== null && _singletonProvider.isReady();
 }
+
+/**
+ * Dispose the singleton provider and release resources.
+ * Called during graceful shutdown.
+ */
+export async function disposeSingletonProvider(): Promise<void> {
+  if (_singletonProvider) {
+    await _singletonProvider.dispose();
+    _singletonProvider = null;
+    _singletonProviderType = null;
+  }
+}

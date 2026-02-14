@@ -12,8 +12,11 @@ import { handleSouvenirProjects } from './tools/projects.js';
 import { handleSouvenirIndex } from './tools/index-mgmt.js';
 import { handleSouvenirDocs } from './tools/docs.js';
 import { handleSouvenirTree } from './tools/tree.js';
-import { scheduleBackgroundIndex } from './indexer/background.js';
+import { scheduleBackgroundIndex, abortBackgroundIndex, waitForIndexing } from './indexer/background.js';
 import type { ToolExtra } from './tools/helpers.js';
+import { disposeSingletonProvider } from './tools/helpers.js';
+import { closeDb } from './db/store.js';
+import { closeDocsDb } from './docs/store.js';
 
 const server = new McpServer({
   name: 'claude-souvenir',
@@ -289,6 +292,44 @@ async function main() {
     logger.info('Could not get MCP roots (client may not support it):', err);
   }
 }
+
+// --- Graceful shutdown ---
+// When Claude Code exits, it sends SIGTERM/SIGINT to the MCP server process.
+// Without cleanup: background indexing keeps the process alive (async I/O pending),
+// SQLite WAL files remain locked, and deploy/restart fails with EPERM.
+
+let _shuttingDown = false;
+
+async function gracefulShutdown(signal: string): Promise<void> {
+  if (_shuttingDown) return;
+  _shuttingDown = true;
+
+  logger.info(`Received ${signal}, shutting down...`);
+
+  // 1. Stop accepting new background indexing work
+  abortBackgroundIndex();
+
+  // 2. Wait for in-progress indexing to finish current file (5s timeout)
+  await waitForIndexing(5_000);
+
+  // 3. Dispose embedding provider
+  try {
+    await disposeSingletonProvider();
+  } catch (err) {
+    logger.warn('Provider dispose error:', err);
+  }
+
+  // 4. Close database connections (releases WAL/SHM locks)
+  try { closeDocsDb(); } catch (err) { logger.warn('DocsDb close error:', err); }
+  try { closeDb(); } catch (err) { logger.warn('Db close error:', err); }
+
+  logger.info('Shutdown complete');
+  process.exit(0);
+}
+
+process.on('SIGTERM', () => { gracefulShutdown('SIGTERM'); });
+process.on('SIGINT', () => { gracefulShutdown('SIGINT'); });
+process.on('SIGHUP', () => { gracefulShutdown('SIGHUP'); });
 
 main().catch((err) => {
   logger.error('Fatal error:', err);
