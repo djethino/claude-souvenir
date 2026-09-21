@@ -20,7 +20,7 @@ import { closeDocsDb } from './docs/store.js';
 
 const server = new McpServer({
   name: 'claude-souvenir',
-  version: '0.1.0',
+  version: '0.2.0',
 });
 
 type ToolResult = { content: Array<{ type: 'text'; text: string }>; isError?: boolean };
