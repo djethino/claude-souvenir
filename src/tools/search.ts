@@ -3,8 +3,9 @@ import { formatSearchResult } from '../transcript/formatter.js';
 import { listProjectDirs, getSessionMetadata, resolveCurrentSession } from '../transcript/discovery.js';
 import { getConfig } from '../config.js';
 import { resolveProjectDir } from '../utils/paths.js';
-import { getDb, searchSemantic, getStoredProvider, getProjectChunkCount } from '../db/store.js';
-import { getOrCreateProvider } from './helpers.js';
+import { searchSemantic, getProjectChunkCount } from '../db/store.js';
+import type { VecSearchResult } from '../db/store.js';
+import { getOrCreateProvider, errorMessage } from './helpers.js';
 import { buildIndex } from '../db/indexer.js';
 import { logger } from '../utils/logger.js';
 import { applySessionDensityBoost } from '../search/density-boost.js';
@@ -225,34 +226,19 @@ async function performSemanticSearch(
       } catch (err) {
         logger.warn('Auto-index failed, continuing with existing index:', err);
       }
-    } else {
-      // Multi-project: check that index exists (no auto-index to avoid long waits)
-      try {
-        getDb(config.embeddingDimensions);
-      } catch {
-        return 'No semantic index found. Run souvenir_index with action="build" first to create the index.';
-      }
-      const stored = getStoredProvider();
-      if (!stored) {
-        return 'No semantic index found. Run souvenir_index with action="build" first.';
-      }
     }
+    // Multi-project: no auto-index to avoid long waits; searchSemantic reports a missing index
 
     const queryEmbedding = await provider.embedQuery(params.query);
-
-    // Map role filter
-    let roleFilter: string | undefined;
-    if (params.role === 'user') roleFilter = 'user';
-    else if (params.role === 'assistant') roleFilter = 'assistant';
 
     // Search each project dir (use first one for single project filter)
     const projectDir = projectDirs.length === 1 ? projectDirs[0] : undefined;
 
-    const vecResults = searchSemantic(queryEmbedding, {
+    const vecResults = searchSemantic(provider.identity, queryEmbedding, {
       topK: maxResults + (params.offset || 0),
       projectDir,
       sessionId: params.session_id,
-      role: roleFilter,
+      speaker: params.role === 'both' ? undefined : params.role,
       dateFrom: params.date_from,
       dateTo: params.date_to,
     });
@@ -332,10 +318,13 @@ async function performHybridSearch(
     offset: 0,
     caseSensitive: params.case_sensitive ?? false,
     regex: params.regex ?? false,
-  }).catch((err) => {
-    logger.warn('Text search failed in hybrid mode:', err);
-    return { results: [] as SearchResult[], totalMatches: 0, filesSearched: 0 };
-  });
+  }).then(
+    (result) => ({ ...result, error: null as string | null }),
+    (err) => {
+      logger.warn('Text search failed in hybrid mode:', err);
+      return { results: [] as SearchResult[], totalMatches: 0, filesSearched: 0, error: errorMessage(err) };
+    },
+  );
 
   const semanticPromise = (async () => {
     try {
@@ -355,35 +344,35 @@ async function performHybridSearch(
         } catch (err) {
           logger.warn('Auto-index failed in hybrid mode:', err);
         }
-      } else {
-        // Multi-project: just ensure DB exists
-        getDb(config.embeddingDimensions);
       }
 
       const queryEmbedding = await provider.embedQuery(params.query);
-
-      let roleFilter: string | undefined;
-      if (params.role === 'user') roleFilter = 'user';
-      else if (params.role === 'assistant') roleFilter = 'assistant';
-
       const projectDir = projectDirs.length === 1 ? projectDirs[0] : undefined;
 
-      const results = searchSemantic(queryEmbedding, {
+      const results = searchSemantic(provider.identity, queryEmbedding, {
         topK: maxResults * 2,
         projectDir,
         sessionId: params.session_id,
-        role: roleFilter,
+        speaker: params.role === 'both' ? undefined : params.role,
         dateFrom: params.date_from,
         dateTo: params.date_to,
       });
 
-      return results;
-    } catch {
-      return [];
+      return { results, error: null as string | null };
+    } catch (err) {
+      logger.warn('Semantic search failed in hybrid mode:', err);
+      return { results: [] as VecSearchResult[], error: errorMessage(err) };
     }
   })();
 
-  const [textResult, vecResults] = await Promise.all([textPromise, semanticPromise]);
+  const [textResult, semantic] = await Promise.all([textPromise, semanticPromise]);
+  const vecResults = semantic.results;
+  // Hybrid degrades to one side when the other fails: say so instead of hiding it
+  const notices = [
+    semantic.error && `Note: semantic search unavailable, showing text matches only (${semantic.error})`,
+    textResult.error && `Note: text search failed, showing semantic matches only (${textResult.error})`,
+  ].filter(Boolean).join('\n');
+  const noticeBlock = notices ? `${notices}\n\n` : '';
 
   // Merge results
   const merged = new Map<string, SearchResult>();
@@ -430,14 +419,14 @@ async function performHybridSearch(
   const sliced = boostedResults.slice(offset, offset + maxResults);
 
   if (sliced.length === 0) {
-    return `No results found for "${params.query}".`;
+    return `${noticeBlock}No results found for "${params.query}".`;
   }
 
   const total = boostedResults.length;
   const endIndex = offset + sliced.length;
   const hasMore = endIndex < total;
 
-  const header = `Found ${total} hybrid result(s) for "${params.query}" (showing ${offset + 1}-${endIndex}):\n`;
+  const header = `${noticeBlock}Found ${total} hybrid result(s) for "${params.query}" (showing ${offset + 1}-${endIndex}):\n`;
   const formatted = sliced.map((r, i) => formatSearchResult(r, offset + i, sessionHitCounts.get(r.sessionId)));
 
   const footer = hasMore
@@ -472,7 +461,7 @@ async function getSemanticHint(query: string, projectDirs: string[]): Promise<st
     }
 
     const queryEmbedding = await provider.embedQuery(query);
-    const probeResults = searchSemantic(queryEmbedding, { topK: 5, projectDir });
+    const probeResults = searchSemantic(provider.identity, queryEmbedding, { topK: 5, projectDir });
     if (probeResults.length > 0) {
       const bestScore = (1 - probeResults[0].distance).toFixed(2);
       return `--- Hint: ${probeResults.length}+ semantic results available (best score: ${bestScore}). Use mode="semantic" or mode="hybrid" for meaning-based search. ---`;
@@ -567,7 +556,7 @@ async function performDocsSearch(
   const maxResults = Math.min(params.max_results || 10, 50);
   const offset = params.offset || 0;
 
-  const vecResults = searchDocsSemantic(projectRoot, queryEmbedding, {
+  const vecResults = searchDocsSemantic(projectRoot, provider.identity, queryEmbedding, {
     topK: maxResults + offset,
     category: categoryFilter,
   });
@@ -624,7 +613,7 @@ async function getDocsXrefHint(
     }
 
     const queryEmbedding = await provider.embedQuery(query);
-    const probeResults = searchDocsSemantic(projectRoot, queryEmbedding, { topK: 5 });
+    const probeResults = searchDocsSemantic(projectRoot, provider.identity, queryEmbedding, { topK: 5 });
 
     if (probeResults.length > 0) {
       const bestScore = (1 - probeResults[0].distance).toFixed(2);
@@ -662,7 +651,7 @@ async function getTranscriptsXrefHint(
     }
 
     const queryEmbedding = await provider.embedQuery(query);
-    const probeResults = searchSemantic(queryEmbedding, { topK: 5, projectDir });
+    const probeResults = searchSemantic(provider.identity, queryEmbedding, { topK: 5, projectDir });
 
     if (probeResults.length > 0) {
       const bestScore = (1 - probeResults[0].distance).toFixed(2);

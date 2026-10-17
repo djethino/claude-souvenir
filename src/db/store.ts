@@ -2,8 +2,13 @@ import type { SQLInputValue } from 'node:sqlite';
 import { existsSync, statSync as fsStatSync } from 'fs';
 import { getDbPath } from '../utils/paths.js';
 import { logger } from '../utils/logger.js';
-import { CREATE_TABLES, SCHEMA_VERSION, createVecTable } from './schema.js';
+import { CREATE_TABLES, SCHEMA_VERSION, CHUNK_VECTORS, LEGACY_VEC_TABLE, createChunkVectorsTable } from './schema.js';
 import { type Db, openDatabase, inTransaction, vectorBlob, getRow } from './sqlite.js';
+import {
+  IndexMismatchError, assertSameIdentity, deleteOrphanVectors, getStoredIdentity, migrateLegacyIdentity,
+  setStoredIdentity, tableExists, vectorTableDimensions,
+} from './identity.js';
+import type { EmbeddingIdentity } from '../embedding/provider.js';
 
 export interface ChunkRow {
   chunk_id: number;
@@ -29,30 +34,138 @@ export interface IndexStateRow {
 }
 
 let _db: Db | null = null;
-let _dimensions: number = 768;
+
+/** Hint appended to index mismatch errors: a model change requires re-embedding everything. */
+const REBUILD_HINT = 'rebuild it with souvenir_index action="rebuild" project="all" (re-embeds every indexed chunk)';
 
 /**
- * Get or create the SQLite database connection.
+ * Get or create the SQLite database connection. The vector table is created by
+ * prepareVectorIndex() once the embedding size is known.
  */
-export function getDb(dimensions?: number): Db {
+export function getDb(): Db {
   if (_db) return _db;
 
-  if (dimensions) _dimensions = dimensions;
+  const db = openDatabase(getDbPath(), 'transcripts');
+  try {
+    db.exec(CREATE_TABLES);
+    migrateLegacyIdentity(db);
+    migrateLegacyVectors(db);
 
-  _db = openDatabase(getDbPath(), 'transcripts');
+    // Store schema version
+    db.prepare('INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)').run(
+      'schema_version',
+      String(SCHEMA_VERSION),
+    );
+  } catch (err) {
+    // Keep no half-initialized connection: the next call retries from scratch
+    db.close();
+    throw err;
+  }
 
-  // Create schema
-  _db.exec(CREATE_TABLES);
-  _db.exec(createVecTable(_dimensions));
-
-  // Store schema version
-  _db.prepare('INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)').run(
-    'schema_version',
-    String(SCHEMA_VERSION),
-  );
-
+  _db = db;
   logger.info('Database initialized');
-  return _db;
+  return db;
+}
+
+/**
+ * Which speakers a chunk contains (a "turn" is a user message plus the reply that follows it).
+ * BigInt because sqlite-vec INTEGER columns reject JS numbers (bound as REAL).
+ */
+function chunkSpeakers(role: string | null, contentText: string): { hasUser: bigint; hasAssistant: bigint } {
+  if (role === 'turn') return { hasUser: 1n, hasAssistant: contentText.includes('\nASSISTANT: ') ? 1n : 0n };
+  if (role === 'assistant') return { hasUser: 0n, hasAssistant: 1n };
+  return { hasUser: 0n, hasAssistant: 0n };
+}
+
+/**
+ * Schema 1 kept vectors in vec_chunks without filter columns. Move them into chunk_vectors,
+ * in one transaction (vec0 tables cannot be renamed). Also run when a session still on an older
+ * version re-created vec_chunks after the migration: its rows are moved over the same way.
+ */
+function migrateLegacyVectors(db: Db): void {
+  if (!tableExists(db, LEGACY_VEC_TABLE)) return;
+
+  const legacyDims = vectorTableDimensions(db, LEGACY_VEC_TABLE);
+  const currentDims = tableExists(db, CHUNK_VECTORS) ? vectorTableDimensions(db, CHUNK_VECTORS) : null;
+  const started = Date.now();
+  let moved = 0;
+
+  inTransaction(db, () => {
+    if (currentDims !== null && currentDims !== legacyDims) {
+      // Written by an older version with other settings: not comparable with the current index
+      logger.warn(`Dropping ${LEGACY_VEC_TABLE} (${legacyDims}d): incompatible with ${CHUNK_VECTORS} (${currentDims}d)`);
+    } else {
+      if (currentDims === null) db.exec(createChunkVectorsTable(legacyDims));
+      const page = db.prepare('SELECT chunk_id, project_dir, session_id, role, timestamp, content_text FROM chunks WHERE chunk_id > ? ORDER BY chunk_id LIMIT 5000');
+      const legacyVector = db.prepare(`SELECT embedding FROM ${LEGACY_VEC_TABLE} WHERE chunk_id = ?`);
+      const alreadyMoved = db.prepare(`SELECT chunk_id FROM ${CHUNK_VECTORS} WHERE chunk_id = ?`);
+      const insert = db.prepare(`INSERT INTO ${CHUNK_VECTORS} (chunk_id, project_dir, session_id, role, has_user, has_assistant, timestamp, embedding) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
+      for (let last = 0; ;) {
+        const rows = page.all(last) as unknown as ChunkRow[];
+        if (rows.length === 0) break;
+        for (const r of rows) {
+          const id = BigInt(r.chunk_id);
+          const vector = legacyVector.get(id) as { embedding: Uint8Array } | undefined;
+          if (!vector || alreadyMoved.get(id)) continue;
+          const { hasUser, hasAssistant } = chunkSpeakers(r.role, r.content_text);
+          insert.run(id, r.project_dir, r.session_id, r.role ?? '', hasUser, hasAssistant, r.timestamp ?? '', vector.embedding);
+          moved++;
+        }
+        last = rows[rows.length - 1].chunk_id;
+      }
+      const orphans = deleteOrphanVectors(db, CHUNK_VECTORS, 'chunks');
+      if (orphans > 0) logger.info(`Deleted ${orphans} vectors of chunks that no longer exist`);
+    }
+    db.exec(`DROP TABLE ${LEGACY_VEC_TABLE}`);
+  });
+
+  // The copy went through the WAL and freed the old table's pages: give the space back
+  db.exec('PRAGMA incremental_vacuum');
+  db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
+  logger.info(`Moved ${moved} vectors from ${LEGACY_VEC_TABLE} to ${CHUNK_VECTORS} in ${Date.now() - started} ms`);
+}
+
+/**
+ * Make the vector table usable for the given embedding identity before indexing.
+ * - No index yet: create the vector table with the identity's size.
+ * - Same identity: nothing to do.
+ * - Different identity: throw IndexMismatchError, unless resetAll, which drops every vector and
+ *   chunk (they all need re-embedding with the new model) and recreates the table.
+ */
+export function prepareVectorIndex(identity: EmbeddingIdentity, options: { resetAll?: boolean } = {}): void {
+  const db = getDb();
+  const stored = getStoredIdentity(db);
+  if (!options.resetAll) {
+    assertSameIdentity(stored, identity, 'transcript', REBUILD_HINT);
+  }
+
+  inTransaction(db, () => {
+    if (options.resetAll) {
+      if (tableExists(db, CHUNK_VECTORS)) db.exec(`DROP TABLE ${CHUNK_VECTORS}`);
+      db.prepare('DELETE FROM chunks').run();
+      db.prepare('DELETE FROM index_state').run();
+    }
+    if (!tableExists(db, CHUNK_VECTORS)) db.exec(createChunkVectorsTable(identity.dimensions));
+    setStoredIdentity(db, identity);
+  });
+}
+
+/**
+ * Throw when the transcript index cannot be searched with the given identity: no index yet,
+ * or built with other embedding settings.
+ */
+export function assertSearchable(identity: EmbeddingIdentity): void {
+  const db = getDb();
+  const stored = getStoredIdentity(db);
+  if (!stored || !tableExists(db, CHUNK_VECTORS)) {
+    throw new IndexMismatchError('No semantic index found. Run souvenir_index with action="build" first to create the index.');
+  }
+  assertSameIdentity(stored, identity, 'transcript', REBUILD_HINT);
+}
+
+/** Identity the transcript index was built with, or null when there is none. */
+export function getIndexIdentity(): EmbeddingIdentity | null {
+  return getStoredIdentity(getDb());
 }
 
 /**
@@ -93,8 +206,8 @@ export function insertChunks(
   `);
 
   const insertVec = db.prepare(`
-    INSERT OR IGNORE INTO vec_chunks (chunk_id, embedding)
-    VALUES (?, ?)
+    INSERT INTO ${CHUNK_VECTORS} (chunk_id, project_dir, session_id, role, has_user, has_assistant, timestamp, embedding)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   let inserted = 0;
@@ -114,8 +227,12 @@ export function insertChunks(
       });
 
       if (result.changes > 0) {
+        const { hasUser, hasAssistant } = chunkSpeakers(chunk.role ?? null, chunk.content_text);
         // sqlite-vec only accepts integer primary keys: a JS number binds as REAL, BigInt as INTEGER
-        insertVec.run(BigInt(result.lastInsertRowid), vectorBlob(embeddings[i]));
+        insertVec.run(
+          BigInt(result.lastInsertRowid), chunk.project_dir, chunk.session_id, chunk.role ?? '',
+          hasUser, hasAssistant, chunk.timestamp ?? '', vectorBlob(embeddings[i]),
+        );
         inserted++;
       }
     }
@@ -125,53 +242,46 @@ export function insertChunks(
 }
 
 /**
- * Search for similar chunks using vector KNN.
+ * Search for similar chunks using vector KNN. Filters are applied by sqlite-vec while it selects
+ * the k nearest vectors (partition + metadata columns), so a filtered search still returns up to
+ * topK matching chunks. Throws IndexMismatchError when the index was built with another identity.
  */
 export function searchSemantic(
+  identity: EmbeddingIdentity,
   queryEmbedding: Float32Array,
   options: {
     topK?: number;
     projectDir?: string;
     sessionId?: string;
-    role?: string;
+    /** Only chunks containing a message from this speaker */
+    speaker?: 'user' | 'assistant';
     dateFrom?: string;
     dateTo?: string;
   } = {},
 ): VecSearchResult[] {
+  assertSearchable(identity);
   const db = getDb();
-  const topK = options.topK || 10;
+  const filters: string[] = [];
+  const params: SQLInputValue[] = [vectorBlob(queryEmbedding), options.topK || 10];
 
-  // Build the query with optional filters
-  const queryBuffer = vectorBlob(queryEmbedding);
+  if (options.projectDir) { filters.push('project_dir = ?'); params.push(options.projectDir); }
+  if (options.sessionId) { filters.push('session_id = ?'); params.push(options.sessionId); }
+  if (options.speaker === 'user') filters.push('has_user = 1');
+  if (options.speaker === 'assistant') filters.push('has_assistant = 1');
+  // '' marks chunks without timestamp: a date filter excludes them, as SQL NULL would
+  if (options.dateFrom || options.dateTo) filters.push("timestamp != ''");
+  if (options.dateFrom) { filters.push('timestamp >= ?'); params.push(options.dateFrom); }
+  if (options.dateTo) { filters.push('timestamp <= ?'); params.push(options.dateTo); }
 
-  // sqlite-vec KNN query
-  const baseQuery = `
+  return db.prepare(`
     SELECT c.*, v.distance
-    FROM vec_chunks v
+    FROM (
+      SELECT chunk_id, distance FROM ${CHUNK_VECTORS}
+      WHERE embedding MATCH ? AND k = ?${filters.map((f) => ` AND ${f}`).join('')}
+    ) v
     JOIN chunks c ON c.chunk_id = v.chunk_id
-    WHERE v.embedding MATCH ?
-      AND k = ?
-      ${options.projectDir ? 'AND c.project_dir = ?' : ''}
-      ${options.sessionId ? 'AND c.session_id = ?' : ''}
-      ${options.role ? 'AND c.role = ?' : ''}
-      ${options.dateFrom ? 'AND c.timestamp >= ?' : ''}
-      ${options.dateTo ? 'AND c.timestamp <= ?' : ''}
     ORDER BY v.distance
-  `;
-
-  const params: SQLInputValue[] = [queryBuffer, topK];
-  if (options.projectDir) params.push(options.projectDir);
-  if (options.sessionId) params.push(options.sessionId);
-  if (options.role) params.push(options.role);
-  if (options.dateFrom) params.push(options.dateFrom);
-  if (options.dateTo) params.push(options.dateTo);
-
-  try {
-    return db.prepare(baseQuery).all(...params) as unknown as VecSearchResult[];
-  } catch (err) {
-    logger.error('Semantic search error:', err);
-    return [];
-  }
+  `).all(...params) as unknown as VecSearchResult[];
 }
 
 /**
@@ -265,29 +375,17 @@ export function clearProject(projectDir: string): void {
     const chunkIds = db.prepare('SELECT chunk_id FROM chunks WHERE project_dir = ?')
       .all(projectDir) as Array<{ chunk_id: number }>;
 
-    for (const { chunk_id } of chunkIds) {
-      db.prepare('DELETE FROM vec_chunks WHERE chunk_id = ?').run(BigInt(chunk_id));
+    if (tableExists(db, CHUNK_VECTORS)) {
+      const deleteVector = db.prepare(`DELETE FROM ${CHUNK_VECTORS} WHERE chunk_id = ?`);
+      for (const { chunk_id } of chunkIds) {
+        deleteVector.run(BigInt(chunk_id));
+      }
     }
 
     db.prepare('DELETE FROM chunks WHERE project_dir = ?').run(projectDir);
 
     // Clear index state for files in this project
     db.prepare('DELETE FROM index_state WHERE file_path LIKE ?').run(`%${projectDir}%`);
-  });
-
-  incrementalVacuum();
-}
-
-/**
- * Clear all indexed data.
- */
-export function clearAll(): void {
-  const db = getDb();
-
-  inTransaction(db, () => {
-    db.prepare('DELETE FROM vec_chunks').run();
-    db.prepare('DELETE FROM chunks').run();
-    db.prepare('DELETE FROM index_state').run();
   });
 
   incrementalVacuum();
@@ -311,27 +409,6 @@ export function incrementalVacuum(): void {
 export function fullVacuum(): void {
   const db = getDb();
   db.exec('VACUUM');
-}
-
-/**
- * Get the stored embedding provider info.
- */
-export function getStoredProvider(): { name: string; dimensions: number } | null {
-  const db = getDb();
-  const name = db.prepare('SELECT value FROM metadata WHERE key = ?').get('embedding_provider') as { value: string } | undefined;
-  const dims = db.prepare('SELECT value FROM metadata WHERE key = ?').get('embedding_dimensions') as { value: string } | undefined;
-
-  if (!name || !dims) return null;
-  return { name: name.value, dimensions: parseInt(dims.value, 10) };
-}
-
-/**
- * Store the current embedding provider info.
- */
-export function setStoredProvider(name: string, dimensions: number): void {
-  const db = getDb();
-  db.prepare('INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)').run('embedding_provider', name);
-  db.prepare('INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)').run('embedding_dimensions', String(dimensions));
 }
 
 /**

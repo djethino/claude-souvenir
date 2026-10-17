@@ -1,6 +1,6 @@
 {
-  "name": "claude-souvenir",
-  "version": "0.3.1",
+  "name": "asymptomatik-souvenir",
+  "version": "0.4.0",
   "description": "Search and browse past Claude Code conversation transcripts with text and semantic search",
   "author": {
     "name": "ASymptOmatik"
@@ -14,5 +14,45 @@
     "souvenir",
     "mcp",
     "semantic-search"
-  ]
+  ],
+  "userConfig": {
+    "embedding_provider": {
+      "type": "string",
+      "title": "Embedding provider",
+      "description": "Service that turns text into vectors for semantic search. \"ollama\": a local Ollama server (default, nothing leaves your machine). \"openai\": any OpenAI-compatible /v1/embeddings API (OpenAI, LM Studio, vLLM, llama.cpp server, Ollama's /v1...). Changing the provider or model requires rebuilding the index.",
+      "options": ["ollama", "openai"],
+      "default": "ollama"
+    },
+    "embedding_url": {
+      "type": "string",
+      "title": "Embedding server URL",
+      "description": "Leave empty for the provider default: http://localhost:11434 for ollama, https://api.openai.com/v1 for openai. For another OpenAI-compatible server, give its base URL ending in /v1 (e.g. http://localhost:1234/v1).",
+      "default": ""
+    },
+    "embedding_model": {
+      "type": "string",
+      "title": "Embedding model",
+      "description": "Leave empty for the provider default: embeddinggemma for ollama, text-embedding-3-small for openai. With ollama, the model is pulled automatically if missing.",
+      "default": ""
+    },
+    "embedding_dimensions": {
+      "type": "number",
+      "title": "Embedding dimensions",
+      "description": "Leave empty to use the model's native size (detected automatically). Set it only to shorten vectors on models that support it (OpenAI text-embedding-3, Matryoshka models).",
+      "min": 32,
+      "max": 8192
+    },
+    "embedding_api_key": {
+      "type": "string",
+      "title": "Embedding API key",
+      "description": "Only for the openai provider when the server requires a key (OpenAI, hosted APIs). Local servers usually need none. Stored in your system's secure storage.",
+      "sensitive": true
+    },
+    "db_path": {
+      "type": "file",
+      "title": "Transcript index database",
+      "description": "Absolute path of the SQLite file holding the transcript index. Leave empty for the default: ~/.claude/ASymptOmatik/souvenir/souvenir.db (inside your Claude config directory).",
+      "default": ""
+    }
+  }
 }

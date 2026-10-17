@@ -6,16 +6,13 @@ import { chunkFile, detectCategory, isSupportedExtension } from './chunker.js';
 import type { EmbeddingProvider } from '../embedding/provider.js';
 import type { DocCategory } from './store.js';
 import {
-  getDocsDb,
   getDocSources,
   getDocIndexState,
   setDocIndexState,
   insertDocChunks,
   insertDocSections,
   clearDocFile,
-  clearAllDocs,
-  getDocsStoredProvider,
-  setDocsStoredProvider,
+  prepareDocsVectorIndex,
   insertSnapshot,
   cleanupOldSnapshots,
 } from './store.js';
@@ -177,34 +174,18 @@ export async function buildDocsIndex(
 }> {
   const { rebuild = false, onProgress, signal } = options;
 
-  // Initialize database
-  getDocsDb(projectRoot, provider.dimensions);
-
-  // Check for provider mismatch
-  const storedProvider = getDocsStoredProvider(projectRoot);
-  if (storedProvider && !rebuild) {
-    if (storedProvider.dimensions !== provider.dimensions) {
-      throw new Error(
-        `Embedding dimensions mismatch: docs index was built with ${storedProvider.dimensions}d ` +
-        `but current provider uses ${provider.dimensions}d. Rebuild the docs index.`,
-      );
-    }
-  }
-
-  // Initialize embedding provider
+  // The provider's identity (model, vector size) decides how the index is prepared
   if (!provider.isReady()) {
     onProgress?.({ phase: 'Initializing embedding model', current: 0, total: 1 });
     await provider.initialize();
   }
 
-  // Handle rebuild
+  // A rebuild recreates the vector table, so it also adopts a new model or vector size;
+  // otherwise this throws IndexMismatchError when the model changed
   if (rebuild) {
     logger.info('Rebuilding docs index from scratch...');
-    clearAllDocs(projectRoot);
   }
-
-  // Store provider info
-  setDocsStoredProvider(projectRoot, provider.name, provider.dimensions);
+  prepareDocsVectorIndex(projectRoot, provider.identity, { resetAll: rebuild });
 
   // Resolve all files from sources
   const files = resolveSourceFiles(projectRoot);

@@ -6,7 +6,6 @@
           {
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/background-index.js\"",
-            "timeout": 60000,
             "async": true
           }
         ]
@@ -18,7 +17,6 @@
           {
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/background-index.js\"",
-            "timeout": 60000,
             "async": true
           }
         ]
@@ -30,7 +28,6 @@
           {
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/background-index.js\"",
-            "timeout": 60000,
             "async": true
           }
         ]
@@ -42,7 +39,6 @@
           {
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/background-index.js\"",
-            "timeout": 60000,
             "async": true
           }
         ]

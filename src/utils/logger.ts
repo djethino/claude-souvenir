@@ -20,8 +20,9 @@ function shouldLog(level: LogLevel): boolean {
 function formatMessage(level: LogLevel, ...args: unknown[]): string {
   const timestamp = new Date().toISOString().slice(11, 23);
   const prefix = `[souvenir${timestamp} ${level.toUpperCase()}]`;
+  // Error properties are not enumerable: JSON.stringify(error) gives "{}"
   const message = args
-    .map((a) => (typeof a === 'string' ? a : JSON.stringify(a)))
+    .map((a) => (typeof a === 'string' ? a : a instanceof Error ? a.message : JSON.stringify(a)))
     .join(' ');
   return `${prefix} ${message}`;
 }

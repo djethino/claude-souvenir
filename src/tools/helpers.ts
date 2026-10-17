@@ -44,25 +44,20 @@ export function createProgressNotifier(
   };
 }
 
+/** Message of an unknown thrown value. */
+export function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
 /**
  * Create an embedding provider based on config.
  */
 export function createEmbeddingProvider(config: SouvenirConfig): EmbeddingProvider {
-  switch (config.embeddingProvider) {
+  switch (config.embedding.provider) {
     case 'ollama':
-      return new OllamaEmbeddingProvider(config.ollamaUrl, config.ollamaModel);
-
+      return new OllamaEmbeddingProvider(config.embedding);
     case 'openai':
-      if (!config.openaiApiKey) {
-        throw new Error(
-          'OpenAI provider requires SOUVENIR_OPENAI_API_KEY environment variable. ' +
-          'Set it in your .mcp.json env section or system environment.',
-        );
-      }
-      return new OpenAIEmbeddingProvider(config.openaiApiKey, config.embeddingDimensions);
-
-    default:
-      throw new Error(`Unknown embedding provider: "${config.embeddingProvider}". Use "ollama" or "openai".`);
+      return new OpenAIEmbeddingProvider(config.embedding);
   }
 }
 
@@ -71,19 +66,20 @@ export function createEmbeddingProvider(config: SouvenirConfig): EmbeddingProvid
 // ---------------------------------------------------------------------------
 
 let _singletonProvider: EmbeddingProvider | null = null;
-let _singletonProviderType: string | null = null;
+let _singletonSettingsKey: string | null = null;
 
 /**
  * Get the singleton embedding provider, creating it if needed.
- * The provider stays in memory to avoid reloading the model (~300MB) on every call.
- * If the provider type changes (e.g. local → openai), the old one is disposed and a new one is created.
+ * The provider stays initialized across calls (no reconnect, no repeated dimension probe).
+ * A new one is created when the embedding settings change.
  */
 export function getOrCreateProvider(config: SouvenirConfig): EmbeddingProvider {
-  if (_singletonProvider && _singletonProviderType === config.embeddingProvider) {
+  const settingsKey = JSON.stringify(config.embedding);
+  if (_singletonProvider && _singletonSettingsKey === settingsKey) {
     return _singletonProvider;
   }
 
-  // Type changed or first call — create a new provider
+  // Settings changed or first call — create a new provider
   // Note: we don't await dispose() here since it's sync-safe for our providers
   // and we want getOrCreateProvider to remain synchronous
   if (_singletonProvider) {
@@ -91,7 +87,7 @@ export function getOrCreateProvider(config: SouvenirConfig): EmbeddingProvider {
   }
 
   _singletonProvider = createEmbeddingProvider(config);
-  _singletonProviderType = config.embeddingProvider;
+  _singletonSettingsKey = settingsKey;
   return _singletonProvider;
 }
 
@@ -110,6 +106,6 @@ export async function disposeSingletonProvider(): Promise<void> {
   if (_singletonProvider) {
     await _singletonProvider.dispose();
     _singletonProvider = null;
-    _singletonProviderType = null;
+    _singletonSettingsKey = null;
   }
 }

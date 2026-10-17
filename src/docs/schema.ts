@@ -3,7 +3,8 @@
  * Stored at <project>/.claude/ASymptOmatik/souvenir/docs.db
  */
 
-export const DOCS_SCHEMA_VERSION = 2;
+/** 3: vectors moved to doc_chunk_vectors (category / file filter metadata), embedding identity. */
+export const DOCS_SCHEMA_VERSION = 3;
 
 export const DOCS_CREATE_TABLES = `
   CREATE TABLE IF NOT EXISTS metadata (
@@ -67,12 +68,20 @@ export const DOCS_CREATE_TABLES = `
   CREATE INDEX IF NOT EXISTS idx_snapshots_created ON doc_snapshots(created_at);
 `;
 
+/** Vector table of schema 2 (no filter columns), migrated into DOC_CHUNK_VECTORS. */
+export const LEGACY_DOCS_VEC_TABLE = 'vec_doc_chunks';
+
+export const DOC_CHUNK_VECTORS = 'doc_chunk_vectors';
+
 /**
- * sqlite-vec virtual table for doc embeddings.
+ * sqlite-vec table for doc embeddings, created once the embedding size is known. The search
+ * filters are metadata columns so that sqlite-vec applies them during the KNN.
  */
-export function createDocsVecTable(dimensions: number): string {
-  return `CREATE VIRTUAL TABLE IF NOT EXISTS vec_doc_chunks USING vec0 (
+export function createDocChunkVectorsTable(dimensions: number): string {
+  return `CREATE VIRTUAL TABLE ${DOC_CHUNK_VECTORS} USING vec0 (
     chunk_id INTEGER PRIMARY KEY,
+    category TEXT,
+    file_path TEXT,
     embedding float[${dimensions}] distance_metric=cosine
   );`;
 }
