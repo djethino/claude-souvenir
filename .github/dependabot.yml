@@ -8,6 +8,11 @@ updates:
       - "/vendor/sqlite-vec"
     schedule:
       interval: weekly
+    ignore:
+      # Node types must match the oldest supported runtime (engines.node >= 22.13), not the latest
+      # Node, or code could use APIs that do not exist on users' machines. Bump with engines.node.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: github-actions
     directory: "/"
