@@ -64,6 +64,9 @@ export function openDatabase(dbPath: string, label: string): Db {
   // WAL for concurrent readers; wait up to 5s if another process holds the write lock (avoids SQLITE_BUSY)
   db.exec('PRAGMA journal_mode = WAL');
   db.exec('PRAGMA busy_timeout = 5000');
+  // A checkpoint blocked by another process's reader lets the WAL grow (GBs after a migration) and SQLite
+  // never shrinks it on its own: cap it at 64 MB, applied at the first commit after a complete checkpoint
+  db.exec('PRAGMA journal_size_limit = 67108864');
 
   // Enable incremental auto-vacuum to reclaim space after deletions
   const { auto_vacuum: autoVacuum } = db.prepare('PRAGMA auto_vacuum').get() as { auto_vacuum: number };

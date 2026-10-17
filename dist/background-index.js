@@ -714,6 +714,7 @@ function openDatabase(dbPath, label) {
   db.loadExtension(sqliteVecPath());
   db.exec("PRAGMA journal_mode = WAL");
   db.exec("PRAGMA busy_timeout = 5000");
+  db.exec("PRAGMA journal_size_limit = 67108864");
   const { auto_vacuum: autoVacuum } = db.prepare("PRAGMA auto_vacuum").get();
   if (autoVacuum !== 2) {
     db.exec("PRAGMA auto_vacuum = INCREMENTAL");

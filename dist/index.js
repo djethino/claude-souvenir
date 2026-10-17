@@ -22548,6 +22548,7 @@ function openDatabase(dbPath, label) {
   db.loadExtension(sqliteVecPath());
   db.exec("PRAGMA journal_mode = WAL");
   db.exec("PRAGMA busy_timeout = 5000");
+  db.exec("PRAGMA journal_size_limit = 67108864");
   const { auto_vacuum: autoVacuum } = db.prepare("PRAGMA auto_vacuum").get();
   if (autoVacuum !== 2) {
     db.exec("PRAGMA auto_vacuum = INCREMENTAL");
@@ -26391,7 +26392,7 @@ function scheduleBackgroundIndex() {
 // src/index.ts
 var server = new McpServer({
   name: "souvenir",
-  version: "0.4.0"
+  version: "0.4.1"
 });
 function withBackgroundIndex(handler) {
   return async (params, extra) => {
