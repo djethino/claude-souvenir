@@ -26073,7 +26073,7 @@ function scheduleBackgroundIndex() {
 // src/index.ts
 var server = new McpServer({
   name: "claude-souvenir",
-  version: "0.3.0"
+  version: "0.3.1"
 });
 function withBackgroundIndex(handler) {
   return async (params, extra) => {
