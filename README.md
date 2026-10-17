@@ -323,6 +323,7 @@ Souvenir is part of a plugin suite that addresses Claude's structural limitation
 |-------|--------|------|
 | **Memory** | **asymptomatik-souvenir** (this plugin) | The *what*. Indexes conversations and project files for search. Gives Claude access to everything that was said and done. |
 | **Behavior** | **[asymptomatik-metacognition](https://github.com/djethino/claude-metacognition)** | The *when*. Injects reflection questions, preserves context after compaction, and nudges Claude to use souvenir at the right moments. |
+
 Souvenir is a passive memory layer — it indexes and serves data, but never decides when Claude should search. Metacognition detects souvenir and, at session start and after compaction, reminds Claude that past context can be recovered with `souvenir_search` — exactly when Claude most needs it and is least likely to think of it. Each plugin works without the other.
 
 ## License
