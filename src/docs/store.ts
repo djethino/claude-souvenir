@@ -3,7 +3,14 @@ import { existsSync, statSync as fsStatSync } from 'fs';
 import { join } from 'path';
 import { logger } from '../utils/logger.js';
 import { type Db, openDatabase, inTransaction, vectorBlob, getRow, allRows } from '../db/sqlite.js';
-import { DOCS_CREATE_TABLES, DOCS_SCHEMA_VERSION, createDocsVecTable } from './schema.js';
+import {
+  IndexMismatchError, assertSameIdentity, deleteOrphanVectors, getStoredIdentity, migrateLegacyIdentity,
+  setStoredIdentity, tableExists, vectorTableDimensions,
+} from '../db/identity.js';
+import type { EmbeddingIdentity } from '../embedding/provider.js';
+import {
+  DOCS_CREATE_TABLES, DOCS_SCHEMA_VERSION, DOC_CHUNK_VECTORS, LEGACY_DOCS_VEC_TABLE, createDocChunkVectorsTable,
+} from './schema.js';
 
 export type DocCategory = 'doc' | 'code' | 'config';
 
@@ -73,13 +80,19 @@ export interface DocSnapshotMeta {
 
 let _docsDb: Db | null = null;
 let _docsDbPath: string | null = null;
-let _docsDimensions: number = 768;
+
+/** Hint appended to docs index mismatch errors. */
+const DOCS_REBUILD_HINT = 'rebuild it with souvenir_docs action="build" rebuild=true (re-embeds every indexed file)';
 
 function getLocalDocsDbPath(projectRoot: string): string {
   return join(projectRoot, '.claude', 'ASymptOmatik', 'souvenir', 'docs.db');
 }
 
-export function getDocsDb(projectRoot: string, dimensions?: number): Db {
+/**
+ * Get or create the docs database of a project. The vector table is created by
+ * prepareDocsVectorIndex() once the embedding size is known.
+ */
+export function getDocsDb(projectRoot: string): Db {
   const dbPath = getLocalDocsDbPath(projectRoot);
 
   if (_docsDb && _docsDbPath === dbPath) return _docsDb;
@@ -91,21 +104,109 @@ export function getDocsDb(projectRoot: string, dimensions?: number): Db {
     _docsDbPath = null;
   }
 
-  if (dimensions) _docsDimensions = dimensions;
+  const db = openDatabase(dbPath, 'docs');
+  try {
+    db.exec(DOCS_CREATE_TABLES);
+    migrateLegacyIdentity(db);
+    migrateLegacyDocVectors(db);
 
-  _docsDb = openDatabase(dbPath, 'docs');
+    db.prepare('INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)').run(
+      'schema_version',
+      String(DOCS_SCHEMA_VERSION),
+    );
+  } catch (err) {
+    // Keep no half-initialized connection: the next call retries from scratch
+    db.close();
+    throw err;
+  }
+
+  _docsDb = db;
   _docsDbPath = dbPath;
-
-  _docsDb.exec(DOCS_CREATE_TABLES);
-  _docsDb.exec(createDocsVecTable(_docsDimensions));
-
-  _docsDb.prepare('INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)').run(
-    'schema_version',
-    String(DOCS_SCHEMA_VERSION),
-  );
-
   logger.info('Docs database initialized');
-  return _docsDb;
+  return db;
+}
+
+/**
+ * Schema 2 kept doc vectors in vec_doc_chunks without filter columns. Move them into
+ * doc_chunk_vectors in one transaction (vec0 tables cannot be renamed).
+ */
+function migrateLegacyDocVectors(db: Db): void {
+  if (!tableExists(db, LEGACY_DOCS_VEC_TABLE)) return;
+
+  const legacyDims = vectorTableDimensions(db, LEGACY_DOCS_VEC_TABLE);
+  const currentDims = tableExists(db, DOC_CHUNK_VECTORS) ? vectorTableDimensions(db, DOC_CHUNK_VECTORS) : null;
+  let moved = 0;
+
+  inTransaction(db, () => {
+    if (currentDims !== null && currentDims !== legacyDims) {
+      logger.warn(`Dropping ${LEGACY_DOCS_VEC_TABLE} (${legacyDims}d): incompatible with ${DOC_CHUNK_VECTORS} (${currentDims}d)`);
+    } else {
+      if (currentDims === null) db.exec(createDocChunkVectorsTable(legacyDims));
+      const legacyVector = db.prepare(`SELECT embedding FROM ${LEGACY_DOCS_VEC_TABLE} WHERE chunk_id = ?`);
+      const alreadyMoved = db.prepare(`SELECT chunk_id FROM ${DOC_CHUNK_VECTORS} WHERE chunk_id = ?`);
+      const insert = db.prepare(`INSERT INTO ${DOC_CHUNK_VECTORS} (chunk_id, category, file_path, embedding) VALUES (?, ?, ?, ?)`);
+      const chunks = allRows<{ chunk_id: number; category: string; file_path: string }>(
+        db, 'SELECT chunk_id, category, file_path FROM doc_chunks ORDER BY chunk_id',
+      );
+      for (const c of chunks) {
+        const id = BigInt(c.chunk_id);
+        const vector = legacyVector.get(id) as { embedding: Uint8Array } | undefined;
+        if (!vector || alreadyMoved.get(id)) continue;
+        insert.run(id, c.category, c.file_path, vector.embedding);
+        moved++;
+      }
+      const orphans = deleteOrphanVectors(db, DOC_CHUNK_VECTORS, 'doc_chunks');
+      if (orphans > 0) logger.info(`Deleted ${orphans} doc vectors of chunks that no longer exist`);
+    }
+    db.exec(`DROP TABLE ${LEGACY_DOCS_VEC_TABLE}`);
+  });
+
+  // The copy went through the WAL and freed the old table's pages: give the space back
+  db.exec('PRAGMA incremental_vacuum');
+  db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
+  logger.info(`Moved ${moved} doc vectors from ${LEGACY_DOCS_VEC_TABLE} to ${DOC_CHUNK_VECTORS}`);
+}
+
+/**
+ * Make the docs vector table usable for the given embedding identity before indexing (see
+ * prepareVectorIndex in db/store.ts). resetAll drops every doc vector and chunk; sources and
+ * snapshots are kept.
+ */
+export function prepareDocsVectorIndex(
+  projectRoot: string,
+  identity: EmbeddingIdentity,
+  options: { resetAll?: boolean } = {},
+): void {
+  const db = getDocsDb(projectRoot);
+  if (!options.resetAll) {
+    assertSameIdentity(getStoredIdentity(db), identity, 'docs', DOCS_REBUILD_HINT);
+  }
+
+  inTransaction(db, () => {
+    if (options.resetAll) {
+      if (tableExists(db, DOC_CHUNK_VECTORS)) db.exec(`DROP TABLE ${DOC_CHUNK_VECTORS}`);
+      db.prepare('DELETE FROM doc_chunks').run();
+      db.prepare('DELETE FROM doc_sections').run();
+      db.prepare('DELETE FROM doc_index_state').run();
+    }
+    if (!tableExists(db, DOC_CHUNK_VECTORS)) db.exec(createDocChunkVectorsTable(identity.dimensions));
+    setStoredIdentity(db, identity);
+  });
+}
+
+/** Throw when the docs index cannot be searched with the given identity. */
+export function assertDocsSearchable(projectRoot: string, identity: EmbeddingIdentity): void {
+  const db = getDocsDb(projectRoot);
+  const stored = getStoredIdentity(db);
+  if (!stored || !tableExists(db, DOC_CHUNK_VECTORS)) {
+    throw new IndexMismatchError('No docs index found. Add sources with souvenir_docs action="add", then action="build".');
+  }
+  assertSameIdentity(stored, identity, 'docs', DOCS_REBUILD_HINT);
+}
+
+/** Identity the docs index was built with, or null when there is none. */
+export function getDocsIndexIdentity(projectRoot: string): EmbeddingIdentity | null {
+  return getStoredIdentity(getDocsDb(projectRoot));
 }
 
 export function closeDocsDb(): void {
@@ -185,8 +286,8 @@ export function insertDocChunks(
   `);
 
   const insertVec = db.prepare(`
-    INSERT OR IGNORE INTO vec_doc_chunks (chunk_id, embedding)
-    VALUES (?, ?)
+    INSERT INTO ${DOC_CHUNK_VECTORS} (chunk_id, category, file_path, embedding)
+    VALUES (?, ?, ?, ?)
   `);
 
   let inserted = 0;
@@ -207,7 +308,7 @@ export function insertDocChunks(
 
       if (result.changes > 0) {
         // sqlite-vec only accepts integer primary keys: a JS number binds as REAL, BigInt as INTEGER
-        insertVec.run(BigInt(result.lastInsertRowid), vectorBlob(embeddings[i]));
+        insertVec.run(BigInt(result.lastInsertRowid), chunk.category, chunk.file_path, vectorBlob(embeddings[i]));
         inserted++;
       }
     }
@@ -261,8 +362,13 @@ export function getDocSections(projectRoot: string, filePath: string): DocSectio
 // Semantic search
 // ---------------------------------------------------------------------------
 
+/**
+ * KNN search over the docs index; category / file filters are applied by sqlite-vec during the
+ * KNN (metadata columns). Throws IndexMismatchError when the index was built with another identity.
+ */
 export function searchDocsSemantic(
   projectRoot: string,
+  identity: EmbeddingIdentity,
   queryEmbedding: Float32Array,
   options: {
     topK?: number;
@@ -270,31 +376,22 @@ export function searchDocsSemantic(
     filePath?: string;
   } = {},
 ): DocVecSearchResult[] {
+  assertDocsSearchable(projectRoot, identity);
   const db = getDocsDb(projectRoot);
-  const topK = options.topK || 10;
-  const queryBuffer = vectorBlob(queryEmbedding);
+  const filters: string[] = [];
+  const params: SQLInputValue[] = [vectorBlob(queryEmbedding), options.topK || 10];
+  if (options.category) { filters.push('category = ?'); params.push(options.category); }
+  if (options.filePath) { filters.push('file_path = ?'); params.push(options.filePath); }
 
-  const baseQuery = `
+  return db.prepare(`
     SELECT c.*, v.distance
-    FROM vec_doc_chunks v
+    FROM (
+      SELECT chunk_id, distance FROM ${DOC_CHUNK_VECTORS}
+      WHERE embedding MATCH ? AND k = ?${filters.map((f) => ` AND ${f}`).join('')}
+    ) v
     JOIN doc_chunks c ON c.chunk_id = v.chunk_id
-    WHERE v.embedding MATCH ?
-      AND k = ?
-      ${options.category ? 'AND c.category = ?' : ''}
-      ${options.filePath ? 'AND c.file_path = ?' : ''}
     ORDER BY v.distance
-  `;
-
-  const params: SQLInputValue[] = [queryBuffer, topK];
-  if (options.category) params.push(options.category);
-  if (options.filePath) params.push(options.filePath);
-
-  try {
-    return db.prepare(baseQuery).all(...params) as unknown as DocVecSearchResult[];
-  } catch (err) {
-    logger.error('Docs semantic search error:', err);
-    return [];
-  }
+  `).all(...params) as unknown as DocVecSearchResult[];
 }
 
 // ---------------------------------------------------------------------------
@@ -330,8 +427,11 @@ export function clearDocFile(projectRoot: string, filePath: string): void {
     const chunkIds = db.prepare('SELECT chunk_id FROM doc_chunks WHERE file_path = ?')
       .all(filePath) as Array<{ chunk_id: number }>;
 
-    for (const { chunk_id } of chunkIds) {
-      db.prepare('DELETE FROM vec_doc_chunks WHERE chunk_id = ?').run(BigInt(chunk_id));
+    if (tableExists(db, DOC_CHUNK_VECTORS)) {
+      const deleteVector = db.prepare(`DELETE FROM ${DOC_CHUNK_VECTORS} WHERE chunk_id = ?`);
+      for (const { chunk_id } of chunkIds) {
+        deleteVector.run(BigInt(chunk_id));
+      }
     }
 
     db.prepare('DELETE FROM doc_chunks WHERE file_path = ?').run(filePath);
@@ -344,7 +444,7 @@ export function clearAllDocs(projectRoot: string): void {
   const db = getDocsDb(projectRoot);
 
   inTransaction(db, () => {
-    db.prepare('DELETE FROM vec_doc_chunks').run();
+    if (tableExists(db, DOC_CHUNK_VECTORS)) db.prepare(`DELETE FROM ${DOC_CHUNK_VECTORS}`).run();
     db.prepare('DELETE FROM doc_chunks').run();
     db.prepare('DELETE FROM doc_sections').run();
     db.prepare('DELETE FROM doc_index_state').run();
@@ -422,28 +522,6 @@ export function getDocsIndexStatus(projectRoot: string): {
   };
 }
 
-// ---------------------------------------------------------------------------
-// Provider tracking
-// ---------------------------------------------------------------------------
-
-export function getDocsStoredProvider(projectRoot: string): { name: string; dimensions: number } | null {
-  const db = getDocsDb(projectRoot);
-  const name = db.prepare('SELECT value FROM metadata WHERE key = ?')
-    .get('embedding_provider') as { value: string } | undefined;
-  const dims = db.prepare('SELECT value FROM metadata WHERE key = ?')
-    .get('embedding_dimensions') as { value: string } | undefined;
-
-  if (!name || !dims) return null;
-  return { name: name.value, dimensions: parseInt(dims.value, 10) };
-}
-
-export function setDocsStoredProvider(projectRoot: string, name: string, dimensions: number): void {
-  const db = getDocsDb(projectRoot);
-  db.prepare('INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)')
-    .run('embedding_provider', name);
-  db.prepare('INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)')
-    .run('embedding_dimensions', String(dimensions));
-}
 
 // ---------------------------------------------------------------------------
 // Snapshots (file versioning)

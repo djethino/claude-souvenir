@@ -22,7 +22,7 @@ import { closeDocsDb } from './docs/store.js';
 declare const __SOUVENIR_VERSION__: string;
 
 const server = new McpServer({
-  name: 'claude-souvenir',
+  name: 'souvenir',
   version: __SOUVENIR_VERSION__,
 });
 
@@ -184,12 +184,13 @@ server.tool(
 
 Indexing runs automatically in the background after each interaction. Use this tool to check status, force immediate indexing, or rebuild from scratch.
 
-- "status": show what's indexed and what's pending.
+- "status": show what's indexed and which embedding model built it.
+- "check": verify the configuration end to end (settings, embedding server, a test embedding, index compatibility). Use it when semantic search fails or after changing settings.
 - "build": index new/updated sessions now (incremental).
-- "rebuild": drop everything and re-index from scratch. First-time indexing may take several minutes.
+- "rebuild": drop and re-index from scratch. After an embedding model change it resets the whole index (use project="all" to re-index every project now). First-time indexing may take several minutes.
 - "vacuum": compact the database file to reclaim disk space from deleted data.`,
   {
-    action: z.enum(['status', 'build', 'rebuild', 'vacuum']).describe('"status": show indexing state. "build": incrementally index new content. "rebuild": drop and re-index everything. "vacuum": compact database file.'),
+    action: z.enum(['status', 'check', 'build', 'rebuild', 'vacuum']).describe('"status": show indexing state. "check": verify configuration and embedding server. "build": incrementally index new content. "rebuild": drop and re-index everything. "vacuum": compact database file.'),
     project: z.string().optional().describe('Project to index. Default: current project. Use "all" for all projects.'),
     session_id: z.string().optional().describe('Index only a specific session.'),
   },
@@ -280,10 +281,10 @@ Output: Standard ASCII tree with connectors + file/directory count summary.`,
 
 // --- Start server ---
 async function main() {
-  logger.info('Starting claude-souvenir MCP server...');
+  logger.info('Starting souvenir MCP server...');
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  logger.info('claude-souvenir MCP server running on stdio');
+  logger.info('souvenir MCP server running on stdio');
 
   // Request workspace roots from Claude Code as fallback for project detection.
   // Primary detection uses process.cwd(), roots is a backup via MCP protocol.

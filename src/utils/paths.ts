@@ -1,11 +1,13 @@
 import { homedir } from 'os';
-import { join, resolve, sep } from 'path';
+import { join, sep } from 'path';
+import { readPluginOptions } from '../options.js';
 
 /**
- * Get the Claude Code base directory (~/.claude).
+ * Get the Claude Code configuration directory: CLAUDE_CONFIG_DIR when Claude Code runs with a
+ * relocated config, ~/.claude otherwise.
  */
 export function getClaudeDir(): string {
-  return process.env.SOUVENIR_CLAUDE_DIR || join(homedir(), '.claude');
+  return process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude');
 }
 
 /**
@@ -23,10 +25,10 @@ export function getSouvenirDir(): string {
 }
 
 /**
- * Get the souvenir database path.
+ * Get the transcript index database path (db_path option, or the default location).
  */
 export function getDbPath(): string {
-  return process.env.SOUVENIR_DB_PATH || join(getSouvenirDir(), 'souvenir.db');
+  return readPluginOptions().dbPath ?? join(getSouvenirDir(), 'souvenir.db');
 }
 
 /**

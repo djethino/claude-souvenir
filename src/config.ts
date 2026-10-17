@@ -2,24 +2,30 @@ import { cwdToProjectDir, getProjectsDir } from './utils/paths.js';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { logger } from './utils/logger.js';
+import { type EmbeddingProviderType, readPluginOptions } from './options.js';
 
-export type EmbeddingProviderType = 'ollama' | 'openai';
+/** Defaults used when the embedding_url / embedding_model options are empty. */
+const PROVIDER_DEFAULTS: Record<EmbeddingProviderType, { url: string; model: string }> = {
+  ollama: { url: 'http://localhost:11434', model: 'embeddinggemma' },
+  openai: { url: 'https://api.openai.com/v1', model: 'text-embedding-3-small' },
+};
+
+export interface EmbeddingSettings {
+  provider: EmbeddingProviderType;
+  /** Server base URL (Ollama root, or OpenAI-compatible base ending in /v1) */
+  url: string;
+  model: string;
+  /** Requested vector size; undefined = the model's native size */
+  dimensions?: number;
+  apiKey?: string;
+}
 
 export interface SouvenirConfig {
   /** Current working directory (from Claude Code) */
   cwd: string;
   /** Current project directory name (e.g. D--projet-claude-plugins) */
   currentProject: string | null;
-  /** Embedding provider: 'ollama' or 'openai' */
-  embeddingProvider: EmbeddingProviderType;
-  /** OpenAI API key (required if provider is 'openai') */
-  openaiApiKey: string | null;
-  /** Embedding dimensions */
-  embeddingDimensions: number;
-  /** Ollama server URL (default http://localhost:11434) */
-  ollamaUrl: string;
-  /** Ollama model name (default 'embeddinggemma') */
-  ollamaModel: string;
+  embedding: EmbeddingSettings;
 }
 
 let _config: SouvenirConfig | null = null;
@@ -46,7 +52,8 @@ export function getConfig(): SouvenirConfig {
   if (_config) return _config;
 
   const cwd = process.env.CWD || process.cwd();
-  const provider = (process.env.SOUVENIR_PROVIDER || 'ollama') as EmbeddingProviderType;
+  const options = readPluginOptions();
+  const defaults = PROVIDER_DEFAULTS[options.embeddingProvider];
 
   // Try CWD-based detection (works if CWD env is properly set by Claude Code)
   const detectedProject = resolvePathToProject(cwd);
@@ -59,11 +66,13 @@ export function getConfig(): SouvenirConfig {
   _config = {
     cwd,
     currentProject: detectedProject,
-    embeddingProvider: provider,
-    openaiApiKey: process.env.SOUVENIR_OPENAI_API_KEY || null,
-    embeddingDimensions: parseInt(process.env.SOUVENIR_EMBEDDING_DIMENSIONS || '768', 10),
-    ollamaUrl: process.env.SOUVENIR_OLLAMA_URL || 'http://localhost:11434',
-    ollamaModel: process.env.SOUVENIR_OLLAMA_MODEL || 'embeddinggemma',
+    embedding: {
+      provider: options.embeddingProvider,
+      url: (options.embeddingUrl ?? defaults.url).replace(/\/+$/, ''),
+      model: options.embeddingModel ?? defaults.model,
+      dimensions: options.embeddingDimensions,
+      apiKey: options.embeddingApiKey,
+    },
   };
 
   return _config;

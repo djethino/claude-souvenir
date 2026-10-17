@@ -22,7 +22,7 @@ function assertNodeVersion(): void {
   const [major, minor] = process.versions.node.split('.').map(Number);
   if (major < MIN_NODE[0] || (major === MIN_NODE[0] && minor < MIN_NODE[1])) {
     throw new Error(
-      `claude-souvenir requires Node.js >= ${MIN_NODE.join('.')} (built-in node:sqlite), found ${process.versions.node}`,
+      `souvenir requires Node.js >= ${MIN_NODE.join('.')} (built-in node:sqlite), found ${process.versions.node}`,
     );
   }
 }
@@ -32,12 +32,12 @@ function sqliteVecPath(): string {
   const relative = VEC_BINARIES[platform];
   if (!relative) {
     throw new Error(
-      `claude-souvenir: no sqlite-vec binary for ${platform} (supported: ${Object.keys(VEC_BINARIES).join(', ')})`,
+      `souvenir: no sqlite-vec binary for ${platform} (supported: ${Object.keys(VEC_BINARIES).join(', ')})`,
     );
   }
   const path = fileURLToPath(new URL(`../vendor/sqlite-vec/bin/${relative}`, import.meta.url));
   if (!existsSync(path)) {
-    throw new Error(`claude-souvenir: sqlite-vec binary missing at ${path}`);
+    throw new Error(`souvenir: sqlite-vec binary missing at ${path}`);
   }
   return path;
 }

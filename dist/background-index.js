@@ -2,14 +2,50 @@ import { createRequire as __souvenirCreateRequire } from 'module';
 const require = __souvenirCreateRequire(import.meta.url);
 
 // src/background-index.ts
-import { existsSync as existsSync5, readFileSync as readFileSync4, writeSync, mkdirSync as mkdirSync2, unlinkSync, openSync as openSync2, closeSync as closeSync2 } from "fs";
+import { readFileSync as readFileSync4, writeFileSync, writeSync, mkdirSync as mkdirSync2, unlinkSync, openSync as openSync2, closeSync as closeSync2 } from "fs";
 import { join as join6 } from "path";
 
 // src/utils/paths.ts
 import { homedir } from "os";
 import { join, sep } from "path";
+
+// src/options.ts
+import { isAbsolute } from "path";
+var PROVIDERS = ["ollama", "openai"];
+function option(key) {
+  const value = process.env[`CLAUDE_PLUGIN_OPTION_${key}`]?.trim();
+  return value ? value : void 0;
+}
+function readPluginOptions() {
+  const provider = option("EMBEDDING_PROVIDER") ?? "ollama";
+  if (!PROVIDERS.includes(provider)) {
+    throw new Error(`Invalid embedding_provider "${provider}": use ${PROVIDERS.join(" or ")}`);
+  }
+  const dimensionsText = option("EMBEDDING_DIMENSIONS");
+  let embeddingDimensions;
+  if (dimensionsText !== void 0) {
+    embeddingDimensions = Number(dimensionsText);
+    if (!Number.isInteger(embeddingDimensions) || embeddingDimensions <= 0) {
+      throw new Error(`Invalid embedding_dimensions "${dimensionsText}": expected a positive integer`);
+    }
+  }
+  const dbPath = option("DB_PATH");
+  if (dbPath !== void 0 && !isAbsolute(dbPath)) {
+    throw new Error(`Invalid db_path "${dbPath}": it must be an absolute path`);
+  }
+  return {
+    embeddingProvider: provider,
+    embeddingUrl: option("EMBEDDING_URL"),
+    embeddingModel: option("EMBEDDING_MODEL"),
+    embeddingDimensions,
+    embeddingApiKey: option("EMBEDDING_API_KEY"),
+    dbPath
+  };
+}
+
+// src/utils/paths.ts
 function getClaudeDir() {
-  return process.env.SOUVENIR_CLAUDE_DIR || join(homedir(), ".claude");
+  return process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude");
 }
 function getProjectsDir() {
   return join(getClaudeDir(), "projects");
@@ -18,7 +54,7 @@ function getSouvenirDir() {
   return join(getClaudeDir(), "ASymptOmatik", "souvenir");
 }
 function getDbPath() {
-  return process.env.SOUVENIR_DB_PATH || join(getSouvenirDir(), "souvenir.db");
+  return readPluginOptions().dbPath ?? join(getSouvenirDir(), "souvenir.db");
 }
 function cwdToProjectDir(cwd2) {
   const cleaned = cwd2.replace(/[\\/]+$/, "");
@@ -46,7 +82,7 @@ function shouldLog(level) {
 function formatMessage(level, ...args) {
   const timestamp = (/* @__PURE__ */ new Date()).toISOString().slice(11, 23);
   const prefix = `[souvenir${timestamp} ${level.toUpperCase()}]`;
-  const message = args.map((a) => typeof a === "string" ? a : JSON.stringify(a)).join(" ");
+  const message = args.map((a) => typeof a === "string" ? a : a instanceof Error ? a.message : JSON.stringify(a)).join(" ");
   return `${prefix} ${message}`;
 }
 var logger = {
@@ -68,6 +104,10 @@ var logger = {
 };
 
 // src/config.ts
+var PROVIDER_DEFAULTS = {
+  ollama: { url: "http://localhost:11434", model: "embeddinggemma" },
+  openai: { url: "https://api.openai.com/v1", model: "text-embedding-3-small" }
+};
 var _config = null;
 function resolvePathToProject(path) {
   const projectDir = cwdToProjectDir(path);
@@ -80,7 +120,8 @@ function resolvePathToProject(path) {
 function getConfig() {
   if (_config) return _config;
   const cwd2 = process.env.CWD || process.cwd();
-  const provider = process.env.SOUVENIR_PROVIDER || "ollama";
+  const options = readPluginOptions();
+  const defaults = PROVIDER_DEFAULTS[options.embeddingProvider];
   const detectedProject = resolvePathToProject(cwd2);
   if (detectedProject) {
     logger.info(`Detected project from CWD: ${detectedProject}`);
@@ -90,107 +131,175 @@ function getConfig() {
   _config = {
     cwd: cwd2,
     currentProject: detectedProject,
-    embeddingProvider: provider,
-    openaiApiKey: process.env.SOUVENIR_OPENAI_API_KEY || null,
-    embeddingDimensions: parseInt(process.env.SOUVENIR_EMBEDDING_DIMENSIONS || "768", 10),
-    ollamaUrl: process.env.SOUVENIR_OLLAMA_URL || "http://localhost:11434",
-    ollamaModel: process.env.SOUVENIR_OLLAMA_MODEL || "embeddinggemma"
+    embedding: {
+      provider: options.embeddingProvider,
+      url: (options.embeddingUrl ?? defaults.url).replace(/\/+$/, ""),
+      model: options.embeddingModel ?? defaults.model,
+      dimensions: options.embeddingDimensions,
+      apiKey: options.embeddingApiKey
+    }
   };
   return _config;
 }
 
-// src/embedding/ollama.ts
-var DEFAULT_BASE_URL = "http://localhost:11434";
-var DEFAULT_MODEL = "embeddinggemma";
-var DIMENSIONS = 768;
-var MAX_BATCH_SIZE = 64;
-var REQUEST_TIMEOUT_MS = 12e4;
-var DOCUMENT_PREFIX = "title: none | text: ";
-var QUERY_PREFIX = "task: search result | query: ";
-var OllamaEmbeddingProvider = class {
+// src/embedding/models.ts
+var REPRESENT_QUERY = "Represent this sentence for searching relevant passages: ";
+var RETRIEVAL_TASK = "Given a web search query, retrieve relevant passages that answer the query";
+var KNOWN_MODELS = [
+  // google/embeddinggemma-2 and google/embeddinggemma-300m
+  { match: "embeddinggemma", documentPrefix: "title: none | text: ", queryPrefix: "task: search result | query: " },
+  // nomic-ai/nomic-embed-text-v1.5 and -v2-moe
+  { match: "nomic-embed-text", documentPrefix: "search_document: ", queryPrefix: "search_query: " },
+  // Snowflake/snowflake-arctic-embed-l-v2.0 (Ollama: snowflake-arctic-embed2)
+  { match: "snowflake-arctic-embed2", documentPrefix: "", queryPrefix: "query: " },
+  { match: "snowflake-arctic-embed-l-v2", documentPrefix: "", queryPrefix: "query: " },
+  { match: "snowflake-arctic-embed-m-v2", documentPrefix: "", queryPrefix: "query: " },
+  // Snowflake/snowflake-arctic-embed (v1), mixedbread-ai/mxbai-embed-large-v1, BAAI/bge-large-en-v1.5
+  { match: "snowflake-arctic-embed", documentPrefix: "", queryPrefix: REPRESENT_QUERY },
+  { match: "mxbai-embed-large", documentPrefix: "", queryPrefix: REPRESENT_QUERY },
+  { match: "bge-large", documentPrefix: "", queryPrefix: REPRESENT_QUERY },
+  // intfloat/multilingual-e5-large-instruct (space after "Query:")
+  { match: "e5-large-instruct", documentPrefix: "", queryPrefix: `Instruct: ${RETRIEVAL_TASK}
+Query: ` },
+  // intfloat/multilingual-e5-* and e5-*-v2
+  { match: "multilingual-e5", documentPrefix: "passage: ", queryPrefix: "query: " },
+  { match: "e5-small", documentPrefix: "passage: ", queryPrefix: "query: " },
+  { match: "e5-base", documentPrefix: "passage: ", queryPrefix: "query: " },
+  { match: "e5-large", documentPrefix: "passage: ", queryPrefix: "query: " },
+  // Qwen/Qwen3-Embedding-* (official template: no space after "Query:")
+  { match: "qwen3-embedding", documentPrefix: "", queryPrefix: `Instruct: ${RETRIEVAL_TASK}
+Query:` },
+  // No prefixes
+  { match: "bge-m3", documentPrefix: "", queryPrefix: "" },
+  { match: "all-minilm", documentPrefix: "", queryPrefix: "" },
+  { match: "granite-embedding", documentPrefix: "", queryPrefix: "" },
+  { match: "paraphrase-multilingual", documentPrefix: "", queryPrefix: "" },
+  { match: "text-embedding-3", documentPrefix: "", queryPrefix: "" }
+];
+function normalizeModelName(model) {
+  const withoutTag = model.trim().toLowerCase().replace(/:[^/]*$/, "");
+  return withoutTag.slice(withoutTag.lastIndexOf("/") + 1);
+}
+function findModelPrompts(model) {
+  const name = normalizeModelName(model);
+  return KNOWN_MODELS.find((m) => name.includes(m.match)) ?? null;
+}
+
+// src/embedding/provider.ts
+function sameIdentity(a, b) {
+  return a.provider === b.provider && a.model === b.model && a.dimensions === b.dimensions && a.documentPrefix === b.documentPrefix && a.queryPrefix === b.queryPrefix;
+}
+function describeIdentity(identity) {
+  return `${identity.provider} (${identity.model}, ${identity.dimensions} dimensions)`;
+}
+var BaseEmbeddingProvider = class {
+  constructor(settings, maxBatchSize) {
+    this.settings = settings;
+    this.maxBatchSize = maxBatchSize;
+    this.name = `${settings.provider} (${settings.model})`;
+    const prompts = findModelPrompts(settings.model);
+    if (!prompts) {
+      logger.warn(`No known input prefixes for model "${settings.model}": texts are embedded as is`);
+    }
+    this.documentPrefix = prompts?.documentPrefix ?? "";
+    this.queryPrefix = prompts?.queryPrefix ?? "";
+  }
+  settings;
+  maxBatchSize;
   name;
-  dimensions = DIMENSIONS;
-  baseUrl;
-  model;
   ready = false;
-  constructor(baseUrl, model) {
-    this.baseUrl = (baseUrl || DEFAULT_BASE_URL).replace(/\/+$/, "");
-    this.model = model || DEFAULT_MODEL;
-    this.name = `ollama (${this.model})`;
+  _identity = null;
+  documentPrefix;
+  queryPrefix;
+  get identity() {
+    if (!this._identity) {
+      throw new Error(`Embedding provider ${this.name} is not initialized`);
+    }
+    return this._identity;
   }
   isReady() {
     return this.ready;
   }
   async initialize() {
     if (this.ready) return;
-    logger.info(`Connecting to Ollama at ${this.baseUrl}...`);
-    const isRunning = await this.checkOllamaRunning();
-    if (!isRunning) {
+    await this.prepare();
+    const [probe] = await this.request([this.queryPrefix + "dimension probe"]);
+    if (this.settings.dimensions !== void 0 && probe.length !== this.settings.dimensions) {
       throw new Error(
-        `Ollama is not running at ${this.baseUrl}. Start it with "ollama serve" or install from https://ollama.com`
+        `${this.name} returned ${probe.length}-dimension vectors although embedding_dimensions is ${this.settings.dimensions}: this model or server does not support shortened vectors. Clear the embedding_dimensions option to use the native size.`
       );
     }
-    const hasModel = await this.checkModelAvailable();
-    if (!hasModel) {
-      logger.info(`Model "${this.model}" not found. Pulling...`);
-      await this.pullModel();
-      logger.info(`Model "${this.model}" pulled successfully.`);
-    }
+    this._identity = {
+      provider: this.settings.provider,
+      model: this.settings.model,
+      dimensions: probe.length,
+      documentPrefix: this.documentPrefix,
+      queryPrefix: this.queryPrefix
+    };
     this.ready = true;
-    logger.info(`Ollama embedding provider ready (model: ${this.model}, ${DIMENSIONS}d)`);
+    logger.info(`Embedding provider ready: ${describeIdentity(this._identity)}`);
   }
   async embed(texts) {
     if (!this.ready) await this.initialize();
-    const allResults = [];
-    for (let i = 0; i < texts.length; i += MAX_BATCH_SIZE) {
-      const batch = texts.slice(i, i + MAX_BATCH_SIZE);
-      const prefixed = batch.map((t) => DOCUMENT_PREFIX + t);
-      const embeddings = await this.callEmbed(prefixed);
-      allResults.push(...embeddings);
+    const results = [];
+    for (let i = 0; i < texts.length; i += this.maxBatchSize) {
+      const batch = texts.slice(i, i + this.maxBatchSize).map((t) => this.documentPrefix + t);
+      results.push(...(await this.request(batch)).map((v) => new Float32Array(v)));
     }
-    return allResults;
+    return results;
   }
   async embedQuery(text) {
     if (!this.ready) await this.initialize();
-    const prefixed = QUERY_PREFIX + text;
-    const [result] = await this.callEmbed([prefixed]);
-    return result;
+    const [vector] = await this.request([this.queryPrefix + text]);
+    return new Float32Array(vector);
   }
   async dispose() {
     this.ready = false;
   }
-  // ── Private helpers ──────────────────────────────────────────────────────
-  async checkOllamaRunning() {
-    try {
-      const response = await fetch(`${this.baseUrl}/api/tags`, {
-        signal: AbortSignal.timeout(5e3)
-      });
-      return response.ok;
-    } catch {
-      return false;
+};
+
+// src/embedding/ollama.ts
+var MAX_BATCH_SIZE = 64;
+var REQUEST_TIMEOUT_MS = 12e4;
+var OllamaEmbeddingProvider = class extends BaseEmbeddingProvider {
+  constructor(settings) {
+    super(settings, MAX_BATCH_SIZE);
+  }
+  async prepare() {
+    logger.info(`Connecting to Ollama at ${this.settings.url}...`);
+    const models = await this.listModels();
+    if (models === null) {
+      throw new Error(
+        `Ollama is not running at ${this.settings.url}. Start it with "ollama serve" or install from https://ollama.com`
+      );
+    }
+    const { model } = this.settings;
+    if (!models.some((m) => m === model || m === `${model}:latest`)) {
+      logger.info(`Model "${model}" not found. Pulling...`);
+      await this.pullModel();
+      logger.info(`Model "${model}" pulled successfully.`);
     }
   }
-  async checkModelAvailable() {
+  /** Installed model names, or null when the server does not answer. */
+  async listModels() {
     try {
-      const response = await fetch(`${this.baseUrl}/api/tags`, {
+      const response = await fetch(`${this.settings.url}/api/tags`, {
         signal: AbortSignal.timeout(5e3)
       });
-      if (!response.ok) return false;
+      if (!response.ok) return null;
       const data = await response.json();
-      if (!data.models) return false;
-      return data.models.some(
-        (m) => m.name === this.model || m.name === `${this.model}:latest`
-      );
+      return (data.models ?? []).map((m) => m.name);
     } catch {
-      return false;
+      return null;
     }
   }
   async pullModel() {
+    const { model } = this.settings;
     try {
-      const response = await fetch(`${this.baseUrl}/api/pull`, {
+      const response = await fetch(`${this.settings.url}/api/pull`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: this.model, stream: false }),
+        body: JSON.stringify({ name: model, stream: false }),
         signal: AbortSignal.timeout(6e5)
         // 10 min for pull
       });
@@ -201,27 +310,28 @@ var OllamaEmbeddingProvider = class {
     } catch (err) {
       if (err instanceof Error && err.message.startsWith("Pull failed")) throw err;
       throw new Error(
-        `Failed to pull model "${this.model}" from Ollama. Ensure Ollama is running and try manually: ollama pull ${this.model}
+        `Failed to pull model "${model}" from Ollama. Ensure Ollama is running and try manually: ollama pull ${model}
 Error: ${err instanceof Error ? err.message : err}`
       );
     }
   }
-  async callEmbed(texts, retries = 3) {
+  async request(texts, retries = 3) {
     for (let attempt = 0; attempt < retries; attempt++) {
       try {
-        const response = await fetch(`${this.baseUrl}/api/embed`, {
+        const response = await fetch(`${this.settings.url}/api/embed`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            model: this.model,
-            input: texts
+            model: this.settings.model,
+            input: texts,
+            ...this.settings.dimensions !== void 0 && { dimensions: this.settings.dimensions }
           }),
           signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
         });
         if (!response.ok) {
           const errText = await response.text();
           if (response.status === 404 && attempt === 0) {
-            logger.warn(`Model "${this.model}" not loaded. Attempting pull...`);
+            logger.warn(`Model "${this.settings.model}" not loaded. Attempting pull...`);
             await this.pullModel();
             continue;
           }
@@ -233,7 +343,7 @@ Error: ${err instanceof Error ? err.message : err}`
             `Unexpected Ollama response: expected ${texts.length} embeddings, got ${data.embeddings?.length ?? 0}`
           );
         }
-        return data.embeddings.map((emb) => new Float32Array(emb));
+        return data.embeddings;
       } catch (err) {
         if (attempt === retries - 1) throw err;
         const isRetryable = err instanceof Error && (err.message.includes("ECONNREFUSED") || err.message.includes("ECONNRESET") || err.message.includes("timeout"));
@@ -248,68 +358,27 @@ Error: ${err instanceof Error ? err.message : err}`
 };
 
 // src/embedding/openai.ts
-var MODEL = "text-embedding-3-small";
-var DEFAULT_DIMENSIONS = 768;
-var API_URL = "https://api.openai.com/v1/embeddings";
 var MAX_BATCH_SIZE2 = 100;
-var OpenAIEmbeddingProvider = class {
-  name = `openai (${MODEL})`;
-  dimensions;
-  apiKey;
-  ready = false;
-  constructor(apiKey, dimensions) {
-    this.apiKey = apiKey;
-    this.dimensions = dimensions || DEFAULT_DIMENSIONS;
+var OpenAIEmbeddingProvider = class extends BaseEmbeddingProvider {
+  constructor(settings) {
+    super(settings, MAX_BATCH_SIZE2);
   }
-  isReady() {
-    return this.ready;
+  async prepare() {
+    logger.info(`Using OpenAI-compatible embeddings at ${this.settings.url} (model ${this.settings.model})`);
   }
-  async initialize() {
-    if (this.ready) return;
-    if (!this.apiKey) {
-      throw new Error(
-        "OpenAI embedding provider requires SOUVENIR_OPENAI_API_KEY environment variable."
-      );
-    }
-    logger.info("Validating OpenAI API key...");
-    try {
-      await this.callApi(["test"]);
-      this.ready = true;
-      logger.info("OpenAI embedding provider ready");
-    } catch (err) {
-      throw new Error(`OpenAI API validation failed: ${err instanceof Error ? err.message : err}`);
-    }
-  }
-  async embed(texts) {
-    if (!this.ready) await this.initialize();
-    const allResults = [];
-    for (let i = 0; i < texts.length; i += MAX_BATCH_SIZE2) {
-      const batch = texts.slice(i, i + MAX_BATCH_SIZE2);
-      const embeddings = await this.callApi(batch);
-      allResults.push(...embeddings);
-    }
-    return allResults;
-  }
-  async embedQuery(text) {
-    const [result] = await this.embed([text]);
-    return result;
-  }
-  async dispose() {
-    this.ready = false;
-  }
-  async callApi(texts, retries = 3) {
+  async request(texts, retries = 3) {
     for (let attempt = 0; attempt < retries; attempt++) {
       try {
-        const response = await fetch(API_URL, {
+        const response = await fetch(`${this.settings.url}/embeddings`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            "Authorization": `Bearer ${this.apiKey}`
+            ...this.settings.apiKey && { Authorization: `Bearer ${this.settings.apiKey}` }
           },
           body: JSON.stringify({
-            model: MODEL,
+            model: this.settings.model,
             input: texts,
-            dimensions: this.dimensions
+            ...this.settings.dimensions !== void 0 && { dimensions: this.settings.dimensions }
           })
         });
         if (!response.ok) {
@@ -320,11 +389,16 @@ var OpenAIEmbeddingProvider = class {
             await new Promise((r) => setTimeout(r, delay));
             continue;
           }
-          throw new Error(`OpenAI API error (${response.status}): ${error}`);
+          const hint = response.status === 401 || response.status === 403 ? " Check the embedding_api_key option." : "";
+          throw new Error(`Embedding API error at ${this.settings.url} (${response.status}): ${error}${hint}`);
         }
         const data = await response.json();
-        const sorted = data.data.sort((a, b) => a.index - b.index);
-        return sorted.map((d) => new Float32Array(d.embedding));
+        if (!Array.isArray(data.data) || data.data.length !== texts.length) {
+          throw new Error(
+            `Unexpected embedding API response: expected ${texts.length} embeddings, got ${data.data?.length ?? 0}`
+          );
+        }
+        return data.data.sort((a, b) => a.index - b.index).map((d) => d.embedding);
       } catch (err) {
         if (attempt === retries - 1) throw err;
         const delay = Math.pow(2, attempt) * 1e3;
@@ -338,18 +412,11 @@ var OpenAIEmbeddingProvider = class {
 
 // src/tools/helpers.ts
 function createEmbeddingProvider(config) {
-  switch (config.embeddingProvider) {
+  switch (config.embedding.provider) {
     case "ollama":
-      return new OllamaEmbeddingProvider(config.ollamaUrl, config.ollamaModel);
+      return new OllamaEmbeddingProvider(config.embedding);
     case "openai":
-      if (!config.openaiApiKey) {
-        throw new Error(
-          "OpenAI provider requires SOUVENIR_OPENAI_API_KEY environment variable. Set it in your .mcp.json env section or system environment."
-        );
-      }
-      return new OpenAIEmbeddingProvider(config.openaiApiKey, config.embeddingDimensions);
-    default:
-      throw new Error(`Unknown embedding provider: "${config.embeddingProvider}". Use "ollama" or "openai".`);
+      return new OpenAIEmbeddingProvider(config.embedding);
   }
 }
 
@@ -554,7 +621,7 @@ async function chunkTranscript(filePath, sessionId, projectDir, options = {}) {
 }
 
 // src/db/schema.ts
-var SCHEMA_VERSION = 1;
+var SCHEMA_VERSION = 2;
 var CREATE_TABLES = `
   CREATE TABLE IF NOT EXISTS metadata (
     key TEXT PRIMARY KEY,
@@ -586,9 +653,17 @@ var CREATE_TABLES = `
   CREATE INDEX IF NOT EXISTS idx_chunks_role ON chunks(role);
   CREATE INDEX IF NOT EXISTS idx_chunks_timestamp ON chunks(timestamp);
 `;
-function createVecTable(dimensions) {
-  return `CREATE VIRTUAL TABLE IF NOT EXISTS vec_chunks USING vec0 (
+var LEGACY_VEC_TABLE = "vec_chunks";
+var CHUNK_VECTORS = "chunk_vectors";
+function createChunkVectorsTable(dimensions) {
+  return `CREATE VIRTUAL TABLE ${CHUNK_VECTORS} USING vec0 (
     chunk_id INTEGER PRIMARY KEY,
+    project_dir TEXT PARTITION KEY,
+    session_id TEXT,
+    role TEXT,
+    has_user INTEGER,
+    has_assistant INTEGER,
+    timestamp TEXT,
     embedding float[${dimensions}] distance_metric=cosine
   );`;
 }
@@ -609,7 +684,7 @@ function assertNodeVersion() {
   const [major, minor] = process.versions.node.split(".").map(Number);
   if (major < MIN_NODE[0] || major === MIN_NODE[0] && minor < MIN_NODE[1]) {
     throw new Error(
-      `claude-souvenir requires Node.js >= ${MIN_NODE.join(".")} (built-in node:sqlite), found ${process.versions.node}`
+      `souvenir requires Node.js >= ${MIN_NODE.join(".")} (built-in node:sqlite), found ${process.versions.node}`
     );
   }
 }
@@ -618,12 +693,12 @@ function sqliteVecPath() {
   const relative2 = VEC_BINARIES[platform];
   if (!relative2) {
     throw new Error(
-      `claude-souvenir: no sqlite-vec binary for ${platform} (supported: ${Object.keys(VEC_BINARIES).join(", ")})`
+      `souvenir: no sqlite-vec binary for ${platform} (supported: ${Object.keys(VEC_BINARIES).join(", ")})`
     );
   }
   const path = fileURLToPath(new URL(`../vendor/sqlite-vec/bin/${relative2}`, import.meta.url));
   if (!existsSync3(path)) {
-    throw new Error(`claude-souvenir: sqlite-vec binary missing at ${path}`);
+    throw new Error(`souvenir: sqlite-vec binary missing at ${path}`);
   }
   return path;
 }
@@ -668,21 +743,146 @@ function vectorBlob(vector) {
   return new Uint8Array(vector.buffer, vector.byteOffset, vector.byteLength);
 }
 
+// src/db/identity.ts
+var IDENTITY_KEY = "embedding_identity";
+var LEGACY_PREFIXES = {
+  ollama: { documentPrefix: "title: none | text: ", queryPrefix: "task: search result | query: " },
+  openai: { documentPrefix: "", queryPrefix: "" }
+};
+var IndexMismatchError = class extends Error {
+};
+function getStoredIdentity(db) {
+  const row = getRow(db, "SELECT value FROM metadata WHERE key = ?", IDENTITY_KEY);
+  return row ? JSON.parse(row.value) : null;
+}
+function setStoredIdentity(db, identity) {
+  db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)").run(IDENTITY_KEY, JSON.stringify(identity));
+}
+function migrateLegacyIdentity(db) {
+  if (!getStoredIdentity(db)) {
+    const name = getRow(db, "SELECT value FROM metadata WHERE key = ?", "embedding_provider")?.value;
+    const dims = getRow(db, "SELECT value FROM metadata WHERE key = ?", "embedding_dimensions")?.value;
+    const match = name?.match(/^(ollama|openai) \((.+)\)$/);
+    if (match && dims) {
+      const provider = match[1];
+      setStoredIdentity(db, { provider, model: match[2], dimensions: Number(dims), ...LEGACY_PREFIXES[provider] });
+    }
+  }
+  db.prepare("DELETE FROM metadata WHERE key IN ('embedding_provider', 'embedding_dimensions')").run();
+}
+function assertSameIdentity(stored, current, label, rebuildHint) {
+  if (!stored || sameIdentity(stored, current)) return;
+  throw new IndexMismatchError(
+    `The ${label} index was built with ${describeIdentity(stored)}, but the current embedding settings give ${describeIdentity(current)}. Vectors from different models cannot be compared. Either restore the previous embedding settings (/plugin configure asymptomatik-souvenir), or ${rebuildHint}.`
+  );
+}
+function tableExists(db, table) {
+  return getRow(db, "SELECT 1 AS found FROM sqlite_master WHERE name = ? AND type = 'table'", table) !== null;
+}
+function deleteOrphanVectors(db, vectorTable, chunkTable) {
+  const ids = db.prepare(`SELECT chunk_id FROM ${vectorTable}`).all();
+  const chunkExists = db.prepare(`SELECT 1 FROM ${chunkTable} WHERE chunk_id = ?`);
+  const remove = db.prepare(`DELETE FROM ${vectorTable} WHERE chunk_id = ?`);
+  let removed = 0;
+  for (const { chunk_id } of ids) {
+    if (!chunkExists.get(chunk_id)) {
+      remove.run(BigInt(chunk_id));
+      removed++;
+    }
+  }
+  return removed;
+}
+function vectorTableDimensions(db, table) {
+  const sql = getRow(db, "SELECT sql FROM sqlite_master WHERE name = ? AND type = 'table'", table)?.sql;
+  const match = sql?.match(/float\[(\d+)\]/i);
+  if (!match) {
+    throw new Error(`Cannot read the vector size of table ${table}`);
+  }
+  return Number(match[1]);
+}
+
 // src/db/store.ts
 var _db = null;
-var _dimensions = 768;
-function getDb(dimensions) {
+var REBUILD_HINT = 'rebuild it with souvenir_index action="rebuild" project="all" (re-embeds every indexed chunk)';
+function getDb() {
   if (_db) return _db;
-  if (dimensions) _dimensions = dimensions;
-  _db = openDatabase(getDbPath(), "transcripts");
-  _db.exec(CREATE_TABLES);
-  _db.exec(createVecTable(_dimensions));
-  _db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)").run(
-    "schema_version",
-    String(SCHEMA_VERSION)
-  );
+  const db = openDatabase(getDbPath(), "transcripts");
+  try {
+    db.exec(CREATE_TABLES);
+    migrateLegacyIdentity(db);
+    migrateLegacyVectors(db);
+    db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)").run(
+      "schema_version",
+      String(SCHEMA_VERSION)
+    );
+  } catch (err) {
+    db.close();
+    throw err;
+  }
+  _db = db;
   logger.info("Database initialized");
-  return _db;
+  return db;
+}
+function chunkSpeakers(role, contentText) {
+  if (role === "turn") return { hasUser: 1n, hasAssistant: contentText.includes("\nASSISTANT: ") ? 1n : 0n };
+  if (role === "assistant") return { hasUser: 0n, hasAssistant: 1n };
+  return { hasUser: 0n, hasAssistant: 0n };
+}
+function migrateLegacyVectors(db) {
+  if (!tableExists(db, LEGACY_VEC_TABLE)) return;
+  const legacyDims = vectorTableDimensions(db, LEGACY_VEC_TABLE);
+  const currentDims = tableExists(db, CHUNK_VECTORS) ? vectorTableDimensions(db, CHUNK_VECTORS) : null;
+  const started = Date.now();
+  let moved = 0;
+  inTransaction(db, () => {
+    if (currentDims !== null && currentDims !== legacyDims) {
+      logger.warn(`Dropping ${LEGACY_VEC_TABLE} (${legacyDims}d): incompatible with ${CHUNK_VECTORS} (${currentDims}d)`);
+    } else {
+      if (currentDims === null) db.exec(createChunkVectorsTable(legacyDims));
+      const page = db.prepare("SELECT chunk_id, project_dir, session_id, role, timestamp, content_text FROM chunks WHERE chunk_id > ? ORDER BY chunk_id LIMIT 5000");
+      const legacyVector = db.prepare(`SELECT embedding FROM ${LEGACY_VEC_TABLE} WHERE chunk_id = ?`);
+      const alreadyMoved = db.prepare(`SELECT chunk_id FROM ${CHUNK_VECTORS} WHERE chunk_id = ?`);
+      const insert = db.prepare(`INSERT INTO ${CHUNK_VECTORS} (chunk_id, project_dir, session_id, role, has_user, has_assistant, timestamp, embedding) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
+      for (let last = 0; ; ) {
+        const rows = page.all(last);
+        if (rows.length === 0) break;
+        for (const r of rows) {
+          const id = BigInt(r.chunk_id);
+          const vector = legacyVector.get(id);
+          if (!vector || alreadyMoved.get(id)) continue;
+          const { hasUser, hasAssistant } = chunkSpeakers(r.role, r.content_text);
+          insert.run(id, r.project_dir, r.session_id, r.role ?? "", hasUser, hasAssistant, r.timestamp ?? "", vector.embedding);
+          moved++;
+        }
+        last = rows[rows.length - 1].chunk_id;
+      }
+      const orphans = deleteOrphanVectors(db, CHUNK_VECTORS, "chunks");
+      if (orphans > 0) logger.info(`Deleted ${orphans} vectors of chunks that no longer exist`);
+    }
+    db.exec(`DROP TABLE ${LEGACY_VEC_TABLE}`);
+  });
+  db.exec("PRAGMA incremental_vacuum");
+  db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+  logger.info(`Moved ${moved} vectors from ${LEGACY_VEC_TABLE} to ${CHUNK_VECTORS} in ${Date.now() - started} ms`);
+}
+function prepareVectorIndex(identity, options = {}) {
+  const db = getDb();
+  const stored = getStoredIdentity(db);
+  if (!options.resetAll) {
+    assertSameIdentity(stored, identity, "transcript", REBUILD_HINT);
+  }
+  inTransaction(db, () => {
+    if (options.resetAll) {
+      if (tableExists(db, CHUNK_VECTORS)) db.exec(`DROP TABLE ${CHUNK_VECTORS}`);
+      db.prepare("DELETE FROM chunks").run();
+      db.prepare("DELETE FROM index_state").run();
+    }
+    if (!tableExists(db, CHUNK_VECTORS)) db.exec(createChunkVectorsTable(identity.dimensions));
+    setStoredIdentity(db, identity);
+  });
+}
+function getIndexIdentity() {
+  return getStoredIdentity(getDb());
 }
 function insertChunks(chunks, embeddings) {
   const db = getDb();
@@ -694,8 +894,8 @@ function insertChunks(chunks, embeddings) {
     VALUES (@session_id, @project_dir, @entry_uuid, @role, @content_text, @embed_text, @timestamp, @line_number)
   `);
   const insertVec = db.prepare(`
-    INSERT OR IGNORE INTO vec_chunks (chunk_id, embedding)
-    VALUES (?, ?)
+    INSERT INTO ${CHUNK_VECTORS} (chunk_id, project_dir, session_id, role, has_user, has_assistant, timestamp, embedding)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `);
   let inserted = 0;
   inTransaction(db, () => {
@@ -712,7 +912,17 @@ function insertChunks(chunks, embeddings) {
         line_number: chunk.line_number ?? null
       });
       if (result.changes > 0) {
-        insertVec.run(BigInt(result.lastInsertRowid), vectorBlob(embeddings[i]));
+        const { hasUser, hasAssistant } = chunkSpeakers(chunk.role ?? null, chunk.content_text);
+        insertVec.run(
+          BigInt(result.lastInsertRowid),
+          chunk.project_dir,
+          chunk.session_id,
+          chunk.role ?? "",
+          hasUser,
+          hasAssistant,
+          chunk.timestamp ?? "",
+          vectorBlob(embeddings[i])
+        );
         inserted++;
       }
     }
@@ -734,8 +944,11 @@ function clearProject(projectDir) {
   const db = getDb();
   inTransaction(db, () => {
     const chunkIds = db.prepare("SELECT chunk_id FROM chunks WHERE project_dir = ?").all(projectDir);
-    for (const { chunk_id } of chunkIds) {
-      db.prepare("DELETE FROM vec_chunks WHERE chunk_id = ?").run(BigInt(chunk_id));
+    if (tableExists(db, CHUNK_VECTORS)) {
+      const deleteVector = db.prepare(`DELETE FROM ${CHUNK_VECTORS} WHERE chunk_id = ?`);
+      for (const { chunk_id } of chunkIds) {
+        deleteVector.run(BigInt(chunk_id));
+      }
     }
     db.prepare("DELETE FROM chunks WHERE project_dir = ?").run(projectDir);
     db.prepare("DELETE FROM index_state WHERE file_path LIKE ?").run(`%${projectDir}%`);
@@ -750,43 +963,27 @@ function incrementalVacuum() {
     logger.error("Incremental vacuum error:", err);
   }
 }
-function getStoredProvider() {
-  const db = getDb();
-  const name = db.prepare("SELECT value FROM metadata WHERE key = ?").get("embedding_provider");
-  const dims = db.prepare("SELECT value FROM metadata WHERE key = ?").get("embedding_dimensions");
-  if (!name || !dims) return null;
-  return { name: name.value, dimensions: parseInt(dims.value, 10) };
-}
-function setStoredProvider(name, dimensions) {
-  const db = getDb();
-  db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)").run("embedding_provider", name);
-  db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)").run("embedding_dimensions", String(dimensions));
-}
 
 // src/db/indexer.ts
 var EMBED_BATCH_SIZE = 32;
 async function buildIndex(provider, projectDirs, options = {}) {
   const { sessionId, includeSubagents = true, rebuild = false, onProgress, signal } = options;
-  getDb(provider.dimensions);
-  const storedProvider = getStoredProvider();
-  if (storedProvider && !rebuild) {
-    if (storedProvider.dimensions !== provider.dimensions) {
-      throw new Error(
-        `Embedding dimensions mismatch: index was built with ${storedProvider.dimensions}d but current provider uses ${provider.dimensions}d. Use action="rebuild" to re-index with the new provider.`
-      );
-    }
-  }
   if (!provider.isReady()) {
     onProgress?.({ phase: "Initializing embedding model", current: 0, total: 1 });
     await provider.initialize();
   }
-  if (rebuild) {
+  const stored = getIndexIdentity();
+  const resetAll = rebuild && stored !== null && !sameIdentity(stored, provider.identity);
+  if (resetAll) {
+    logger.info("Embedding model changed: resetting the whole index");
+  }
+  prepareVectorIndex(provider.identity, { resetAll });
+  if (rebuild && !resetAll) {
     logger.info("Rebuilding index from scratch...");
     for (const dir of projectDirs) {
       clearProject(dir);
     }
   }
-  setStoredProvider(provider.name, provider.dimensions);
   let totalChunks = 0;
   let totalEmbedded = 0;
   let filesProcessed = 0;
@@ -853,12 +1050,12 @@ async function buildIndex(provider, projectDirs, options = {}) {
     }
   }
   logger.info(`Indexing complete: ${totalChunks} chunks, ${totalEmbedded} embedded, ${filesProcessed} files, ${skipped} skipped`);
-  return { totalChunks, totalEmbedded, filesProcessed, skipped, errors };
+  return { totalChunks, totalEmbedded, filesProcessed, skipped, errors, resetAll };
 }
 
 // src/docs/indexer.ts
 import { statSync as statSync3, readdirSync as readdirSync2, readFileSync as readFileSync3 } from "fs";
-import { join as join5, relative, resolve as resolve2 } from "path";
+import { join as join5, relative, resolve } from "path";
 import { createHash } from "crypto";
 
 // src/docs/chunker.ts
@@ -1190,7 +1387,7 @@ import { existsSync as existsSync4, statSync as fsStatSync } from "fs";
 import { join as join4 } from "path";
 
 // src/docs/schema.ts
-var DOCS_SCHEMA_VERSION = 2;
+var DOCS_SCHEMA_VERSION = 3;
 var DOCS_CREATE_TABLES = `
   CREATE TABLE IF NOT EXISTS metadata (
     key TEXT PRIMARY KEY,
@@ -1252,9 +1449,13 @@ var DOCS_CREATE_TABLES = `
   CREATE INDEX IF NOT EXISTS idx_snapshots_path ON doc_snapshots(file_path);
   CREATE INDEX IF NOT EXISTS idx_snapshots_created ON doc_snapshots(created_at);
 `;
-function createDocsVecTable(dimensions) {
-  return `CREATE VIRTUAL TABLE IF NOT EXISTS vec_doc_chunks USING vec0 (
+var LEGACY_DOCS_VEC_TABLE = "vec_doc_chunks";
+var DOC_CHUNK_VECTORS = "doc_chunk_vectors";
+function createDocChunkVectorsTable(dimensions) {
+  return `CREATE VIRTUAL TABLE ${DOC_CHUNK_VECTORS} USING vec0 (
     chunk_id INTEGER PRIMARY KEY,
+    category TEXT,
+    file_path TEXT,
     embedding float[${dimensions}] distance_metric=cosine
   );`;
 }
@@ -1262,11 +1463,11 @@ function createDocsVecTable(dimensions) {
 // src/docs/store.ts
 var _docsDb = null;
 var _docsDbPath = null;
-var _docsDimensions = 768;
+var DOCS_REBUILD_HINT = 'rebuild it with souvenir_docs action="build" rebuild=true (re-embeds every indexed file)';
 function getLocalDocsDbPath(projectRoot) {
   return join4(projectRoot, ".claude", "ASymptOmatik", "souvenir", "docs.db");
 }
-function getDocsDb(projectRoot, dimensions) {
+function getDocsDb(projectRoot) {
   const dbPath = getLocalDocsDbPath(projectRoot);
   if (_docsDb && _docsDbPath === dbPath) return _docsDb;
   if (_docsDb) {
@@ -1274,17 +1475,72 @@ function getDocsDb(projectRoot, dimensions) {
     _docsDb = null;
     _docsDbPath = null;
   }
-  if (dimensions) _docsDimensions = dimensions;
-  _docsDb = openDatabase(dbPath, "docs");
+  const db = openDatabase(dbPath, "docs");
+  try {
+    db.exec(DOCS_CREATE_TABLES);
+    migrateLegacyIdentity(db);
+    migrateLegacyDocVectors(db);
+    db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)").run(
+      "schema_version",
+      String(DOCS_SCHEMA_VERSION)
+    );
+  } catch (err) {
+    db.close();
+    throw err;
+  }
+  _docsDb = db;
   _docsDbPath = dbPath;
-  _docsDb.exec(DOCS_CREATE_TABLES);
-  _docsDb.exec(createDocsVecTable(_docsDimensions));
-  _docsDb.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)").run(
-    "schema_version",
-    String(DOCS_SCHEMA_VERSION)
-  );
   logger.info("Docs database initialized");
-  return _docsDb;
+  return db;
+}
+function migrateLegacyDocVectors(db) {
+  if (!tableExists(db, LEGACY_DOCS_VEC_TABLE)) return;
+  const legacyDims = vectorTableDimensions(db, LEGACY_DOCS_VEC_TABLE);
+  const currentDims = tableExists(db, DOC_CHUNK_VECTORS) ? vectorTableDimensions(db, DOC_CHUNK_VECTORS) : null;
+  let moved = 0;
+  inTransaction(db, () => {
+    if (currentDims !== null && currentDims !== legacyDims) {
+      logger.warn(`Dropping ${LEGACY_DOCS_VEC_TABLE} (${legacyDims}d): incompatible with ${DOC_CHUNK_VECTORS} (${currentDims}d)`);
+    } else {
+      if (currentDims === null) db.exec(createDocChunkVectorsTable(legacyDims));
+      const legacyVector = db.prepare(`SELECT embedding FROM ${LEGACY_DOCS_VEC_TABLE} WHERE chunk_id = ?`);
+      const alreadyMoved = db.prepare(`SELECT chunk_id FROM ${DOC_CHUNK_VECTORS} WHERE chunk_id = ?`);
+      const insert = db.prepare(`INSERT INTO ${DOC_CHUNK_VECTORS} (chunk_id, category, file_path, embedding) VALUES (?, ?, ?, ?)`);
+      const chunks = allRows(
+        db,
+        "SELECT chunk_id, category, file_path FROM doc_chunks ORDER BY chunk_id"
+      );
+      for (const c of chunks) {
+        const id = BigInt(c.chunk_id);
+        const vector = legacyVector.get(id);
+        if (!vector || alreadyMoved.get(id)) continue;
+        insert.run(id, c.category, c.file_path, vector.embedding);
+        moved++;
+      }
+      const orphans = deleteOrphanVectors(db, DOC_CHUNK_VECTORS, "doc_chunks");
+      if (orphans > 0) logger.info(`Deleted ${orphans} doc vectors of chunks that no longer exist`);
+    }
+    db.exec(`DROP TABLE ${LEGACY_DOCS_VEC_TABLE}`);
+  });
+  db.exec("PRAGMA incremental_vacuum");
+  db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+  logger.info(`Moved ${moved} doc vectors from ${LEGACY_DOCS_VEC_TABLE} to ${DOC_CHUNK_VECTORS}`);
+}
+function prepareDocsVectorIndex(projectRoot, identity, options = {}) {
+  const db = getDocsDb(projectRoot);
+  if (!options.resetAll) {
+    assertSameIdentity(getStoredIdentity(db), identity, "docs", DOCS_REBUILD_HINT);
+  }
+  inTransaction(db, () => {
+    if (options.resetAll) {
+      if (tableExists(db, DOC_CHUNK_VECTORS)) db.exec(`DROP TABLE ${DOC_CHUNK_VECTORS}`);
+      db.prepare("DELETE FROM doc_chunks").run();
+      db.prepare("DELETE FROM doc_sections").run();
+      db.prepare("DELETE FROM doc_index_state").run();
+    }
+    if (!tableExists(db, DOC_CHUNK_VECTORS)) db.exec(createDocChunkVectorsTable(identity.dimensions));
+    setStoredIdentity(db, identity);
+  });
 }
 function docsDbExists(projectRoot) {
   return existsSync4(getLocalDocsDbPath(projectRoot));
@@ -1303,8 +1559,8 @@ function insertDocChunks(projectRoot, chunks, embeddings) {
     VALUES (@file_path, @category, @content_text, @embed_text, @start_line, @end_line, @section_path, @file_modified)
   `);
   const insertVec = db.prepare(`
-    INSERT OR IGNORE INTO vec_doc_chunks (chunk_id, embedding)
-    VALUES (?, ?)
+    INSERT INTO ${DOC_CHUNK_VECTORS} (chunk_id, category, file_path, embedding)
+    VALUES (?, ?, ?, ?)
   `);
   let inserted = 0;
   inTransaction(db, () => {
@@ -1321,7 +1577,7 @@ function insertDocChunks(projectRoot, chunks, embeddings) {
         file_modified: chunk.file_modified
       });
       if (result.changes > 0) {
-        insertVec.run(BigInt(result.lastInsertRowid), vectorBlob(embeddings[i]));
+        insertVec.run(BigInt(result.lastInsertRowid), chunk.category, chunk.file_path, vectorBlob(embeddings[i]));
         inserted++;
       }
     }
@@ -1362,23 +1618,16 @@ function clearDocFile(projectRoot, filePath) {
   const db = getDocsDb(projectRoot);
   inTransaction(db, () => {
     const chunkIds = db.prepare("SELECT chunk_id FROM doc_chunks WHERE file_path = ?").all(filePath);
-    for (const { chunk_id } of chunkIds) {
-      db.prepare("DELETE FROM vec_doc_chunks WHERE chunk_id = ?").run(BigInt(chunk_id));
+    if (tableExists(db, DOC_CHUNK_VECTORS)) {
+      const deleteVector = db.prepare(`DELETE FROM ${DOC_CHUNK_VECTORS} WHERE chunk_id = ?`);
+      for (const { chunk_id } of chunkIds) {
+        deleteVector.run(BigInt(chunk_id));
+      }
     }
     db.prepare("DELETE FROM doc_chunks WHERE file_path = ?").run(filePath);
     db.prepare("DELETE FROM doc_sections WHERE file_path = ?").run(filePath);
     db.prepare("DELETE FROM doc_index_state WHERE file_path = ?").run(filePath);
   });
-}
-function clearAllDocs(projectRoot) {
-  const db = getDocsDb(projectRoot);
-  inTransaction(db, () => {
-    db.prepare("DELETE FROM vec_doc_chunks").run();
-    db.prepare("DELETE FROM doc_chunks").run();
-    db.prepare("DELETE FROM doc_sections").run();
-    db.prepare("DELETE FROM doc_index_state").run();
-  });
-  docsIncrementalVacuum(projectRoot);
 }
 function docsIncrementalVacuum(projectRoot) {
   try {
@@ -1387,18 +1636,6 @@ function docsIncrementalVacuum(projectRoot) {
   } catch (err) {
     logger.error("Docs incremental vacuum error:", err);
   }
-}
-function getDocsStoredProvider(projectRoot) {
-  const db = getDocsDb(projectRoot);
-  const name = db.prepare("SELECT value FROM metadata WHERE key = ?").get("embedding_provider");
-  const dims = db.prepare("SELECT value FROM metadata WHERE key = ?").get("embedding_dimensions");
-  if (!name || !dims) return null;
-  return { name: name.value, dimensions: parseInt(dims.value, 10) };
-}
-function setDocsStoredProvider(projectRoot, name, dimensions) {
-  const db = getDocsDb(projectRoot);
-  db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)").run("embedding_provider", name);
-  db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)").run("embedding_dimensions", String(dimensions));
 }
 function insertSnapshot(projectRoot, filePath, content, contentHash, fileSize) {
   const db = getDocsDb(projectRoot);
@@ -1500,7 +1737,7 @@ function resolveSourceFiles(projectRoot) {
   const sources = getDocSources(projectRoot);
   const fileSet = /* @__PURE__ */ new Map();
   for (const source of sources) {
-    const absoluteSource = resolve2(projectRoot, source.path);
+    const absoluteSource = resolve(projectRoot, source.path);
     if (source.type === "file") {
       if (!isSupportedExtension(absoluteSource)) continue;
       const cat = source.category || detectCategory(absoluteSource);
@@ -1523,24 +1760,14 @@ function resolveSourceFiles(projectRoot) {
 }
 async function buildDocsIndex(projectRoot, provider, options = {}) {
   const { rebuild = false, onProgress, signal } = options;
-  getDocsDb(projectRoot, provider.dimensions);
-  const storedProvider = getDocsStoredProvider(projectRoot);
-  if (storedProvider && !rebuild) {
-    if (storedProvider.dimensions !== provider.dimensions) {
-      throw new Error(
-        `Embedding dimensions mismatch: docs index was built with ${storedProvider.dimensions}d but current provider uses ${provider.dimensions}d. Rebuild the docs index.`
-      );
-    }
-  }
   if (!provider.isReady()) {
     onProgress?.({ phase: "Initializing embedding model", current: 0, total: 1 });
     await provider.initialize();
   }
   if (rebuild) {
     logger.info("Rebuilding docs index from scratch...");
-    clearAllDocs(projectRoot);
   }
-  setDocsStoredProvider(projectRoot, provider.name, provider.dimensions);
+  prepareDocsVectorIndex(projectRoot, provider.identity, { resetAll: rebuild });
   const files = resolveSourceFiles(projectRoot);
   const totalFiles = files.length;
   onProgress?.({ phase: "Scanning sources", current: 0, total: totalFiles });
@@ -1628,30 +1855,42 @@ async function buildDocsIndex(projectRoot, provider, options = {}) {
 // src/background-index.ts
 var SOUVENIR_DIR = getSouvenirDir();
 var LOCK_FILE = join6(SOUVENIR_DIR, "bg-index.lock");
+var LAST_RUN_FILE = join6(SOUVENIR_DIR, "bg-index.last");
 var MIN_INTERVAL_MS = 3e4;
 mkdirSync2(SOUVENIR_DIR, { recursive: true });
 try {
-  if (existsSync5(LOCK_FILE)) {
-    const content = readFileSync4(LOCK_FILE, "utf-8").trim();
-    const lastRun = parseInt(content, 10);
-    if (!isNaN(lastRun) && Date.now() - lastRun < MIN_INTERVAL_MS) {
-      process.exit(0);
-    }
-    try {
-      unlinkSync(LOCK_FILE);
-    } catch {
-    }
+  const lastRun = parseInt(readFileSync4(LAST_RUN_FILE, "utf-8"), 10);
+  if (!isNaN(lastRun) && Date.now() - lastRun < MIN_INTERVAL_MS) {
+    process.exit(0);
   }
 } catch {
 }
-try {
-  const fd = openSync2(LOCK_FILE, "wx");
-  writeSync(fd, String(Date.now()));
-  closeSync2(fd);
-} catch (err) {
-  if (err.code === "EEXIST") {
-    process.exit(0);
+function isRunning(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return err.code === "EPERM";
   }
+}
+function acquireLock() {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const fd = openSync2(LOCK_FILE, "wx");
+      writeSync(fd, String(process.pid));
+      closeSync2(fd);
+      return true;
+    } catch (err) {
+      if (err.code !== "EEXIST") throw err;
+      const holder = parseInt(readFileSync4(LOCK_FILE, "utf-8"), 10);
+      if (!isNaN(holder) && isRunning(holder)) return false;
+      try {
+        unlinkSync(LOCK_FILE);
+      } catch {
+      }
+    }
+  }
+  return false;
 }
 var cwd;
 try {
@@ -1660,7 +1899,7 @@ try {
 } catch {
   cwd = process.cwd();
 }
-if (!cwd) {
+if (!cwd || !acquireLock()) {
   process.exit(0);
 }
 process.env.CWD = cwd;
@@ -1674,7 +1913,7 @@ async function run() {
     await provider.initialize();
     const result = await buildIndex(provider, [config.currentProject], { rebuild: false });
     if (result.totalEmbedded > 0) {
-      process.stderr.write(`[claude-souvenir] Background index: ${result.totalEmbedded} new transcript chunks
+      process.stderr.write(`[souvenir] Background index: ${result.totalEmbedded} new transcript chunks
 `);
     }
     const projectRoot = config.cwd;
@@ -1683,7 +1922,7 @@ async function run() {
       if (sources.length > 0) {
         const docsResult = await buildDocsIndex(projectRoot, provider, { rebuild: false });
         if (docsResult.totalEmbedded > 0) {
-          process.stderr.write(`[claude-souvenir] Background index: ${docsResult.totalEmbedded} new doc chunks
+          process.stderr.write(`[souvenir] Background index: ${docsResult.totalEmbedded} new doc chunks
 `);
         }
       }
@@ -1693,9 +1932,10 @@ async function run() {
   }
 }
 run().catch((err) => {
-  process.stderr.write(`[claude-souvenir] Background index error: ${err?.message || err}
+  process.stderr.write(`[souvenir] Background index error: ${err?.message || err}
 `);
 }).finally(() => {
+  writeFileSync(LAST_RUN_FILE, String(Date.now()));
   try {
     unlinkSync(LOCK_FILE);
   } catch {

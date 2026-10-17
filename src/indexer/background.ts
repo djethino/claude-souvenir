@@ -62,7 +62,14 @@ export function scheduleBackgroundIndex(): void {
     return;
   }
 
-  const config = getConfig();
+  let config: ReturnType<typeof getConfig>;
+  try {
+    config = getConfig();
+  } catch (err) {
+    // Invalid plugin options: tools report them (souvenir_index action="check"), the background index just skips
+    logger.warn('Background index skipped:', err);
+    return;
+  }
   const projectDir = config.currentProject;
   if (!projectDir) return;
 

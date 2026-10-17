@@ -1,88 +1,37 @@
-import type { EmbeddingProvider } from './provider.js';
+import type { EmbeddingSettings } from '../config.js';
+import { BaseEmbeddingProvider } from './provider.js';
 import { logger } from '../utils/logger.js';
 
-const MODEL = 'text-embedding-3-small';
-const DEFAULT_DIMENSIONS = 768;
-const API_URL = 'https://api.openai.com/v1/embeddings';
 const MAX_BATCH_SIZE = 100;
 
 /**
- * OpenAI API embedding provider.
- * Requires SOUVENIR_OPENAI_API_KEY environment variable.
+ * OpenAI-compatible embedding provider: POST <url>/embeddings.
+ * Works with OpenAI and any server exposing the same API (LM Studio, vLLM, llama.cpp server,
+ * Ollama's /v1...). The API key is optional: local servers usually need none.
  */
-export class OpenAIEmbeddingProvider implements EmbeddingProvider {
-  readonly name = `openai (${MODEL})`;
-  readonly dimensions: number;
-
-  private apiKey: string;
-  private ready = false;
-
-  constructor(apiKey: string, dimensions?: number) {
-    this.apiKey = apiKey;
-    this.dimensions = dimensions || DEFAULT_DIMENSIONS;
+export class OpenAIEmbeddingProvider extends BaseEmbeddingProvider {
+  constructor(settings: EmbeddingSettings) {
+    super(settings, MAX_BATCH_SIZE);
   }
 
-  isReady(): boolean {
-    return this.ready;
+  protected async prepare(): Promise<void> {
+    // The dimension probe in initialize() is the real check: it exercises URL, key and model
+    logger.info(`Using OpenAI-compatible embeddings at ${this.settings.url} (model ${this.settings.model})`);
   }
 
-  async initialize(): Promise<void> {
-    if (this.ready) return;
-
-    if (!this.apiKey) {
-      throw new Error(
-        'OpenAI embedding provider requires SOUVENIR_OPENAI_API_KEY environment variable.',
-      );
-    }
-
-    // Validate API key with a minimal request
-    logger.info('Validating OpenAI API key...');
-    try {
-      await this.callApi(['test']);
-      this.ready = true;
-      logger.info('OpenAI embedding provider ready');
-    } catch (err) {
-      throw new Error(`OpenAI API validation failed: ${err instanceof Error ? err.message : err}`);
-    }
-  }
-
-  async embed(texts: string[]): Promise<Float32Array[]> {
-    if (!this.ready) await this.initialize();
-
-    const allResults: Float32Array[] = [];
-
-    // Process in batches
-    for (let i = 0; i < texts.length; i += MAX_BATCH_SIZE) {
-      const batch = texts.slice(i, i + MAX_BATCH_SIZE);
-      const embeddings = await this.callApi(batch);
-      allResults.push(...embeddings);
-    }
-
-    return allResults;
-  }
-
-  async embedQuery(text: string): Promise<Float32Array> {
-    const [result] = await this.embed([text]);
-    return result;
-  }
-
-  async dispose(): Promise<void> {
-    this.ready = false;
-  }
-
-  private async callApi(texts: string[], retries = 3): Promise<Float32Array[]> {
+  protected async request(texts: string[], retries = 3): Promise<number[][]> {
     for (let attempt = 0; attempt < retries; attempt++) {
       try {
-        const response = await fetch(API_URL, {
+        const response = await fetch(`${this.settings.url}/embeddings`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${this.apiKey}`,
+            ...(this.settings.apiKey && { Authorization: `Bearer ${this.settings.apiKey}` }),
           },
           body: JSON.stringify({
-            model: MODEL,
+            model: this.settings.model,
             input: texts,
-            dimensions: this.dimensions,
+            ...(this.settings.dimensions !== undefined && { dimensions: this.settings.dimensions }),
           }),
         });
 
@@ -95,16 +44,23 @@ export class OpenAIEmbeddingProvider implements EmbeddingProvider {
             await new Promise((r) => setTimeout(r, delay));
             continue;
           }
-          throw new Error(`OpenAI API error (${response.status}): ${error}`);
+          const hint = response.status === 401 || response.status === 403
+            ? ' Check the embedding_api_key option.'
+            : '';
+          throw new Error(`Embedding API error at ${this.settings.url} (${response.status}): ${error}${hint}`);
         }
 
         const data = await response.json() as {
           data: Array<{ embedding: number[]; index: number }>;
         };
+        if (!Array.isArray(data.data) || data.data.length !== texts.length) {
+          throw new Error(
+            `Unexpected embedding API response: expected ${texts.length} embeddings, got ${data.data?.length ?? 0}`,
+          );
+        }
 
-        // Sort by index and convert to Float32Array
-        const sorted = data.data.sort((a, b) => a.index - b.index);
-        return sorted.map((d) => new Float32Array(d.embedding));
+        // Sort by index (the API may reorder)
+        return data.data.sort((a, b) => a.index - b.index).map((d) => d.embedding);
       } catch (err) {
         if (attempt === retries - 1) throw err;
         const delay = Math.pow(2, attempt) * 1000;

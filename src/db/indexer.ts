@@ -3,16 +3,14 @@ import { basename } from 'path';
 import { logger } from '../utils/logger.js';
 import { listTranscriptFiles, loadSessionIndex } from '../transcript/discovery.js';
 import { chunkTranscript } from '../embedding/chunker.js';
-import type { EmbeddingProvider } from '../embedding/provider.js';
+import { type EmbeddingProvider, sameIdentity } from '../embedding/provider.js';
 import {
-  getDb,
   insertChunks,
   getIndexState,
   setIndexState,
   clearProject,
-  clearAll,
-  getStoredProvider,
-  setStoredProvider,
+  getIndexIdentity,
+  prepareVectorIndex,
 } from './store.js';
 
 const EMBED_BATCH_SIZE = 32;
@@ -26,6 +24,10 @@ export interface IndexProgress {
 
 /**
  * Build the semantic index for one or more projects.
+ *
+ * A rebuild after an embedding model change resets the whole index (all projects share one vector
+ * space) and re-indexes the requested projects; the others are re-indexed on their next search
+ * or with project="all". resetAll reports it.
  */
 export async function buildIndex(
   provider: EmbeddingProvider,
@@ -43,40 +45,30 @@ export async function buildIndex(
   filesProcessed: number;
   skipped: number;
   errors: string[];
+  resetAll: boolean;
 }> {
   const { sessionId, includeSubagents = true, rebuild = false, onProgress, signal } = options;
 
-  // Initialize database
-  getDb(provider.dimensions);
-
-  // Check for provider mismatch
-  const storedProvider = getStoredProvider();
-  if (storedProvider && !rebuild) {
-    if (storedProvider.dimensions !== provider.dimensions) {
-      throw new Error(
-        `Embedding dimensions mismatch: index was built with ${storedProvider.dimensions}d ` +
-        `but current provider uses ${provider.dimensions}d. ` +
-        `Use action="rebuild" to re-index with the new provider.`,
-      );
-    }
-  }
-
-  // Initialize embedding provider
+  // The provider's identity (model, vector size) decides how the index is prepared
   if (!provider.isReady()) {
     onProgress?.({ phase: 'Initializing embedding model', current: 0, total: 1 });
     await provider.initialize();
   }
 
-  // Handle rebuild
-  if (rebuild) {
+  const stored = getIndexIdentity();
+  const resetAll = rebuild && stored !== null && !sameIdentity(stored, provider.identity);
+  if (resetAll) {
+    logger.info('Embedding model changed: resetting the whole index');
+  }
+  // Throws IndexMismatchError when the model changed and this is not a rebuild
+  prepareVectorIndex(provider.identity, { resetAll });
+
+  if (rebuild && !resetAll) {
     logger.info('Rebuilding index from scratch...');
     for (const dir of projectDirs) {
       clearProject(dir);
     }
   }
-
-  // Store provider info
-  setStoredProvider(provider.name, provider.dimensions);
 
   let totalChunks = 0;
   let totalEmbedded = 0;
@@ -166,5 +158,5 @@ export async function buildIndex(
 
   logger.info(`Indexing complete: ${totalChunks} chunks, ${totalEmbedded} embedded, ${filesProcessed} files, ${skipped} skipped`);
 
-  return { totalChunks, totalEmbedded, filesProcessed, skipped, errors };
+  return { totalChunks, totalEmbedded, filesProcessed, skipped, errors, resetAll };
 }

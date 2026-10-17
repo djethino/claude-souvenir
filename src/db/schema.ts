@@ -2,7 +2,8 @@
  * SQLite schema for the souvenir vector database.
  */
 
-export const SCHEMA_VERSION = 1;
+/** 2: vectors moved to chunk_vectors (project partition + filter metadata), embedding identity. */
+export const SCHEMA_VERSION = 2;
 
 export const CREATE_TABLES = `
   CREATE TABLE IF NOT EXISTS metadata (
@@ -36,12 +37,26 @@ export const CREATE_TABLES = `
   CREATE INDEX IF NOT EXISTS idx_chunks_timestamp ON chunks(timestamp);
 `;
 
+/** Vector table of schema 1 (no filter columns), migrated into CHUNK_VECTORS. */
+export const LEGACY_VEC_TABLE = 'vec_chunks';
+
+export const CHUNK_VECTORS = 'chunk_vectors';
+
 /**
- * sqlite-vec virtual table creation (run separately since it needs the extension loaded).
+ * sqlite-vec table, created once the embedding size is known (run separately since it needs
+ * the extension loaded). Search filters are columns of the vector table so that sqlite-vec
+ * applies them during the KNN instead of after it: project_dir partitions the vectors, the
+ * other columns are metadata. NULL is not allowed in metadata, '' stands for a missing timestamp.
  */
-export function createVecTable(dimensions: number): string {
-  return `CREATE VIRTUAL TABLE IF NOT EXISTS vec_chunks USING vec0 (
+export function createChunkVectorsTable(dimensions: number): string {
+  return `CREATE VIRTUAL TABLE ${CHUNK_VECTORS} USING vec0 (
     chunk_id INTEGER PRIMARY KEY,
+    project_dir TEXT PARTITION KEY,
+    session_id TEXT,
+    role TEXT,
+    has_user INTEGER,
+    has_assistant INTEGER,
+    timestamp TEXT,
     embedding float[${dimensions}] distance_metric=cosine
   );`;
 }
