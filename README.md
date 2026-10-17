@@ -48,6 +48,8 @@ Claude Souvenir gives Claude persistent memory across sessions:
 
 ### Prerequisites
 
+- **Node.js >= 22.13** on your `PATH` (souvenir uses Node's built-in `node:sqlite`). Supported platforms: Windows x64, Linux x64, macOS (Intel and Apple Silicon).
+
 Souvenir uses embeddings for semantic search. By default, it runs locally via [Ollama](https://ollama.com) — no API key needed, no data leaves your machine.
 
 1. **Install Ollama** from [ollama.com](https://ollama.com/download)
@@ -80,9 +82,11 @@ git clone https://github.com/djethino/claude-souvenir.git
 cd claude-souvenir
 npm install
 npm run build
-node deploy.js
-# Restart Claude Code
 ```
+
+Then add the clone as a local marketplace (`/plugin marketplace add <path>`), install the plugin from it and run `/reload-plugins` after each build.
+
+`dist/` (bundled with esbuild, every npm dependency included) and `vendor/sqlite-vec/bin/` are **committed**: Claude Code installs plugins from git and never runs a build or install script. Run `npm run build` before every commit that touches `src/`; CI fails if `dist/` is out of date.
 
 ### Skill
 
@@ -276,6 +280,7 @@ Souvenir is built for environments where multiple Claude instances work in paral
 ```
 src/
 ├── index.ts               # MCP server + tool definitions
+├── background-index.ts    # Hook entry point: debounced background indexing
 ├── config.ts              # Project detection + configuration
 ├── tools/
 │   ├── search.ts          # souvenir_search handler
@@ -294,6 +299,7 @@ src/
 ├── indexer/
 │   └── background.ts      # Background indexing scheduler (hooks)
 ├── db/
+│   ├── sqlite.ts           # node:sqlite connection, sqlite-vec loading, transactions
 │   ├── indexer.ts          # Transcript semantic indexer
 │   ├── store.ts            # Global DB operations (SQLite + sqlite-vec)
 │   └── schema.ts           # Global DB schema
@@ -319,9 +325,9 @@ src/
 
 ## Technical Details
 
-- **Language**: TypeScript (ESM, Node16 module resolution)
-- **Runtime dependencies**: `@modelcontextprotocol/sdk`, `zod`, `better-sqlite3`, `sqlite-vec`
-- **Node.js**: >= 18.0.0
+- **Language**: TypeScript (ESM), bundled with esbuild into `dist/index.js` (MCP server) and `dist/background-index.js` (hooks)
+- **Runtime dependencies**: none to install. `@modelcontextprotocol/sdk` and `zod` are bundled; SQLite is Node's built-in `node:sqlite`; the [sqlite-vec](https://github.com/asg017/sqlite-vec) extension is vendored per platform in `vendor/sqlite-vec/bin/` (see its README)
+- **Node.js**: >= 22.13.0
 - **Hook variable**: `${CLAUDE_PLUGIN_ROOT}` for path resolution
 - **Auto-detected categories**: `.md .txt .rst .adoc` (doc), `.ts .tsx .js .jsx .mjs .cjs .py .go .rs .java .c .cpp .h .hpp .cs .rb .php .swift .kt .lua .sh .bash .ps1 .bat .vue .svelte .css .scss .less .html .xml .sql .graphql .gql .gd .gdshader` (code), `.json .yaml .yml .toml .ini .editorconfig` (config)
 

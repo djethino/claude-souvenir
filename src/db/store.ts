@@ -1,10 +1,9 @@
-import Database from 'better-sqlite3';
-import * as sqliteVec from 'sqlite-vec';
-import { mkdirSync, existsSync, statSync as fsStatSync } from 'fs';
-import { dirname } from 'path';
+import type { SQLInputValue } from 'node:sqlite';
+import { existsSync, statSync as fsStatSync } from 'fs';
 import { getDbPath } from '../utils/paths.js';
 import { logger } from '../utils/logger.js';
 import { CREATE_TABLES, SCHEMA_VERSION, createVecTable } from './schema.js';
+import { type Db, openDatabase, inTransaction, vectorBlob, getRow } from './sqlite.js';
 
 export interface ChunkRow {
   chunk_id: number;
@@ -29,41 +28,18 @@ export interface IndexStateRow {
   indexed_at: string;
 }
 
-let _db: Database.Database | null = null;
+let _db: Db | null = null;
 let _dimensions: number = 768;
 
 /**
  * Get or create the SQLite database connection.
  */
-export function getDb(dimensions?: number): Database.Database {
+export function getDb(dimensions?: number): Db {
   if (_db) return _db;
 
   if (dimensions) _dimensions = dimensions;
 
-  const dbPath = getDbPath();
-  const dir = dirname(dbPath);
-  if (!existsSync(dir)) {
-    mkdirSync(dir, { recursive: true });
-  }
-
-  logger.info(`Opening database at ${dbPath}`);
-  _db = new Database(dbPath);
-
-  // Load sqlite-vec extension
-  sqliteVec.load(_db);
-
-  // Enable WAL mode for better concurrent read performance
-  _db.pragma('journal_mode = WAL');
-  // Wait up to 5s if another process holds the write lock (avoids SQLITE_BUSY)
-  _db.pragma('busy_timeout = 5000');
-
-  // Enable incremental auto-vacuum to reclaim space after deletions
-  const autoVacuum = (_db.pragma('auto_vacuum') as Array<{ auto_vacuum: number }>)[0]?.auto_vacuum;
-  if (autoVacuum !== 2) {
-    _db.pragma('auto_vacuum = INCREMENTAL');
-    _db.exec('VACUUM');
-    logger.info('Enabled incremental auto_vacuum (one-time migration)');
-  }
+  _db = openDatabase(getDbPath(), 'transcripts');
 
   // Create schema
   _db.exec(CREATE_TABLES);
@@ -123,7 +99,7 @@ export function insertChunks(
 
   let inserted = 0;
 
-  const transaction = db.transaction(() => {
+  inTransaction(db, () => {
     for (let i = 0; i < chunks.length; i++) {
       const chunk = chunks[i];
       const result = insertChunk.run({
@@ -138,17 +114,13 @@ export function insertChunks(
       });
 
       if (result.changes > 0) {
-        // sqlite-vec requires BigInt for primary key (uses sqlite3_bind_int64)
-        const chunkId = BigInt(result.lastInsertRowid);
-        // Convert Float32Array to Buffer for sqlite-vec
-        const buffer = Buffer.from(embeddings[i].buffer);
-        insertVec.run(chunkId, buffer);
+        // sqlite-vec only accepts integer primary keys: a JS number binds as REAL, BigInt as INTEGER
+        insertVec.run(BigInt(result.lastInsertRowid), vectorBlob(embeddings[i]));
         inserted++;
       }
     }
   });
 
-  transaction();
   return inserted;
 }
 
@@ -170,7 +142,7 @@ export function searchSemantic(
   const topK = options.topK || 10;
 
   // Build the query with optional filters
-  const queryBuffer = Buffer.from(queryEmbedding.buffer);
+  const queryBuffer = vectorBlob(queryEmbedding);
 
   // sqlite-vec KNN query
   const baseQuery = `
@@ -187,7 +159,7 @@ export function searchSemantic(
     ORDER BY v.distance
   `;
 
-  const params: unknown[] = [queryBuffer, topK];
+  const params: SQLInputValue[] = [queryBuffer, topK];
   if (options.projectDir) params.push(options.projectDir);
   if (options.sessionId) params.push(options.sessionId);
   if (options.role) params.push(options.role);
@@ -195,7 +167,7 @@ export function searchSemantic(
   if (options.dateTo) params.push(options.dateTo);
 
   try {
-    return db.prepare(baseQuery).all(...params) as VecSearchResult[];
+    return db.prepare(baseQuery).all(...params) as unknown as VecSearchResult[];
   } catch (err) {
     logger.error('Semantic search error:', err);
     return [];
@@ -207,7 +179,7 @@ export function searchSemantic(
  */
 export function getIndexState(filePath: string): IndexStateRow | null {
   const db = getDb();
-  return db.prepare('SELECT * FROM index_state WHERE file_path = ?').get(filePath) as IndexStateRow | null;
+  return getRow<IndexStateRow>(db, 'SELECT * FROM index_state WHERE file_path = ?', filePath);
 }
 
 /**
@@ -288,7 +260,7 @@ export function getIndexStatus(projectDir?: string): {
 export function clearProject(projectDir: string): void {
   const db = getDb();
 
-  db.transaction(() => {
+  inTransaction(db, () => {
     // Get chunk IDs to remove from vec table
     const chunkIds = db.prepare('SELECT chunk_id FROM chunks WHERE project_dir = ?')
       .all(projectDir) as Array<{ chunk_id: number }>;
@@ -301,7 +273,7 @@ export function clearProject(projectDir: string): void {
 
     // Clear index state for files in this project
     db.prepare('DELETE FROM index_state WHERE file_path LIKE ?').run(`%${projectDir}%`);
-  })();
+  });
 
   incrementalVacuum();
 }
@@ -312,11 +284,11 @@ export function clearProject(projectDir: string): void {
 export function clearAll(): void {
   const db = getDb();
 
-  db.transaction(() => {
+  inTransaction(db, () => {
     db.prepare('DELETE FROM vec_chunks').run();
     db.prepare('DELETE FROM chunks').run();
     db.prepare('DELETE FROM index_state').run();
-  })();
+  });
 
   incrementalVacuum();
 }
@@ -327,7 +299,7 @@ export function clearAll(): void {
 export function incrementalVacuum(): void {
   try {
     const db = getDb();
-    db.pragma('incremental_vacuum');
+    db.exec('PRAGMA incremental_vacuum');
   } catch (err) {
     logger.error('Incremental vacuum error:', err);
   }

@@ -1,0 +1,29 @@
+{
+  "sqliteVec": "0.1.6",
+  "binaries": {
+    "windows-x64": {
+      "package": "sqlite-vec-windows-x64@0.1.6",
+      "integrity": "sha512-Dy9/KlKJDrjuQ/RRkBqGkMZuSh5bTJDMMOFZft9VJZaXzpYxb5alpgdvD4bbKegpDdfPi2BT4+PBivsNJSlMoQ==",
+      "file": "windows-x64/vec0.dll",
+      "sha256": "74e63ab75299804773676a5c757372472e797e03e02a2d8ff5fd91730dbd7531"
+    },
+    "linux-x64": {
+      "package": "sqlite-vec-linux-x64@0.1.6",
+      "integrity": "sha512-411tWPswywIzdkp+zsAUav4A03f0FjnNfpZFlOw8fBebFR74RSFkwM8Xryf18gLHiYAXUBI4mjY9+/xjwBjKpg==",
+      "file": "linux-x64/vec0.so",
+      "sha256": "f285c46d5496fe7571be40ab40c0b151d091892c141f89a503e02392e0961233"
+    },
+    "darwin-x64": {
+      "package": "sqlite-vec-darwin-x64@0.1.6",
+      "integrity": "sha512-MFkKjNfJ5pamFHhyTsrqdxALrjuvpSEZdu6Q/0vMxFa6sr5YlfabeT5xGqEbuH0iobsT1Hca5EZxLhLy0jHYkw==",
+      "file": "darwin-x64/vec0.dylib",
+      "sha256": "12b9a80036ec5b5210ced90a0031ba8ab4139e4bbf1e2f361d4953f05588d2e9"
+    },
+    "darwin-arm64": {
+      "package": "sqlite-vec-darwin-arm64@0.1.6",
+      "integrity": "sha512-5duw/xhM3xE6BCQd//eAkyHgBp9FIwK6veldRhPG96dT6Zpjov3bG02RuE7JAQj0SVJYRW8bJwZ4LxqW0+Q7Dw==",
+      "file": "darwin-arm64/vec0.dylib",
+      "sha256": "0dcce2c74747968076eab4b0f9974498ead859f7674b28d5551e1f551ddf8fe2"
+    }
+  }
+}
