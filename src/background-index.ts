@@ -1,7 +1,5 @@
-#!/usr/bin/env node
-
 /**
- * Background indexation script for claude-souvenir hooks.
+ * Background indexation entry point for claude-souvenir hooks.
  * Called async by Stop, PostToolUse, UserPromptSubmit, PreCompact hooks.
  *
  * Uses a lock file + timestamp to debounce across hook invocations
@@ -14,12 +12,16 @@
  * - Incremental → only indexes new content
  */
 
-import { existsSync, readFileSync, writeFileSync, writeSync, mkdirSync, unlinkSync, openSync, closeSync } from 'fs';
-import { join, dirname } from 'path';
-import { homedir } from 'os';
-import { fileURLToPath, pathToFileURL } from 'url';
+import { existsSync, readFileSync, writeSync, mkdirSync, unlinkSync, openSync, closeSync } from 'fs';
+import { join } from 'path';
+import { getSouvenirDir } from './utils/paths.js';
+import { getConfig } from './config.js';
+import { createEmbeddingProvider } from './tools/helpers.js';
+import { buildIndex } from './db/indexer.js';
+import { buildDocsIndex } from './docs/indexer.js';
+import { docsDbExists, getDocSources } from './docs/store.js';
 
-const SOUVENIR_DIR = join(homedir(), '.claude', 'ASymptOmatik', 'souvenir');
+const SOUVENIR_DIR = getSouvenirDir();
 const LOCK_FILE = join(SOUVENIR_DIR, 'bg-index.lock');
 const MIN_INTERVAL_MS = 30_000; // 30s debounce
 
@@ -44,11 +46,10 @@ try {
 // Atomic lock acquisition: O_CREAT | O_EXCL | O_WRONLY — fails if file already exists
 try {
   const fd = openSync(LOCK_FILE, 'wx');
-  const buf = Buffer.from(String(Date.now()), 'utf-8');
-  writeSync(fd, buf);
+  writeSync(fd, String(Date.now()));
   closeSync(fd);
 } catch (err) {
-  if (err.code === 'EEXIST') {
+  if ((err as NodeJS.ErrnoException).code === 'EEXIST') {
     // Another process acquired the lock between our check and this open
     process.exit(0);
   }
@@ -56,10 +57,9 @@ try {
 }
 
 // ── Resolve current project from hook stdin ─────────────────────────────────
-let cwd;
+let cwd: string | undefined;
 try {
-  const input = readFileSync(0, 'utf-8');
-  const data = JSON.parse(input);
+  const data = JSON.parse(readFileSync(0, 'utf-8')) as { cwd?: string };
   cwd = data.cwd;
 } catch {
   cwd = process.cwd();
@@ -69,21 +69,11 @@ if (!cwd) {
   process.exit(0);
 }
 
-// ── Build import paths ──────────────────────────────────────────────────────
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const buildDir = join(__dirname, '..', 'build');
-
 // Set CWD env so getConfig() detects the project
 process.env.CWD = cwd;
 
 // ── Run indexation ──────────────────────────────────────────────────────────
-async function run() {
-  const { getConfig } = await import(pathToFileURL(join(buildDir, 'config.js')).href);
-  const { createEmbeddingProvider } = await import(pathToFileURL(join(buildDir, 'tools', 'helpers.js')).href);
-  const { buildIndex } = await import(pathToFileURL(join(buildDir, 'db', 'indexer.js')).href);
-  const { buildDocsIndex } = await import(pathToFileURL(join(buildDir, 'docs', 'indexer.js')).href);
-  const { docsDbExists, getDocSources } = await import(pathToFileURL(join(buildDir, 'docs', 'store.js')).href);
-
+async function run(): Promise<void> {
   const config = getConfig();
   if (!config.currentProject) {
     return; // CWD doesn't match any known project

@@ -1,0 +1,15 @@
+version: 2
+updates:
+  # Root: bundled into dist/ (rebuilt by the build workflow on Dependabot PRs).
+  # vendor/sqlite-vec: pins the vendored sqlite-vec binaries (re-vendored by the same workflow).
+  - package-ecosystem: npm
+    directories:
+      - "/"
+      - "/vendor/sqlite-vec"
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly

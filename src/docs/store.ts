@@ -1,8 +1,8 @@
-import Database from 'better-sqlite3';
-import * as sqliteVec from 'sqlite-vec';
-import { mkdirSync, existsSync, statSync as fsStatSync } from 'fs';
-import { dirname, join } from 'path';
+import type { SQLInputValue } from 'node:sqlite';
+import { existsSync, statSync as fsStatSync } from 'fs';
+import { join } from 'path';
 import { logger } from '../utils/logger.js';
+import { type Db, openDatabase, inTransaction, vectorBlob, getRow, allRows } from '../db/sqlite.js';
 import { DOCS_CREATE_TABLES, DOCS_SCHEMA_VERSION, createDocsVecTable } from './schema.js';
 
 export type DocCategory = 'doc' | 'code' | 'config';
@@ -71,7 +71,7 @@ export interface DocSnapshotMeta {
 // DB connection (singleton per project path)
 // ---------------------------------------------------------------------------
 
-let _docsDb: Database.Database | null = null;
+let _docsDb: Db | null = null;
 let _docsDbPath: string | null = null;
 let _docsDimensions: number = 768;
 
@@ -79,7 +79,7 @@ function getLocalDocsDbPath(projectRoot: string): string {
   return join(projectRoot, '.claude', 'ASymptOmatik', 'souvenir', 'docs.db');
 }
 
-export function getDocsDb(projectRoot: string, dimensions?: number): Database.Database {
+export function getDocsDb(projectRoot: string, dimensions?: number): Db {
   const dbPath = getLocalDocsDbPath(projectRoot);
 
   if (_docsDb && _docsDbPath === dbPath) return _docsDb;
@@ -93,26 +93,8 @@ export function getDocsDb(projectRoot: string, dimensions?: number): Database.Da
 
   if (dimensions) _docsDimensions = dimensions;
 
-  const dir = dirname(dbPath);
-  if (!existsSync(dir)) {
-    mkdirSync(dir, { recursive: true });
-  }
-
-  logger.info(`Opening docs database at ${dbPath}`);
-  _docsDb = new Database(dbPath);
+  _docsDb = openDatabase(dbPath, 'docs');
   _docsDbPath = dbPath;
-
-  sqliteVec.load(_docsDb);
-  _docsDb.pragma('journal_mode = WAL');
-  _docsDb.pragma('busy_timeout = 5000');
-
-  // Enable incremental auto-vacuum to reclaim space after deletions
-  const autoVacuum = (_docsDb.pragma('auto_vacuum') as Array<{ auto_vacuum: number }>)[0]?.auto_vacuum;
-  if (autoVacuum !== 2) {
-    _docsDb.pragma('auto_vacuum = INCREMENTAL');
-    _docsDb.exec('VACUUM');
-    logger.info('Docs DB: enabled incremental auto_vacuum (one-time migration)');
-  }
 
   _docsDb.exec(DOCS_CREATE_TABLES);
   _docsDb.exec(createDocsVecTable(_docsDimensions));
@@ -144,7 +126,7 @@ export function docsDbExists(projectRoot: string): boolean {
 
 export function getDocSources(projectRoot: string): DocSourceRow[] {
   const db = getDocsDb(projectRoot);
-  return db.prepare('SELECT * FROM doc_sources ORDER BY added_at').all() as DocSourceRow[];
+  return allRows<DocSourceRow>(db, 'SELECT * FROM doc_sources ORDER BY added_at');
 }
 
 export function addDocSource(
@@ -160,8 +142,11 @@ export function addDocSource(
     VALUES (?, ?, ?, ?, 1, ?)
   `).run(path, type, pattern || null, category || null, new Date().toISOString());
 
-  return db.prepare('SELECT * FROM doc_sources WHERE source_id = ?')
-    .get(result.lastInsertRowid) as DocSourceRow;
+  const row = getRow<DocSourceRow>(db, 'SELECT * FROM doc_sources WHERE source_id = ?', result.lastInsertRowid);
+  if (!row) {
+    throw new Error(`Doc source ${result.lastInsertRowid} not found right after insertion`);
+  }
+  return row;
 }
 
 export function removeDocSource(projectRoot: string, sourceId: number): boolean {
@@ -206,7 +191,7 @@ export function insertDocChunks(
 
   let inserted = 0;
 
-  const transaction = db.transaction(() => {
+  inTransaction(db, () => {
     for (let i = 0; i < chunks.length; i++) {
       const chunk = chunks[i];
       const result = insertChunk.run({
@@ -221,15 +206,13 @@ export function insertDocChunks(
       });
 
       if (result.changes > 0) {
-        const chunkId = BigInt(result.lastInsertRowid);
-        const buffer = Buffer.from(embeddings[i].buffer);
-        insertVec.run(chunkId, buffer);
+        // sqlite-vec only accepts integer primary keys: a JS number binds as REAL, BigInt as INTEGER
+        insertVec.run(BigInt(result.lastInsertRowid), vectorBlob(embeddings[i]));
         inserted++;
       }
     }
   });
 
-  transaction();
   return inserted;
 }
 
@@ -255,7 +238,7 @@ export function insertDocSections(
     VALUES (@file_path, @heading, @level, @start_line, @end_line, @section_path)
   `);
 
-  db.transaction(() => {
+  inTransaction(db, () => {
     for (const section of sections) {
       insert.run({
         file_path: section.file_path,
@@ -266,14 +249,12 @@ export function insertDocSections(
         section_path: section.section_path,
       });
     }
-  })();
+  });
 }
 
 export function getDocSections(projectRoot: string, filePath: string): DocSectionRow[] {
   const db = getDocsDb(projectRoot);
-  return db.prepare(
-    'SELECT * FROM doc_sections WHERE file_path = ? ORDER BY start_line',
-  ).all(filePath) as DocSectionRow[];
+  return allRows<DocSectionRow>(db, 'SELECT * FROM doc_sections WHERE file_path = ? ORDER BY start_line', filePath);
 }
 
 // ---------------------------------------------------------------------------
@@ -291,7 +272,7 @@ export function searchDocsSemantic(
 ): DocVecSearchResult[] {
   const db = getDocsDb(projectRoot);
   const topK = options.topK || 10;
-  const queryBuffer = Buffer.from(queryEmbedding.buffer);
+  const queryBuffer = vectorBlob(queryEmbedding);
 
   const baseQuery = `
     SELECT c.*, v.distance
@@ -304,12 +285,12 @@ export function searchDocsSemantic(
     ORDER BY v.distance
   `;
 
-  const params: unknown[] = [queryBuffer, topK];
+  const params: SQLInputValue[] = [queryBuffer, topK];
   if (options.category) params.push(options.category);
   if (options.filePath) params.push(options.filePath);
 
   try {
-    return db.prepare(baseQuery).all(...params) as DocVecSearchResult[];
+    return db.prepare(baseQuery).all(...params) as unknown as DocVecSearchResult[];
   } catch (err) {
     logger.error('Docs semantic search error:', err);
     return [];
@@ -322,8 +303,7 @@ export function searchDocsSemantic(
 
 export function getDocIndexState(projectRoot: string, filePath: string): DocIndexStateRow | null {
   const db = getDocsDb(projectRoot);
-  return db.prepare('SELECT * FROM doc_index_state WHERE file_path = ?')
-    .get(filePath) as DocIndexStateRow | null;
+  return getRow<DocIndexStateRow>(db, 'SELECT * FROM doc_index_state WHERE file_path = ?', filePath);
 }
 
 export function setDocIndexState(
@@ -346,7 +326,7 @@ export function setDocIndexState(
 export function clearDocFile(projectRoot: string, filePath: string): void {
   const db = getDocsDb(projectRoot);
 
-  db.transaction(() => {
+  inTransaction(db, () => {
     const chunkIds = db.prepare('SELECT chunk_id FROM doc_chunks WHERE file_path = ?')
       .all(filePath) as Array<{ chunk_id: number }>;
 
@@ -357,18 +337,18 @@ export function clearDocFile(projectRoot: string, filePath: string): void {
     db.prepare('DELETE FROM doc_chunks WHERE file_path = ?').run(filePath);
     db.prepare('DELETE FROM doc_sections WHERE file_path = ?').run(filePath);
     db.prepare('DELETE FROM doc_index_state WHERE file_path = ?').run(filePath);
-  })();
+  });
 }
 
 export function clearAllDocs(projectRoot: string): void {
   const db = getDocsDb(projectRoot);
 
-  db.transaction(() => {
+  inTransaction(db, () => {
     db.prepare('DELETE FROM vec_doc_chunks').run();
     db.prepare('DELETE FROM doc_chunks').run();
     db.prepare('DELETE FROM doc_sections').run();
     db.prepare('DELETE FROM doc_index_state').run();
-  })();
+  });
 
   docsIncrementalVacuum(projectRoot);
 }
@@ -383,7 +363,7 @@ export function clearAllDocs(projectRoot: string): void {
 export function docsIncrementalVacuum(projectRoot: string): void {
   try {
     const db = getDocsDb(projectRoot);
-    db.pragma('incremental_vacuum');
+    db.exec('PRAGMA incremental_vacuum');
   } catch (err) {
     logger.error('Docs incremental vacuum error:', err);
   }
@@ -424,8 +404,7 @@ export function getDocsIndexStatus(projectRoot: string): {
     GROUP BY category
   `).all() as Array<{ category: DocCategory; chunk_count: number }>;
 
-  const sources = db.prepare('SELECT * FROM doc_sources ORDER BY added_at')
-    .all() as DocSourceRow[];
+  const sources = allRows<DocSourceRow>(db, 'SELECT * FROM doc_sources ORDER BY added_at');
 
   const dbPath = getLocalDocsDbPath(projectRoot);
   let dbSizeBytes = 0;
@@ -501,9 +480,12 @@ export function getSnapshotsForFile(
   limit = 50,
 ): DocSnapshotMeta[] {
   const db = getDocsDb(projectRoot);
-  return db.prepare(
+  return allRows<DocSnapshotMeta>(
+    db,
     'SELECT snapshot_id, file_path, content_hash, file_size, created_at FROM doc_snapshots WHERE file_path = ? ORDER BY created_at DESC LIMIT ?',
-  ).all(filePath, limit) as DocSnapshotMeta[];
+    filePath,
+    limit,
+  );
 }
 
 export function getVersionedFiles(
@@ -524,9 +506,7 @@ export function getSnapshotContent(
   snapshotId: number,
 ): DocSnapshotRow | null {
   const db = getDocsDb(projectRoot);
-  return db.prepare(
-    'SELECT * FROM doc_snapshots WHERE snapshot_id = ?',
-  ).get(snapshotId) as DocSnapshotRow | null;
+  return getRow<DocSnapshotRow>(db, 'SELECT * FROM doc_snapshots WHERE snapshot_id = ?', snapshotId);
 }
 
 export function cleanupOldSnapshots(projectRoot: string, maxAgeDays: number): number {
@@ -534,11 +514,12 @@ export function cleanupOldSnapshots(projectRoot: string, maxAgeDays: number): nu
   const cutoff = new Date(Date.now() - maxAgeDays * 24 * 60 * 60 * 1000).toISOString();
   const result = db.prepare('DELETE FROM doc_snapshots WHERE created_at < ?').run(cutoff);
 
-  if (result.changes > 0) {
+  const deleted = Number(result.changes);
+  if (deleted > 0) {
     docsIncrementalVacuum(projectRoot);
   }
 
-  return result.changes;
+  return deleted;
 }
 
 export function getSnapshotStats(projectRoot: string): {

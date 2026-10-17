@@ -1,0 +1,60 @@
+# Claude Code runs the committed dist/ and vendor/sqlite-vec/bin/ as is (no build, no install
+# scripts on users' machines), so they must always match the sources and lockfiles.
+#
+# - Every push / PR: fail if dist/ is not the build of src/ + package-lock.json, or if the
+#   vendored sqlite-vec binaries are not exactly those pinned by vendor/sqlite-vec/package-lock.json.
+# - Dependabot PRs: a dependency bump changes the lockfile only, so rebuild and re-vendor,
+#   then commit the result to the PR branch.
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    if: github.actor != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - run: npm ci --ignore-scripts
+      - run: npm run build
+      - name: dist/ is up to date
+        run: |
+          git add --intent-to-add dist
+          git diff --exit-code --stat -- dist || { echo "::error::dist/ is out of date: run 'npm run build' and commit it"; exit 1; }
+      - run: npm run vendor:check
+
+  dependabot-rebuild:
+    if: github.actor == 'dependabot[bot]' && github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.head_ref }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - run: npm ci --ignore-scripts
+      - run: npm run vendor
+      - run: npm run build
+      - name: Commit rebuilt dist/ and vendored binaries
+        run: |
+          git add dist vendor/sqlite-vec
+          if git diff --cached --quiet; then
+            echo "Nothing to rebuild"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "build: rebuild dist/ and vendored sqlite-vec for ${{ github.head_ref }}"
+          git push

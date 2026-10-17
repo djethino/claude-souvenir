@@ -1,32 +1,31 @@
 {
   "name": "claude-souvenir",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "MCP server for searching and browsing Claude Code conversation transcripts",
   "type": "module",
   "bin": {
-    "claude-souvenir": "./build/index.js"
+    "claude-souvenir": "./dist/index.js"
   },
   "files": [
-    "build"
+    "dist",
+    "vendor/sqlite-vec/bin"
   ],
   "scripts": {
-    "build": "tsc",
-    "dev": "tsc --watch",
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc --noEmit",
+    "vendor": "node scripts/vendor-sqlite-vec.mjs",
+    "vendor:check": "node scripts/vendor-sqlite-vec.mjs --check",
     "prepublishOnly": "npm run build"
   },
-  "dependencies": {
+  "devDependencies": {
     "@modelcontextprotocol/sdk": "^1.32.1",
-    "better-sqlite3": "^11.0.0",
-    "sqlite-vec": "^0.1.6",
+    "@types/node": "^22.0.0",
+    "esbuild": "0.28.2",
+    "typescript": "^5.5.0",
     "zod": "^3.23.0"
   },
-  "devDependencies": {
-    "@types/better-sqlite3": "^7.6.0",
-    "@types/node": "^22.0.0",
-    "typescript": "^5.5.0"
-  },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=22.13.0"
   },
   "author": {
     "name": "ASymptOmatik"

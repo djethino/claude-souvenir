@@ -18,9 +18,12 @@ import { disposeSingletonProvider } from './tools/helpers.js';
 import { closeDb } from './db/store.js';
 import { closeDocsDb } from './docs/store.js';
 
+/** Injected from package.json by scripts/build.mjs. */
+declare const __SOUVENIR_VERSION__: string;
+
 const server = new McpServer({
   name: 'claude-souvenir',
-  version: '0.2.0',
+  version: __SOUVENIR_VERSION__,
 });
 
 type ToolResult = { content: Array<{ type: 'text'; text: string }>; isError?: boolean };

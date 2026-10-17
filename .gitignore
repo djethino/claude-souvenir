@@ -1,6 +1,6 @@
 node_modules/
+# Output of the former tsc build, replaced by the committed dist/ bundle
 build/
-*.js.map
 .claude/
 analyse/
 TODO.md

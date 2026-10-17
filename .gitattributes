@@ -1,0 +1,5 @@
+# Shipped build output: LF everywhere so the CI "build is up to date" check is platform independent
+dist/** text eol=lf
+
+# Vendored native extension binaries (see vendor/sqlite-vec/README.md)
+vendor/sqlite-vec/bin/** binary
