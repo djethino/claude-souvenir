@@ -1,29 +1,29 @@
 {
-  "sqliteVec": "0.1.6",
+  "sqliteVec": "0.1.9",
   "binaries": {
     "windows-x64": {
-      "package": "sqlite-vec-windows-x64@0.1.6",
-      "integrity": "sha512-Dy9/KlKJDrjuQ/RRkBqGkMZuSh5bTJDMMOFZft9VJZaXzpYxb5alpgdvD4bbKegpDdfPi2BT4+PBivsNJSlMoQ==",
+      "package": "sqlite-vec-windows-x64@0.1.9",
+      "integrity": "sha512-y3gEIyy/17bq2QFPQOWLE68TYWcRZkBQVA2XLrTPHNTOp55xJi/BBBmOm40tVMDMjtP+Elpk6UBUXdaq+46b0Q==",
       "file": "windows-x64/vec0.dll",
-      "sha256": "74e63ab75299804773676a5c757372472e797e03e02a2d8ff5fd91730dbd7531"
+      "sha256": "fcf98662a7ad9dce394b96a88f91032047823831b951c76636787c312a6476e6"
     },
     "linux-x64": {
-      "package": "sqlite-vec-linux-x64@0.1.6",
-      "integrity": "sha512-411tWPswywIzdkp+zsAUav4A03f0FjnNfpZFlOw8fBebFR74RSFkwM8Xryf18gLHiYAXUBI4mjY9+/xjwBjKpg==",
+      "package": "sqlite-vec-linux-x64@0.1.9",
+      "integrity": "sha512-w3tCH8xK2finW8fQJ/m8uqKodXUZ9KAuAar2UIhz4BHILfpE0WM/MTGCRfa7RjYbrYim5Luk3guvMOGI7T7JQA==",
       "file": "linux-x64/vec0.so",
-      "sha256": "f285c46d5496fe7571be40ab40c0b151d091892c141f89a503e02392e0961233"
+      "sha256": "5923730861b86c707cca5602b5f91092f9e52a46706dbc6e269fd4bb9c4498e8"
     },
     "darwin-x64": {
-      "package": "sqlite-vec-darwin-x64@0.1.6",
-      "integrity": "sha512-MFkKjNfJ5pamFHhyTsrqdxALrjuvpSEZdu6Q/0vMxFa6sr5YlfabeT5xGqEbuH0iobsT1Hca5EZxLhLy0jHYkw==",
+      "package": "sqlite-vec-darwin-x64@0.1.9",
+      "integrity": "sha512-KDlVyqQT7pnOhU1ymB9gs7dMbSoVmKHitT+k1/xkjarcX8bBqPxWrGlK/R+C5WmWkfvWwyq5FfXfiBYCBs6PlA==",
       "file": "darwin-x64/vec0.dylib",
-      "sha256": "12b9a80036ec5b5210ced90a0031ba8ab4139e4bbf1e2f361d4953f05588d2e9"
+      "sha256": "d39d33d16d302d57440d9a9cdbe3cc095e8324aa96b979b5171f545a6346996d"
     },
     "darwin-arm64": {
-      "package": "sqlite-vec-darwin-arm64@0.1.6",
-      "integrity": "sha512-5duw/xhM3xE6BCQd//eAkyHgBp9FIwK6veldRhPG96dT6Zpjov3bG02RuE7JAQj0SVJYRW8bJwZ4LxqW0+Q7Dw==",
+      "package": "sqlite-vec-darwin-arm64@0.1.9",
+      "integrity": "sha512-jSsZpE42OfBkGL/ItyJTVCUwl6o6Ka3U5rc4j+UBDIQzC1ulSSKMEhQLthsOnF/MdAf1MuAkYhkdKmmcjaIZQg==",
       "file": "darwin-arm64/vec0.dylib",
-      "sha256": "0dcce2c74747968076eab4b0f9974498ead859f7674b28d5551e1f551ddf8fe2"
+      "sha256": "193e480c50b59a55977d166f4aaf0e1bc8832d6963516e5950f39e4d2ce0b793"
     }
   }
 }

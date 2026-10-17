@@ -3,6 +3,6 @@
   "private": true,
   "description": "Pins the sqlite-vec binaries vendored in bin/ (see README.md). Never installed by Claude Code: it only installs the plugin root package.json.",
   "dependencies": {
-    "sqlite-vec": "0.1.6"
+    "sqlite-vec": "0.1.9"
   }
 }
