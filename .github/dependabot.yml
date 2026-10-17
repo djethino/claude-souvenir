@@ -13,6 +13,11 @@ updates:
       # Node, or code could use APIs that do not exist on users' machines. Bump with engines.node.
       - dependency-name: "@types/node"
         update-types: ["version-update:semver-major"]
+      # MCP SDK v1 generates tool schemas from zod 3; with zod 4 the schemas lose
+      # additionalProperties:false and gain ±2^53 integer bounds, and the bundle grows by
+      # ~600 KB (zod 4 + the SDK's zod/v3 shim). Move to zod 4 together with MCP SDK v2.
+      - dependency-name: "zod"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: github-actions
     directory: "/"
