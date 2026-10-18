@@ -26,7 +26,10 @@ const INSTRUCTIONS = `souvenir searches this user's past Claude Code conversatio
 
 - When the user refers to earlier work ("like we did for X", "as decided last time", "the previous version"), search with souvenir_search before asking them or looking elsewhere, then souvenir_read around_uuid for the full context.
 - After a context compaction, when the summary lacks a detail (a decision, an error message, a value), find it in the current session (souvenir_search with session_id "current") instead of asking the user to repeat it.
-- To explore a project's layout: souvenir_tree.`;
+- For an overview of a directory, use souvenir_tree rather than chains of ls/find/Glob: one call, noise hidden, with line counts (show_lines), recent changes (show_modified) and an extension filter (pattern).
+- When a file was damaged or lost (bad edit, wrong checkout, deletion), look at souvenir_docs "history" before any other attempt. Only the files added to souvenir_docs are kept (set up per project, on request: "list" shows them; nothing added means no snapshots); while Claude Code works, they are snapshotted at most every ~30 s, kept 3 days. Before "restore", "diff" the chosen snapshot against the current file to see what restoring would erase. Restore saves the current state as a snapshot first (it can be undone), unlike a git checkout, which discards uncommitted work for good.
+- For work done in another project, search with project "all" (souvenir_projects lists them).
+- To learn why some code or a commit changed, search the commit hash or the file name in the conversations: the session that made the change holds the reason.`;
 
 const server = new McpServer({ name: 'souvenir', version: __SOUVENIR_VERSION__ }, { instructions: INSTRUCTIONS });
 

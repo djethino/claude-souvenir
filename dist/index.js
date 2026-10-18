@@ -25863,7 +25863,7 @@ async function handleRestore(projectRoot, params) {
   if (snapshot.file_path !== relativePath) {
     return `Error: Snapshot #${params.snapshot_id} belongs to "${snapshot.file_path}", not "${relativePath}".`;
   }
-  let backupSnapshotCreated = false;
+  let backupSnapshotCreated = null;
   if (existsSync8(absolutePath)) {
     try {
       const currentContent = readFileSync4(absolutePath, "utf-8");
@@ -25878,6 +25878,7 @@ async function handleRestore(projectRoot, params) {
       );
     } catch (err) {
       logger.error(`Failed to create backup snapshot for ${relativePath}:`, err);
+      return `Error: not restored. The current "${relativePath}" could not be saved first (${err instanceof Error ? err.message : String(err)}): overwriting it would lose its unsaved changes.`;
     }
   }
   try {
@@ -25888,8 +25889,10 @@ async function handleRestore(projectRoot, params) {
   const lines = [
     `Restored "${relativePath}" from snapshot #${params.snapshot_id} (${snapshot.created_at.slice(0, 19)}).`
   ];
-  if (backupSnapshotCreated) {
-    lines.push("A backup of the previous state was saved as a new snapshot.");
+  if (backupSnapshotCreated === true) {
+    lines.push("The previous state was saved as a new snapshot: restore it to undo this.");
+  } else if (backupSnapshotCreated === false) {
+    lines.push("The previous state was already the latest snapshot: restore it to undo this.");
   }
   lines.push("");
   lines.push('Use souvenir_docs action="history" path="..." to see all versions.');
@@ -26394,8 +26397,11 @@ var INSTRUCTIONS = `souvenir searches this user's past Claude Code conversations
 
 - When the user refers to earlier work ("like we did for X", "as decided last time", "the previous version"), search with souvenir_search before asking them or looking elsewhere, then souvenir_read around_uuid for the full context.
 - After a context compaction, when the summary lacks a detail (a decision, an error message, a value), find it in the current session (souvenir_search with session_id "current") instead of asking the user to repeat it.
-- To explore a project's layout: souvenir_tree.`;
-var server = new McpServer({ name: "souvenir", version: "0.4.2" }, { instructions: INSTRUCTIONS });
+- For an overview of a directory, use souvenir_tree rather than chains of ls/find/Glob: one call, noise hidden, with line counts (show_lines), recent changes (show_modified) and an extension filter (pattern).
+- When a file was damaged or lost (bad edit, wrong checkout, deletion), look at souvenir_docs "history" before any other attempt. Only the files added to souvenir_docs are kept (set up per project, on request: "list" shows them; nothing added means no snapshots); while Claude Code works, they are snapshotted at most every ~30 s, kept 3 days. Before "restore", "diff" the chosen snapshot against the current file to see what restoring would erase. Restore saves the current state as a snapshot first (it can be undone), unlike a git checkout, which discards uncommitted work for good.
+- For work done in another project, search with project "all" (souvenir_projects lists them).
+- To learn why some code or a commit changed, search the commit hash or the file name in the conversations: the session that made the change holds the reason.`;
+var server = new McpServer({ name: "souvenir", version: "0.4.3" }, { instructions: INSTRUCTIONS });
 function withBackgroundIndex(handler) {
   return async (params, extra) => {
     const result = await handler(params, extra);
