@@ -551,8 +551,10 @@ async function handleRestore(
     return `Error: Snapshot #${params.snapshot_id} belongs to "${snapshot.file_path}", not "${relativePath}".`;
   }
 
-  // Safety net: save current file state as a snapshot before overwriting
-  let backupSnapshotCreated = false;
+  // Save the current file state as a snapshot before overwriting, so the restore can be undone.
+  // Without that backup the overwrite would lose the work done since the last snapshot: refuse.
+  // false = the latest snapshot already holds exactly this content
+  let backupSnapshotCreated: boolean | null = null;
   if (existsSync(absolutePath)) {
     try {
       const currentContent = readFileSync(absolutePath, 'utf-8');
@@ -567,6 +569,7 @@ async function handleRestore(
       );
     } catch (err) {
       logger.error(`Failed to create backup snapshot for ${relativePath}:`, err);
+      return `Error: not restored. The current "${relativePath}" could not be saved first (${err instanceof Error ? err.message : String(err)}): overwriting it would lose its unsaved changes.`;
     }
   }
 
@@ -581,8 +584,10 @@ async function handleRestore(
     `Restored "${relativePath}" from snapshot #${params.snapshot_id} (${snapshot.created_at.slice(0, 19)}).`,
   ];
 
-  if (backupSnapshotCreated) {
-    lines.push('A backup of the previous state was saved as a new snapshot.');
+  if (backupSnapshotCreated === true) {
+    lines.push('The previous state was saved as a new snapshot: restore it to undo this.');
+  } else if (backupSnapshotCreated === false) {
+    lines.push('The previous state was already the latest snapshot: restore it to undo this.');
   }
 
   lines.push('');
