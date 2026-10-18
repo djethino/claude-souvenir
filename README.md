@@ -59,7 +59,7 @@ Then run **`/asymptomatik-souvenir:souvenir-init`**: it checks the setup, helps 
 
 | Command | What it does |
 |---------|--------------|
-| `/asymptomatik-souvenir:souvenir-init` | Guided setup: checks the embedding server, changes the settings with you, builds the first index |
+| `/asymptomatik-souvenir:souvenir-init` | Guided setup: checks the embedding server, changes the settings with you, builds the first index. `ollama`, `openai` or `change` as argument goes straight to changing the settings |
 | `/asymptomatik-souvenir:souvenir-status` | Settings, server health, index size and whether it matches the current model |
 | `/asymptomatik-souvenir:souvenir-docs <path>` | Add project files to the search index (`list`, `status`, `build`, `sections <file>` also work) |
 
@@ -138,12 +138,14 @@ Read conversation entries from a session transcript.
 | Parameter | Description |
 |-----------|-------------|
 | `session_id` | Session UUID (from search results or `souvenir_sessions`) or `"current"` |
-| `around_uuid` | Center output around a specific entry UUID from search results |
+| `project` | Project of the session. Default: current (other projects are searched if the session is not found) |
+| `around_uuid` | Center output around a specific entry UUID from search results (`max_entries=1` shows that entry in full) |
 | `from_line` | Start from JSONL line number. Omit to read from the end (most recent) |
 | `max_entries` | Entries per page (1-200, default 20) |
 | `context_turns` | Turns before/after when using `around_uuid` (default 3) |
 | `before_turns` / `after_turns` | Asymmetric context around target |
 | `detail_level` | `conversation` (default), `compact`, `full`, `files` or `tools` |
+| `entry_types` | Comma-separated entry types. Default: `user,assistant,summary` (add `progress` if needed) |
 
 Pagination hints are included in every response for navigation.
 
@@ -173,7 +175,7 @@ Detects orphaned projects (path no longer exists on disk) and orphaned index dat
 
 ### souvenir_index
 
-Manage the transcript index.
+Manage the transcript index (`status` and `check` also report whether this project's file index matches the current model).
 
 | Parameter | Description |
 |-----------|-------------|
@@ -228,7 +230,7 @@ Manage project file indexing (docs, code, config) and file versioning.
   - **Transcript index**: `~/.claude/ASymptOmatik/souvenir/souvenir.db` (or `db_path`), shared by all projects
   - **Project file index and snapshots**: `<project>/.claude/ASymptOmatik/souvenir/docs.db`, one per project
 - With the default Ollama setup, no text leaves your machine. With the `openai` provider, the text of indexed chunks and of your search queries is sent to the configured server.
-- Deleting these files removes the indexes; they are rebuilt from the transcripts on the next search.
+- Deleting the transcript index is harmless: it is rebuilt from the transcripts on the next search. Deleting a project's `docs.db` also removes its list of added files and their snapshots: add the files again with `souvenir_docs`, the snapshots are lost.
 
 ## Troubleshooting
 
@@ -293,7 +295,7 @@ src/
 │   ├── ollama.ts          # Ollama provider (default)
 │   ├── openai.ts          # OpenAI-compatible provider
 │   └── chunker.ts         # Transcript → chunks
-├── search/                # Text search, scoring, density boost
+├── search/                # Text and semantic search, density boost
 └── utils/                 # Logger, paths
 ```
 
