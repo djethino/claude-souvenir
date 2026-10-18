@@ -95,7 +95,7 @@ server.tool(
   'souvenir_read',
   `Read a Claude Code session transcript. Returns clean, formatted messages — internal noise (file snapshots, thinking blocks) is automatically filtered out, and tool calls are condensed into readable summaries.
 
-IMPORTANT: session_id must come from souvenir_search or souvenir_sessions. Do NOT guess session IDs.
+IMPORTANT: session_id must be "current" (this session) or come from souvenir_search or souvenir_sessions. Do NOT guess session IDs.
 
 Reading modes:
 - Default (no from_line): reads the LAST entries (most recent). Best for catching up after compaction.
@@ -218,7 +218,7 @@ server.tool(
   'souvenir_docs',
   `This tool powers souvenir_search source="code"/"docs"/"config"/"project". Without it, semantic code search has nothing to search through. Add project files here so you can then ask conceptual questions via souvenir_search ("where is auth checked?", "find deprecated patterns", "how does error handling work?") that Grep cannot answer.
 
-Also acts as a safety net: files are automatically versioned every ~30s. If a destructive action happens (bad checkout, accidental delete, broken refactor), use "history"/"diff"/"restore" to recover any file from the last 3 days.
+The added files are also versioned: while Claude Code works, they are snapshotted at most every ~30 s, kept 3 days (files never added have no snapshots; "list" shows what is tracked). After a destructive action (bad checkout, accidental delete, broken refactor): "history", then "diff" the chosen snapshot against the current file to see what restoring would erase, then "restore" (it saves the current state as a snapshot first, so it can be undone).
 
 Setup (once per project): "add" path="src" → "add" path="docs" → "build". After that, background indexing keeps everything up to date.
 
