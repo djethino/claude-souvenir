@@ -26390,10 +26390,12 @@ function scheduleBackgroundIndex() {
 }
 
 // src/index.ts
-var server = new McpServer({
-  name: "souvenir",
-  version: "0.4.1"
-});
+var INSTRUCTIONS = `souvenir searches this user's past Claude Code conversations and the project's indexed files.
+
+- When the user refers to earlier work ("like we did for X", "as decided last time", "the previous version"), search with souvenir_search before asking them or looking elsewhere, then souvenir_read around_uuid for the full context.
+- After a context compaction, when the summary lacks a detail (a decision, an error message, a value), find it in the current session (souvenir_search with session_id "current") instead of asking the user to repeat it.
+- To explore a project's layout: souvenir_tree.`;
+var server = new McpServer({ name: "souvenir", version: "0.4.2" }, { instructions: INSTRUCTIONS });
 function withBackgroundIndex(handler) {
   return async (params, extra) => {
     const result = await handler(params, extra);
