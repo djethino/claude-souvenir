@@ -1,6 +1,6 @@
 {
   "name": "asymptomatik-souvenir",
-  "version": "0.4.4",
+  "version": "0.4.5",
   "description": "MCP server for searching and browsing Claude Code conversation transcripts",
   "type": "module",
   "bin": {

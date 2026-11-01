@@ -26457,7 +26457,7 @@ var INSTRUCTIONS = `souvenir searches this user's past Claude Code conversations
 - When a file was damaged or lost (bad edit, wrong checkout, deletion), look at souvenir_docs "history" before any other attempt. Only the files added to souvenir_docs are kept (set up per project, on request: "list" shows them; nothing added means no snapshots); while Claude Code works, they are snapshotted at most every ~30 s, kept 3 days. Before "restore", "diff" the chosen snapshot against the current file to see what restoring would erase. Restore saves the current state as a snapshot first (it can be undone), unlike a git checkout, which discards uncommitted work for good.
 - For work done in another project, search with project "all" (souvenir_projects lists them).
 - To learn why some code or a commit changed, search the commit hash or the file name in the conversations: the session that made the change holds the reason.`;
-var server = new McpServer({ name: "souvenir", version: "0.4.4" }, { instructions: INSTRUCTIONS });
+var server = new McpServer({ name: "souvenir", version: "0.4.5" }, { instructions: INSTRUCTIONS });
 function withBackgroundIndex(handler) {
   return async (params, extra) => {
     const result = await handler(params, extra);
