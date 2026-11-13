@@ -35505,8 +35505,11 @@ function readablePrompt(text) {
 function formatEntryCount(count) {
   return count < 0 ? "unknown" : String(count);
 }
+function firstPromptOf(meta3) {
+  return meta3.firstPrompt && meta3.firstPrompt !== "No prompt" ? readablePrompt(meta3.firstPrompt) : "";
+}
 function sessionTitle(meta3) {
-  return readablePrompt(meta3.summary || meta3.firstPrompt || "No summary");
+  return meta3.summary ? readablePrompt(meta3.summary) : firstPromptOf(meta3) || "No summary";
 }
 function formatSessionHeader(meta3) {
   const created = formatTimestamp(meta3.created);
@@ -35529,7 +35532,7 @@ function formatSessionListEntry(meta3, index) {
     `${index + 1}. [${date5}${relative3 ? ` - ${relative3}` : ""}] ${truncTitle}`,
     `   session_id: ${meta3.sessionId}`
   ];
-  const first = meta3.firstPrompt ? readablePrompt(meta3.firstPrompt) : "";
+  const first = firstPromptOf(meta3);
   if (first && first !== title) {
     lines.push(`   First: "${first.length > 80 ? first.slice(0, 80) + "..." : first}"`);
   }
@@ -35541,7 +35544,8 @@ function formatSessionListEntry(meta3, index) {
 }
 function formatSearchResult(result, index, sessionHitCount) {
   const ts = result.timestamp ? formatTimestampCompact(result.timestamp) : "???";
-  const session = result.sessionSummary ? result.sessionSummary.slice(0, 80) : "No summary";
+  const title = (result.sessionSummary ? readablePrompt(result.sessionSummary) : firstPromptOf({ firstPrompt: result.sessionFirstPrompt ?? "" }) || "No summary").replace(/\s+/g, " ").trim();
+  const session = title.length > 80 ? title.slice(0, 80) + "..." : title;
   const scoreStr = result.score.toFixed(2);
   const lines = [
     `--- Result ${index + 1} (score: ${scoreStr}) ---`,
@@ -39833,8 +39837,8 @@ function sessionLabel(session) {
 }
 function sessionDescription(session) {
   const parts = [];
-  if (session.summary && session.firstPrompt && session.firstPrompt !== session.summary) {
-    const first = readablePrompt(session.firstPrompt).replace(/\s+/g, " ").trim();
+  const first = firstPromptOf(session).replace(/\s+/g, " ").trim();
+  if (session.summary && first && first !== session.summary) {
     parts.push(`First prompt: "${first.length > 100 ? first.slice(0, 100) + "\u2026" : first}"`);
   }
   parts.push(`${formatEntryCount(session.messageCount)} entries`);
@@ -39971,7 +39975,7 @@ var INSTRUCTIONS = `souvenir searches this user's past Claude Code conversations
 - For work done in another project, search with project "all" (souvenir_projects lists them).
 - To learn why some code or a commit changed, search the commit hash or the file name in the conversations: the session that made the change holds the reason.
 - Past sessions are also resources (souvenir://session/<session_id>) that the user can cite with @; the @ list holds the 50 most recent of the project, souvenir_sessions lists them all, page by page.`;
-var server = new McpServer({ name: "souvenir", version: "0.5.0" }, { instructions: INSTRUCTIONS });
+var server = new McpServer({ name: "souvenir", version: "0.5.1" }, { instructions: INSTRUCTIONS });
 var READ_ONLY = { readOnlyHint: true };
 var LARGE_RESULT_META = { "anthropic/maxResultSizeChars": 1e5 };
 function toolHandler(name, handler) {

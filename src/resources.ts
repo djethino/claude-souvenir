@@ -2,7 +2,7 @@ import { ResourceNotFoundError, ResourceTemplate, type McpServer } from '@modelc
 import { getConfig } from './config.js';
 import { getSessions } from './transcript/discovery.js';
 import type { SessionIndexEntry } from './transcript/types.js';
-import { formatEntryCount, readablePrompt, sessionTitle } from './transcript/formatter.js';
+import { firstPromptOf, formatEntryCount, sessionTitle } from './transcript/formatter.js';
 import { readSessionDigest } from './tools/read.js';
 
 /** Sessions listed for @ mentions; older ones stay readable by URI and through souvenir_sessions. */
@@ -22,8 +22,8 @@ export function sessionLabel(session: SessionIndexEntry): string {
 /** One line about a session beyond its label: first prompt (when the label shows a summary), size, branch, id. */
 function sessionDescription(session: SessionIndexEntry): string {
   const parts: string[] = [];
-  if (session.summary && session.firstPrompt && session.firstPrompt !== session.summary) {
-    const first = readablePrompt(session.firstPrompt).replace(/\s+/g, ' ').trim();
+  const first = firstPromptOf(session).replace(/\s+/g, ' ').trim();
+  if (session.summary && first && first !== session.summary) {
     parts.push(`First prompt: "${first.length > 100 ? first.slice(0, 100) + '…' : first}"`);
   }
   parts.push(`${formatEntryCount(session.messageCount)} entries`);
