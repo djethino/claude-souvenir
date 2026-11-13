@@ -26,6 +26,7 @@ import {
 import { buildDocsIndex, resolveSourceFiles } from '../docs/indexer.js';
 import { detectCategory } from '../docs/chunker.js';
 import { computeDiff, formatUnifiedDiff } from '../docs/diff.js';
+import { DECLINED, type Confirm } from './confirm.js';
 
 export async function handleSouvenirDocs(params: {
   action: 'add' | 'remove' | 'list' | 'status' | 'build' | 'clear' | 'sections' | 'history' | 'diff' | 'restore' | 'vacuum';
@@ -35,13 +36,9 @@ export async function handleSouvenirDocs(params: {
   source_id?: number;
   rebuild?: boolean;
   snapshot_id?: number;
-}): Promise<string> {
+}, confirm: Confirm): Promise<string> {
   const config = getConfig();
   const projectRoot = config.cwd;
-
-  if (!projectRoot) {
-    return 'Error: Could not determine project root directory.';
-  }
 
   switch (params.action) {
     case 'add':
@@ -53,9 +50,9 @@ export async function handleSouvenirDocs(params: {
     case 'status':
       return handleStatus(projectRoot);
     case 'build':
-      return handleBuild(projectRoot, config, params.rebuild ?? false);
+      return handleBuild(projectRoot, config, params.rebuild ?? false, confirm);
     case 'clear':
-      return handleClear(projectRoot);
+      return handleClear(projectRoot, confirm);
     case 'sections':
       return handleSections(projectRoot, params);
     case 'history':
@@ -63,7 +60,7 @@ export async function handleSouvenirDocs(params: {
     case 'diff':
       return handleFileDiff(projectRoot, params);
     case 'restore':
-      return handleRestore(projectRoot, params);
+      return handleRestore(projectRoot, params, confirm);
     case 'vacuum':
       return handleVacuum(projectRoot);
     default:
@@ -300,6 +297,7 @@ async function handleBuild(
   projectRoot: string,
   config: ReturnType<typeof getConfig>,
   rebuild: boolean,
+  confirm: Confirm,
 ): Promise<string> {
   const sources = docsDbExists(projectRoot) ? getDocSources(projectRoot) : [];
 
@@ -314,6 +312,12 @@ async function handleBuild(
     if (dbSources.length === 0) {
       return 'No sources configured. Use souvenir_docs action="add" to track files first.';
     }
+  }
+
+  if (rebuild && !confirm(
+    'souvenir: drop and re-index every tracked project file? Re-embedding can take several minutes.',
+  )) {
+    return DECLINED;
   }
 
   const provider = getOrCreateProvider(config);
@@ -347,9 +351,16 @@ async function handleBuild(
 // Clear
 // ---------------------------------------------------------------------------
 
-async function handleClear(projectRoot: string): Promise<string> {
+async function handleClear(projectRoot: string, confirm: Confirm): Promise<string> {
   if (!docsDbExists(projectRoot)) {
     return 'No docs database found. Nothing to clear.';
+  }
+
+  if (!confirm(
+    'souvenir: clear the whole project file index (chunks, sections, index state)? ' +
+    'The tracked sources are kept; "build" re-indexes them.',
+  )) {
+    return DECLINED;
   }
 
   clearAllDocs(projectRoot);
@@ -527,6 +538,7 @@ async function handleFileDiff(
 async function handleRestore(
   projectRoot: string,
   params: { path?: string; snapshot_id?: number },
+  confirm: Confirm,
 ): Promise<string> {
   if (!params.path) {
     return 'Error: "path" parameter is required for "restore" action.';
@@ -549,6 +561,13 @@ async function handleRestore(
   }
   if (snapshot.file_path !== relativePath) {
     return `Error: Snapshot #${params.snapshot_id} belongs to "${snapshot.file_path}", not "${relativePath}".`;
+  }
+
+  if (!confirm(
+    `souvenir: overwrite "${relativePath}" with snapshot #${params.snapshot_id} (${snapshot.created_at.slice(0, 19)})? ` +
+    'The current file is saved as a snapshot first, so this can be undone.',
+  )) {
+    return DECLINED;
   }
 
   // Save the current file state as a snapshot before overwriting, so the restore can be undone.

@@ -1,6 +1,7 @@
 import { statSync } from 'fs';
 import { basename } from 'path';
 import { logger } from '../utils/logger.js';
+import { serialized } from '../utils/serial.js';
 import { listTranscriptFiles, loadSessionIndex } from '../transcript/discovery.js';
 import { chunkTranscript } from '../embedding/chunker.js';
 import { type EmbeddingProvider, sameIdentity } from '../embedding/provider.js';
@@ -22,31 +23,42 @@ export interface IndexProgress {
   detail?: string;
 }
 
-/**
- * Build the semantic index for one or more projects.
- *
- * A rebuild after an embedding model change resets the whole index (all projects share one vector
- * space) and re-indexes the requested projects; the others are re-indexed on their next search
- * or with project="all". resetAll reports it.
- */
-export async function buildIndex(
-  provider: EmbeddingProvider,
-  projectDirs: string[],
-  options: {
-    sessionId?: string;
-    includeSubagents?: boolean;
-    rebuild?: boolean;
-    onProgress?: (progress: IndexProgress) => void;
-    signal?: AbortSignal;
-  } = {},
-): Promise<{
+interface BuildIndexOptions {
+  sessionId?: string;
+  includeSubagents?: boolean;
+  rebuild?: boolean;
+  onProgress?: (progress: IndexProgress) => void;
+  signal?: AbortSignal;
+}
+
+interface BuildIndexResult {
   totalChunks: number;
   totalEmbedded: number;
   filesProcessed: number;
   skipped: number;
   errors: string[];
   resetAll: boolean;
-}> {
+}
+
+/**
+ * Build the semantic index for one or more projects.
+ *
+ * Builds in this process run one after the other: read-only tools are called in parallel
+ * (searches auto-index before searching, tools schedule a background index), and two concurrent
+ * builds would embed the same new chunks twice. A queued build finds the files the previous one
+ * indexed unchanged and skips them.
+ *
+ * A rebuild after an embedding model change resets the whole index (all projects share one vector
+ * space) and re-indexes the requested projects; the others are re-indexed on their next search
+ * or with project="all". resetAll reports it.
+ */
+export const buildIndex = serialized(runBuildIndex);
+
+async function runBuildIndex(
+  provider: EmbeddingProvider,
+  projectDirs: string[],
+  options: BuildIndexOptions = {},
+): Promise<BuildIndexResult> {
   const { sessionId, includeSubagents = true, rebuild = false, onProgress, signal } = options;
 
   // The provider's identity (model, vector size) decides how the index is prepared

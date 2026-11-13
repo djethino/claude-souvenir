@@ -9,12 +9,13 @@ import { describeIdentity, sameIdentity } from '../embedding/provider.js';
 import { findModelPrompts } from '../embedding/models.js';
 import { getOrCreateProvider, createProgressNotifier, errorMessage } from './helpers.js';
 import type { ToolContext } from './helpers.js';
+import { DECLINED, type Confirm } from './confirm.js';
 
 export async function handleSouvenirIndex(params: {
   action: 'status' | 'build' | 'rebuild' | 'vacuum' | 'check';
   project?: string;
   session_id?: string;
-}, ctx?: ToolContext): Promise<string> {
+}, ctx: ToolContext, confirm: Confirm): Promise<string> {
   let config: ReturnType<typeof getConfig>;
   try {
     config = getConfig();
@@ -31,7 +32,7 @@ export async function handleSouvenirIndex(params: {
 
     case 'build':
     case 'rebuild':
-      return await runBuild(config, { ...params, action: params.action as 'build' | 'rebuild' }, ctx);
+      return await runBuild(config, { ...params, action: params.action as 'build' | 'rebuild' }, ctx, confirm);
 
     case 'vacuum':
       return runVacuum();
@@ -135,7 +136,8 @@ async function runCheck(config: ReturnType<typeof getConfig>): Promise<string> {
 async function runBuild(
   config: ReturnType<typeof getConfig>,
   params: { action: 'build' | 'rebuild'; project?: string; session_id?: string },
-  ctx?: ToolContext,
+  ctx: ToolContext,
+  confirm: Confirm,
 ): Promise<string> {
   // Resolve project dirs
   let projectDirs: string[];
@@ -153,6 +155,15 @@ async function runBuild(
   const provider = getOrCreateProvider(config);
 
   const isRebuild = params.action === 'rebuild';
+  if (isRebuild) {
+    const target = params.project === 'all' ? `all ${projectDirs.length} projects` : projectDirs[0];
+    if (!confirm(
+      `souvenir: drop and re-index the search index of ${target}? Re-embedding can take several minutes. ` +
+      'If the embedding model changed since the index was built, the index of every project is reset.',
+    )) {
+      return DECLINED;
+    }
+  }
 
   try {
     const result = await buildIndex(provider, projectDirs, {

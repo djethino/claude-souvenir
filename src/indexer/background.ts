@@ -102,7 +102,7 @@ export function scheduleBackgroundIndex(): void {
 
       // 2. Index docs (local DB) if sources are configured
       const projectRoot = config.cwd;
-      if (projectRoot && docsDbExists(projectRoot)) {
+      if (docsDbExists(projectRoot)) {
         const sources = getDocSources(projectRoot);
         if (sources.length > 0) {
           const docsResult = await buildDocsIndex(projectRoot, provider, {

@@ -1,7 +1,7 @@
 import { readFileSync, readdirSync, existsSync, statSync, openSync, readSync, closeSync } from 'fs';
 import { join, basename } from 'path';
 import { logger } from '../utils/logger.js';
-import { getProjectsDir, getProjectTranscriptDir } from '../utils/paths.js';
+import { getProjectsDir, getProjectTranscriptDir, isProjectPath } from '../utils/paths.js';
 import type { SessionIndex, SessionIndexEntry } from './types.js';
 
 // Cache session indexes in memory (small data, read frequently)
@@ -288,6 +288,8 @@ function extractMinimalMetadata(
   let firstPrompt = '';
   let firstTimestamp = '';
   let messageCount = 0;
+  let gitBranch = '';
+  let projectPath = '';
 
   for (const line of lines) {
     if (!line.trim()) continue;
@@ -304,8 +306,18 @@ function extractMinimalMetadata(
         messageCount++;
       }
 
-      // Capture first user message as firstPrompt
-      if (entry.type === 'user' && !firstPrompt) {
+      if (entry.gitBranch && !gitBranch) {
+        gitBranch = entry.gitBranch;
+      }
+
+      // The project's real path: a cwd that encodes to this project dir (a session can start elsewhere)
+      if (!projectPath && typeof entry.cwd === 'string' && isProjectPath(entry.cwd, projectDir)) {
+        projectPath = entry.cwd;
+      }
+
+      // Capture first user message as firstPrompt (isMeta entries are Claude Code's own
+      // context, such as the <local-command-caveat> recorded before a slash command)
+      if (entry.type === 'user' && !entry.isMeta && !firstPrompt) {
         if (typeof entry.message?.content === 'string') {
           firstPrompt = entry.message.content.slice(0, 200);
         } else if (Array.isArray(entry.message?.content)) {
@@ -332,8 +344,9 @@ function extractMinimalMetadata(
     messageCount,
     created: firstTimestamp || new Date(stat.birthtimeMs).toISOString(),
     modified: new Date(stat.mtimeMs).toISOString(),
-    gitBranch: '',
-    projectPath: projectDir,
+    gitBranch,
+    projectPath, // '' when no entry in the first 64 KB ran in the project root
+
     isSidechain: false,
   };
 }
@@ -350,10 +363,15 @@ export function resolveCurrentSession(projectDir?: string): string | null {
 
 /**
  * Get project info: original path and session count.
+ *
+ * originalPath comes from sessions-index.json, else from the transcripts (the cwd of an entry run
+ * in the project root). It is null when neither gives it: the dir name cannot be decoded back
+ * ("-" stands for any non-alphanumeric character), and a guessed path would make a live project
+ * look deleted.
  */
 export function getProjectInfo(projectDir: string): {
   dirName: string;
-  originalPath: string;
+  originalPath: string | null;
   sessionCount: number;
   latestDate: string | null;
   oldestDate: string | null;
@@ -370,7 +388,7 @@ export function getProjectInfo(projectDir: string): {
 
   return {
     dirName: projectDir,
-    originalPath: index?.originalPath || projectDir.replace(/--/g, '/'),
+    originalPath: index?.originalPath || allEntries.find((e) => e.projectPath && isProjectPath(e.projectPath, projectDir))?.projectPath || null,
     sessionCount: nonSidechain.length,
     latestDate: dates.length ? new Date(Math.max(...dates)).toISOString() : null,
     oldestDate: dates.length ? new Date(Math.min(...dates)).toISOString() : null,

@@ -1,5 +1,5 @@
 import { homedir } from 'os';
-import { join, sep } from 'path';
+import { join } from 'path';
 import { readPluginOptions } from '../options.js';
 
 /**
@@ -33,27 +33,25 @@ export function getDbPath(): string {
 
 /**
  * Convert a working directory path to a Claude project directory name.
- * Claude Code replaces each special char (: \ /) with a single hyphen.
- * e.g. "D:\projet\claude-plugins" -> "D--projet-claude-plugins"
- *       (D + ":" → "-" + "\" → "-" = "D--", then "\" → "-" for each separator)
+ * Claude Code replaces every character that is not a letter or a digit with a hyphen:
+ * "D:\projet\claude-plugins" -> "D--projet-claude-plugins", "D:\projet\a - b" -> "D--projet-a---b".
+ * The case is kept as given (on Windows the same project can appear as "D--…" and "d--…").
  */
 export function cwdToProjectDir(cwd: string): string {
-  // Remove trailing slashes
-  const cleaned = cwd.replace(/[\\/]+$/, '');
-  // Replace : and path separators with single -
-  return cleaned.replace(/:/g, '-').replace(/[\\/]/g, '-');
+  return cwd.replace(/[\\/]+$/, '').replace(/[^a-zA-Z0-9]/g, '-');
+}
+
+/** Whether a path is the root of the project stored in this directory (case-insensitive, like Windows paths). */
+export function isProjectPath(path: string, projectDir: string): boolean {
+  return cwdToProjectDir(path).toLowerCase() === projectDir.toLowerCase();
 }
 
 /**
  * Resolve a project identifier to the project directory name.
- * Accepts either a dir name (D--projet-xxx) or a path (D:\projet\xxx).
+ * Accepts either a dir name (D--projet-xxx) or a path (D:\projet\xxx); dir names have no separator.
  */
 export function resolveProjectDir(project: string): string {
-  // If it looks like a path (contains \ or / with more than just --), convert it
-  if (project.includes(sep) || (project.includes('/') && !project.startsWith('D--'))) {
-    return cwdToProjectDir(project);
-  }
-  return project;
+  return /[\\/]/.test(project) ? cwdToProjectDir(project) : project;
 }
 
 /**

@@ -16799,14 +16799,14 @@ var nonoptionalProcessor = (schema, ctx, _json, params) => {
 var UNREPRESENTABLE_DEFAULT = /* @__PURE__ */ Symbol();
 function serializeDefaultValue(value, schema, ctx, json2, params) {
   let unrepresentable = false;
-  const serialized = JSON.stringify(value, (_, val) => {
+  const serialized2 = JSON.stringify(value, (_, val) => {
     if (typeof val !== "bigint")
       return val;
     unrepresentable = true;
     return null;
   });
   if (!unrepresentable)
-    return JSON.parse(serialized);
+    return JSON.parse(serialized2);
   handleUnrepresentable(schema, ctx, json2, params, "BigInt defaults cannot be represented in JSON Schema");
   return UNREPRESENTABLE_DEFAULT;
 }
@@ -24098,6 +24098,29 @@ var inputRequired = Object.assign(buildInputRequired, {
     return { method: "roots/list" };
   }
 });
+function inputResponse(responses, key) {
+  if (responses === void 0 || typeof responses !== "object" || responses === null) return { kind: "missing" };
+  const entry = responses[key];
+  if (entry === null || typeof entry !== "object" || Array.isArray(entry)) return { kind: "missing" };
+  const candidate = entry;
+  if (candidate["action"] === "accept" || candidate["action"] === "decline" || candidate["action"] === "cancel") {
+    const content = candidate["content"];
+    return {
+      kind: "elicit",
+      action: candidate["action"],
+      ...content !== null && typeof content === "object" && !Array.isArray(content) && { content }
+    };
+  }
+  if (Array.isArray(candidate["roots"])) return {
+    kind: "roots",
+    roots: candidate["roots"]
+  };
+  if (typeof candidate["role"] === "string" && candidate["content"] !== void 0) return {
+    kind: "sampling",
+    result: candidate
+  };
+  return { kind: "missing" };
+}
 var REQUEST_STATE_ONLY_LEG_PACING_MS = 250;
 function inputRequiredRoundsExceededMessage(method, maxRounds) {
   return `Multi-round-trip request '${method}' still required input after ${maxRounds} rounds (inputRequired.maxRounds)`;
@@ -25318,6 +25341,208 @@ function validateAndWarnToolName(name) {
   issueToolNameWarning(name, result.warnings);
   return result.isValid;
 }
+var MAX_TEMPLATE_LENGTH = 1e6;
+var MAX_VARIABLE_LENGTH = 1e6;
+var MAX_TEMPLATE_EXPRESSIONS = 1e4;
+var MAX_REGEX_LENGTH = 1e6;
+var UriTemplate = class UriTemplate2 {
+  /**
+  * Returns true if the given string contains any URI template expressions.
+  * A template expression is a sequence of characters enclosed in curly braces,
+  * like `{foo}` or `{?bar}`.
+  */
+  static isTemplate(str) {
+    return /\{[^}\s]+\}/.test(str);
+  }
+  static validateLength(str, max, context) {
+    if (str.length > max) throw new Error(`${context} exceeds maximum length of ${max} characters (got ${str.length})`);
+  }
+  template;
+  parts;
+  get variableNames() {
+    return this.parts.flatMap((part) => typeof part === "string" ? [] : part.names);
+  }
+  constructor(template) {
+    UriTemplate2.validateLength(template, MAX_TEMPLATE_LENGTH, "Template");
+    this.template = template;
+    this.parts = this.parse(template);
+  }
+  toString() {
+    return this.template;
+  }
+  parse(template) {
+    const parts = [];
+    let currentText = "";
+    let i = 0;
+    let expressionCount = 0;
+    while (i < template.length) if (template[i] === "{") {
+      if (currentText) {
+        parts.push(currentText);
+        currentText = "";
+      }
+      const end = template.indexOf("}", i);
+      if (end === -1) throw new Error("Unclosed template expression");
+      expressionCount++;
+      if (expressionCount > MAX_TEMPLATE_EXPRESSIONS) throw new Error(`Template contains too many expressions (max ${MAX_TEMPLATE_EXPRESSIONS})`);
+      const expr = template.slice(i + 1, end);
+      const operator = this.getOperator(expr);
+      const exploded = expr.includes("*");
+      const names = this.getNames(expr);
+      const name = names[0];
+      for (const name$1 of names) UriTemplate2.validateLength(name$1, MAX_VARIABLE_LENGTH, "Variable name");
+      parts.push({
+        name,
+        operator,
+        names,
+        exploded
+      });
+      i = end + 1;
+    } else {
+      currentText += template[i];
+      i++;
+    }
+    if (currentText) parts.push(currentText);
+    return parts;
+  }
+  getOperator(expr) {
+    return [
+      "+",
+      "#",
+      ".",
+      "/",
+      "?",
+      "&"
+    ].find((op) => expr.startsWith(op)) || "";
+  }
+  getNames(expr) {
+    const operator = this.getOperator(expr);
+    return expr.slice(operator.length).split(",").map((name) => name.replace("*", "").trim()).filter((name) => name.length > 0);
+  }
+  encodeValue(value, operator) {
+    UriTemplate2.validateLength(value, MAX_VARIABLE_LENGTH, "Variable value");
+    if (operator === "+" || operator === "#") return encodeURI(value);
+    return encodeURIComponent(value);
+  }
+  expandPart(part, variables) {
+    if (part.operator === "?" || part.operator === "&") {
+      const pairs = part.names.map((name) => {
+        const value$1 = variables[name];
+        if (value$1 === void 0) return "";
+        return `${name}=${Array.isArray(value$1) ? value$1.map((v) => this.encodeValue(v, part.operator)).join(",") : this.encodeValue(value$1.toString(), part.operator)}`;
+      }).filter((pair) => pair.length > 0);
+      if (pairs.length === 0) return "";
+      return (part.operator === "?" ? "?" : "&") + pairs.join("&");
+    }
+    if (part.names.length > 1) {
+      const values = part.names.map((name) => variables[name]).filter((v) => v !== void 0);
+      if (values.length === 0) return "";
+      return values.map((v) => Array.isArray(v) ? v[0] : v).join(",");
+    }
+    const value = variables[part.name];
+    if (value === void 0) return "";
+    const encoded = (Array.isArray(value) ? value : [value]).map((v) => this.encodeValue(v, part.operator));
+    switch (part.operator) {
+      case "":
+        return encoded.join(",");
+      case "+":
+        return encoded.join(",");
+      case "#":
+        return "#" + encoded.join(",");
+      case ".":
+        return "." + encoded.join(".");
+      case "/":
+        return "/" + encoded.join("/");
+      default:
+        return encoded.join(",");
+    }
+  }
+  expand(variables) {
+    let result = "";
+    let hasQueryParam = false;
+    for (const part of this.parts) {
+      if (typeof part === "string") {
+        result += part;
+        continue;
+      }
+      const expanded = this.expandPart(part, variables);
+      if (!expanded) continue;
+      result += (part.operator === "?" || part.operator === "&") && hasQueryParam ? expanded.replace("?", "&") : expanded;
+      if (part.operator === "?" || part.operator === "&") hasQueryParam = true;
+    }
+    return result;
+  }
+  escapeRegExp(str) {
+    return str.replaceAll(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`);
+  }
+  partToRegExp(part) {
+    const patterns = [];
+    for (const name$1 of part.names) UriTemplate2.validateLength(name$1, MAX_VARIABLE_LENGTH, "Variable name");
+    if (part.operator === "?" || part.operator === "&") {
+      for (let i = 0; i < part.names.length; i++) {
+        const name$1 = part.names[i];
+        const prefix = i === 0 ? "\\" + part.operator : "&";
+        patterns.push({
+          pattern: prefix + this.escapeRegExp(name$1) + "=([^&]+)",
+          name: name$1
+        });
+      }
+      return patterns;
+    }
+    let pattern;
+    const name = part.name;
+    switch (part.operator) {
+      case "":
+        pattern = part.exploded ? "([^/,]+(?:,[^/,]+)*)" : "([^/,]+)";
+        break;
+      case "+":
+      case "#":
+        pattern = "(.+)";
+        break;
+      case ".":
+        pattern = String.raw`\.([^/,]+)`;
+        break;
+      case "/":
+        pattern = "/" + (part.exploded ? "([^/,]+(?:,[^/,]+)*)" : "([^/,]+)");
+        break;
+      default:
+        pattern = "([^/]+)";
+    }
+    patterns.push({
+      pattern,
+      name
+    });
+    return patterns;
+  }
+  match(uri) {
+    UriTemplate2.validateLength(uri, MAX_TEMPLATE_LENGTH, "URI");
+    let pattern = "^";
+    const names = [];
+    for (const part of this.parts) if (typeof part === "string") pattern += this.escapeRegExp(part);
+    else {
+      const patterns = this.partToRegExp(part);
+      for (const { pattern: partPattern2, name } of patterns) {
+        pattern += partPattern2;
+        names.push({
+          name,
+          exploded: part.exploded
+        });
+      }
+    }
+    pattern += "$";
+    UriTemplate2.validateLength(pattern, MAX_REGEX_LENGTH, "Generated regex pattern");
+    const regex = new RegExp(pattern);
+    const match = uri.match(regex);
+    if (!match) return null;
+    const result = {};
+    for (const [i, name_] of names.entries()) {
+      const { name, exploded } = name_;
+      const value = match[i + 1];
+      const cleanName = name.replace("*", "");
+      result[cleanName] = exploded && value.includes(",") ? value.split(",") : value;
+    }
+    return result;
+  }
+};
 function isZodV4Schema(v) {
   return typeof v === "object" && v !== null && "_zod" in v;
 }
@@ -34300,6 +34525,31 @@ var McpServer = class {
     if (this.isConnected()) this.server.sendPromptListChanged();
   }
 };
+var ResourceTemplate = class {
+  _uriTemplate;
+  constructor(uriTemplate, _callbacks) {
+    this._callbacks = _callbacks;
+    this._uriTemplate = typeof uriTemplate === "string" ? new UriTemplate(uriTemplate) : uriTemplate;
+  }
+  /**
+  * Gets the URI template pattern.
+  */
+  get uriTemplate() {
+    return this._uriTemplate;
+  }
+  /**
+  * Gets the list callback, if one was provided.
+  */
+  get listCallback() {
+    return this._callbacks.list;
+  }
+  /**
+  * Gets the callback for completing a specific URI template variable, if one was provided.
+  */
+  completeCallback(variable) {
+    return this._callbacks.complete?.[variable];
+  }
+};
 function createToolExecutor(inputSchema, handler) {
   if (inputSchema) {
     const callback$1 = handler;
@@ -34504,138 +34754,6 @@ var logger = {
   }
 };
 
-// src/utils/paths.ts
-import { homedir } from "os";
-import { join, sep } from "path";
-
-// src/options.ts
-import { isAbsolute } from "path";
-var PROVIDERS = ["ollama", "openai"];
-function option(key) {
-  const value = process.env[`CLAUDE_PLUGIN_OPTION_${key}`]?.trim();
-  return value ? value : void 0;
-}
-function readPluginOptions() {
-  const provider = option("EMBEDDING_PROVIDER") ?? "ollama";
-  if (!PROVIDERS.includes(provider)) {
-    throw new Error(`Invalid embedding_provider "${provider}": use ${PROVIDERS.join(" or ")}`);
-  }
-  const dimensionsText = option("EMBEDDING_DIMENSIONS");
-  let embeddingDimensions;
-  if (dimensionsText !== void 0) {
-    embeddingDimensions = Number(dimensionsText);
-    if (!Number.isInteger(embeddingDimensions) || embeddingDimensions <= 0) {
-      throw new Error(`Invalid embedding_dimensions "${dimensionsText}": expected a positive integer`);
-    }
-  }
-  const dbPath = option("DB_PATH");
-  if (dbPath !== void 0 && !isAbsolute(dbPath)) {
-    throw new Error(`Invalid db_path "${dbPath}": it must be an absolute path`);
-  }
-  return {
-    embeddingProvider: provider,
-    embeddingUrl: option("EMBEDDING_URL"),
-    embeddingModel: option("EMBEDDING_MODEL"),
-    embeddingDimensions,
-    embeddingApiKey: option("EMBEDDING_API_KEY"),
-    dbPath
-  };
-}
-
-// src/utils/paths.ts
-function getClaudeDir() {
-  return process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude");
-}
-function getProjectsDir() {
-  return join(getClaudeDir(), "projects");
-}
-function getSouvenirDir() {
-  return join(getClaudeDir(), "ASymptOmatik", "souvenir");
-}
-function getDbPath() {
-  return readPluginOptions().dbPath ?? join(getSouvenirDir(), "souvenir.db");
-}
-function cwdToProjectDir(cwd) {
-  const cleaned = cwd.replace(/[\\/]+$/, "");
-  return cleaned.replace(/:/g, "-").replace(/[\\/]/g, "-");
-}
-function resolveProjectDir(project) {
-  if (project.includes(sep) || project.includes("/") && !project.startsWith("D--")) {
-    return cwdToProjectDir(project);
-  }
-  return project;
-}
-function getProjectTranscriptDir(projectDir) {
-  return join(getProjectsDir(), projectDir);
-}
-
-// src/config.ts
-import { existsSync } from "fs";
-import { join as join2 } from "path";
-var PROVIDER_DEFAULTS = {
-  ollama: { url: "http://localhost:11434", model: "embeddinggemma" },
-  openai: { url: "https://api.openai.com/v1", model: "text-embedding-3-small" }
-};
-var _config = null;
-function resolvePathToProject(path) {
-  const projectDir = cwdToProjectDir(path);
-  const projectPath = join2(getProjectsDir(), projectDir);
-  if (existsSync(projectPath)) {
-    return projectDir;
-  }
-  return null;
-}
-function getConfig() {
-  if (_config) return _config;
-  const cwd = process.env.CWD || process.cwd();
-  const options = readPluginOptions();
-  const defaults = PROVIDER_DEFAULTS[options.embeddingProvider];
-  const detectedProject = resolvePathToProject(cwd);
-  if (detectedProject) {
-    logger.info(`Detected project from CWD: ${detectedProject}`);
-  } else {
-    logger.info(`CWD "${cwd}" did not match any project. Waiting for MCP roots.`);
-  }
-  _config = {
-    cwd,
-    currentProject: detectedProject,
-    embedding: {
-      provider: options.embeddingProvider,
-      url: (options.embeddingUrl ?? defaults.url).replace(/\/+$/, ""),
-      model: options.embeddingModel ?? defaults.model,
-      dimensions: options.embeddingDimensions,
-      apiKey: options.embeddingApiKey
-    }
-  };
-  return _config;
-}
-function setCurrentProjectFromRoots(roots) {
-  if (!_config) getConfig();
-  if (_config.currentProject) {
-    logger.info(`Project already detected: ${_config.currentProject}`);
-    return;
-  }
-  for (const root of roots) {
-    let path = root.uri;
-    if (path.startsWith("file:///")) {
-      path = decodeURIComponent(path.slice(7));
-    } else if (path.startsWith("file://")) {
-      path = decodeURIComponent(path.slice(7));
-    }
-    if (/^\/[A-Za-z]:/.test(path)) {
-      path = path.slice(1);
-    }
-    const project = resolvePathToProject(path);
-    if (project) {
-      _config.currentProject = project;
-      _config.cwd = path;
-      logger.info(`Detected project from MCP roots: ${project} (${path})`);
-      return;
-    }
-  }
-  logger.warn("MCP roots did not match any known project:", roots.map((r) => r.uri));
-}
-
 // src/transcript/parser.ts
 import { createReadStream } from "fs";
 import { createInterface } from "readline";
@@ -34712,17 +34830,83 @@ function extractText(entry) {
 }
 
 // src/transcript/discovery.ts
-import { readFileSync, readdirSync, existsSync as existsSync2, statSync, openSync, readSync, closeSync } from "fs";
-import { join as join3, basename } from "path";
+import { readFileSync, readdirSync, existsSync, statSync, openSync, readSync, closeSync } from "fs";
+import { join as join2, basename } from "path";
+
+// src/utils/paths.ts
+import { homedir } from "os";
+import { join } from "path";
+
+// src/options.ts
+import { isAbsolute } from "path";
+var PROVIDERS = ["ollama", "openai"];
+function option(key) {
+  const value = process.env[`CLAUDE_PLUGIN_OPTION_${key}`]?.trim();
+  return value ? value : void 0;
+}
+function readPluginOptions() {
+  const provider = option("EMBEDDING_PROVIDER") ?? "ollama";
+  if (!PROVIDERS.includes(provider)) {
+    throw new Error(`Invalid embedding_provider "${provider}": use ${PROVIDERS.join(" or ")}`);
+  }
+  const dimensionsText = option("EMBEDDING_DIMENSIONS");
+  let embeddingDimensions;
+  if (dimensionsText !== void 0) {
+    embeddingDimensions = Number(dimensionsText);
+    if (!Number.isInteger(embeddingDimensions) || embeddingDimensions <= 0) {
+      throw new Error(`Invalid embedding_dimensions "${dimensionsText}": expected a positive integer`);
+    }
+  }
+  const dbPath = option("DB_PATH");
+  if (dbPath !== void 0 && !isAbsolute(dbPath)) {
+    throw new Error(`Invalid db_path "${dbPath}": it must be an absolute path`);
+  }
+  return {
+    embeddingProvider: provider,
+    embeddingUrl: option("EMBEDDING_URL"),
+    embeddingModel: option("EMBEDDING_MODEL"),
+    embeddingDimensions,
+    embeddingApiKey: option("EMBEDDING_API_KEY"),
+    dbPath
+  };
+}
+
+// src/utils/paths.ts
+function getClaudeDir() {
+  return process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude");
+}
+function getProjectsDir() {
+  return join(getClaudeDir(), "projects");
+}
+function getSouvenirDir() {
+  return join(getClaudeDir(), "ASymptOmatik", "souvenir");
+}
+function getDbPath() {
+  return readPluginOptions().dbPath ?? join(getSouvenirDir(), "souvenir.db");
+}
+function cwdToProjectDir(cwd) {
+  return cwd.replace(/[\\/]+$/, "").replace(/[^a-zA-Z0-9]/g, "-");
+}
+function isProjectPath(path, projectDir) {
+  return cwdToProjectDir(path).toLowerCase() === projectDir.toLowerCase();
+}
+function resolveProjectDir(project) {
+  return /[\\/]/.test(project) ? cwdToProjectDir(project) : project;
+}
+function getProjectTranscriptDir(projectDir) {
+  return join(getProjectsDir(), projectDir);
+}
+
+// src/transcript/discovery.ts
 var indexCache = /* @__PURE__ */ new Map();
 function listProjectDirs() {
   const projectsDir = getProjectsDir();
-  if (!existsSync2(projectsDir)) return [];
+  if (!existsSync(projectsDir)) return [];
   return readdirSync(projectsDir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
 }
 function loadSessionIndex(projectDir) {
-  const indexPath = join3(getProjectTranscriptDir(projectDir), "sessions-index.json");
-  if (!existsSync2(indexPath)) {
+  const indexPath = join2(getProjectTranscriptDir(projectDir), "sessions-index.json");
+  if (!existsSync(indexPath)) {
     logger.debug(`No sessions-index.json for ${projectDir}`);
     return null;
   }
@@ -34785,14 +34969,14 @@ function getSessionFilePath(sessionId, projectDir) {
     if (index) {
       const session = index.entries.find((e) => e.sessionId === sessionId);
       if (session) {
-        const filePath = session.fullPath || join3(getProjectTranscriptDir(dir), `${sessionId}.jsonl`);
-        if (existsSync2(filePath)) {
+        const filePath = session.fullPath || join2(getProjectTranscriptDir(dir), `${sessionId}.jsonl`);
+        if (existsSync(filePath)) {
           return { filePath, projectDir: dir };
         }
       }
     }
-    const directPath = join3(getProjectTranscriptDir(dir), `${sessionId}.jsonl`);
-    if (existsSync2(directPath)) {
+    const directPath = join2(getProjectTranscriptDir(dir), `${sessionId}.jsonl`);
+    if (existsSync(directPath)) {
       return { filePath: directPath, projectDir: dir };
     }
   }
@@ -34806,8 +34990,8 @@ function getSessionMetadata(sessionId, projectDir) {
       const entry = index.entries.find((e) => e.sessionId === sessionId);
       if (entry) return { entry, projectDir: dir };
     }
-    const filePath = join3(getProjectTranscriptDir(dir), `${sessionId}.jsonl`);
-    if (existsSync2(filePath)) {
+    const filePath = join2(getProjectTranscriptDir(dir), `${sessionId}.jsonl`);
+    if (existsSync(filePath)) {
       const meta3 = extractMinimalMetadata(filePath, sessionId, dir);
       if (meta3) return { entry: meta3, projectDir: dir };
     }
@@ -34816,8 +35000,8 @@ function getSessionMetadata(sessionId, projectDir) {
 }
 function listTranscriptFiles(projectDir, options = {}) {
   const dir = getProjectTranscriptDir(projectDir);
-  if (!existsSync2(dir)) return [];
-  const mainFiles = readdirSync(dir).filter((f) => f.endsWith(".jsonl")).map((f) => join3(dir, f));
+  if (!existsSync(dir)) return [];
+  const mainFiles = readdirSync(dir).filter((f) => f.endsWith(".jsonl")).map((f) => join2(dir, f));
   if (!options.includeSubagents) return mainFiles;
   const subagentFiles = [];
   const entries = readdirSync(dir, { withFileTypes: true });
@@ -34825,14 +35009,14 @@ function listTranscriptFiles(projectDir, options = {}) {
     if (!entry.isDirectory()) continue;
     if (!entry.name.match(/^[0-9a-f]{8}-/)) continue;
     if (options.sessionId && entry.name !== options.sessionId) continue;
-    const subagentDir = join3(dir, entry.name, "subagents");
-    if (!existsSync2(subagentDir)) continue;
+    const subagentDir = join2(dir, entry.name, "subagents");
+    if (!existsSync(subagentDir)) continue;
     try {
       const agentFiles = readdirSync(subagentDir).filter((f) => {
         if (!f.endsWith(".jsonl")) return false;
         if (f.includes("aprompt_suggestion")) return false;
         return true;
-      }).map((f) => join3(subagentDir, f));
+      }).map((f) => join2(subagentDir, f));
       subagentFiles.push(...agentFiles);
     } catch (err) {
       logger.debug(`Error reading subagents for ${entry.name}:`, err);
@@ -34842,14 +35026,14 @@ function listTranscriptFiles(projectDir, options = {}) {
 }
 function discoverOrphanSessions(projectDir) {
   const dir = getProjectTranscriptDir(projectDir);
-  if (!existsSync2(dir)) return [];
+  if (!existsSync(dir)) return [];
   const index = loadSessionIndex(projectDir);
   const indexedIds = new Set(index?.entries.map((e) => e.sessionId) ?? []);
   const jsonlFiles = readdirSync(dir).filter((f) => f.endsWith(".jsonl")).map((f) => basename(f, ".jsonl")).filter((id) => !indexedIds.has(id));
   if (jsonlFiles.length === 0) return [];
   const orphans = [];
   for (const sessionId of jsonlFiles) {
-    const filePath = join3(dir, `${sessionId}.jsonl`);
+    const filePath = join2(dir, `${sessionId}.jsonl`);
     try {
       const meta3 = extractMinimalMetadata(filePath, sessionId, projectDir);
       if (meta3) orphans.push(meta3);
@@ -34875,6 +35059,8 @@ function extractMinimalMetadata(filePath, sessionId, projectDir) {
   let firstPrompt = "";
   let firstTimestamp = "";
   let messageCount = 0;
+  let gitBranch = "";
+  let projectPath = "";
   for (const line of lines) {
     if (!line.trim()) continue;
     if (line.includes('"file-history-snapshot"')) continue;
@@ -34886,7 +35072,13 @@ function extractMinimalMetadata(filePath, sessionId, projectDir) {
       if (entry.type === "user" || entry.type === "assistant") {
         messageCount++;
       }
-      if (entry.type === "user" && !firstPrompt) {
+      if (entry.gitBranch && !gitBranch) {
+        gitBranch = entry.gitBranch;
+      }
+      if (!projectPath && typeof entry.cwd === "string" && isProjectPath(entry.cwd, projectDir)) {
+        projectPath = entry.cwd;
+      }
+      if (entry.type === "user" && !entry.isMeta && !firstPrompt) {
         if (typeof entry.message?.content === "string") {
           firstPrompt = entry.message.content.slice(0, 200);
         } else if (Array.isArray(entry.message?.content)) {
@@ -34910,8 +35102,9 @@ function extractMinimalMetadata(filePath, sessionId, projectDir) {
     messageCount,
     created: firstTimestamp || new Date(stat.birthtimeMs).toISOString(),
     modified: new Date(stat.mtimeMs).toISOString(),
-    gitBranch: "",
-    projectPath: projectDir,
+    gitBranch,
+    projectPath,
+    // '' when no entry in the first 64 KB ran in the project root
     isSidechain: false
   };
 }
@@ -34930,7 +35123,7 @@ function getProjectInfo(projectDir) {
   const dates = nonSidechain.map((e) => new Date(e.created).getTime()).filter((d) => !isNaN(d));
   return {
     dirName: projectDir,
-    originalPath: index?.originalPath || projectDir.replace(/--/g, "/"),
+    originalPath: index?.originalPath || allEntries.find((e) => e.projectPath && isProjectPath(e.projectPath, projectDir))?.projectPath || null,
     sessionCount: nonSidechain.length,
     latestDate: dates.length ? new Date(Math.max(...dates)).toISOString() : null,
     oldestDate: dates.length ? new Date(Math.min(...dates)).toISOString() : null
@@ -35420,6 +35613,49 @@ function formatToolsOutput(records) {
     lines.push(`  ${r.name}: ${r.count}${error62}`);
   }
   return lines.join("\n");
+}
+
+// src/config.ts
+import { existsSync as existsSync2 } from "fs";
+import { join as join3 } from "path";
+var PROVIDER_DEFAULTS = {
+  ollama: { url: "http://localhost:11434", model: "embeddinggemma" },
+  openai: { url: "https://api.openai.com/v1", model: "text-embedding-3-small" }
+};
+var _config = null;
+function resolvePathToProject(path) {
+  const projectDir = cwdToProjectDir(path);
+  const projectPath = join3(getProjectsDir(), projectDir);
+  if (existsSync2(projectPath)) {
+    return projectDir;
+  }
+  return null;
+}
+function getConfig() {
+  if (_config) return _config;
+  const fromEnv = process.env.CLAUDE_PROJECT_DIR;
+  const cwd = fromEnv || process.cwd();
+  const options = readPluginOptions();
+  const defaults = PROVIDER_DEFAULTS[options.embeddingProvider];
+  const detectedProject = resolvePathToProject(cwd);
+  const source = fromEnv ? "CLAUDE_PROJECT_DIR" : "working directory (CLAUDE_PROJECT_DIR not set)";
+  if (detectedProject) {
+    logger.info(`Current project from ${source}: ${detectedProject}`);
+  } else {
+    logger.info(`${source} "${cwd}" has no Claude Code history: no current project.`);
+  }
+  _config = {
+    cwd,
+    currentProject: detectedProject,
+    embedding: {
+      provider: options.embeddingProvider,
+      url: (options.embeddingUrl ?? defaults.url).replace(/\/+$/, ""),
+      model: options.embeddingModel ?? defaults.model,
+      dimensions: options.embeddingDimensions,
+      apiKey: options.embeddingApiKey
+    }
+  };
+  return _config;
 }
 
 // src/db/store.ts
@@ -36199,6 +36435,17 @@ async function disposeSingletonProvider() {
 import { statSync as statSync2 } from "fs";
 import { basename as basename3 } from "path";
 
+// src/utils/serial.ts
+function serialized(fn) {
+  let queue = Promise.resolve();
+  return (...args) => {
+    const run = queue.then(() => fn(...args));
+    queue = run.catch(() => {
+    });
+    return run;
+  };
+}
+
 // src/embedding/chunker.ts
 var MAX_EMBED_CHARS = 1600;
 var MAX_CONTENT_CHARS = 2e3;
@@ -36242,9 +36489,9 @@ async function chunkTranscript(filePath, sessionId, projectDir, options = {}) {
       continue;
     }
     if (entry.type === "user") {
-      const userText = extractText(entry);
-      let turnText = userText;
-      let contentParts = [`USER: ${userText}`];
+      const userText2 = extractText(entry);
+      let turnText = userText2;
+      let contentParts = [`USER: ${userText2}`];
       if (i + 1 < entries.length && entries[i + 1].entry.type === "assistant") {
         const assistantEntry = entries[i + 1].entry;
         const assistantText = extractText(assistantEntry);
@@ -36292,7 +36539,8 @@ async function chunkTranscript(filePath, sessionId, projectDir, options = {}) {
 
 // src/db/indexer.ts
 var EMBED_BATCH_SIZE = 32;
-async function buildIndex(provider, projectDirs, options = {}) {
+var buildIndex = serialized(runBuildIndex);
+async function runBuildIndex(provider, projectDirs, options = {}) {
   const { sessionId, includeSubagents = true, rebuild = false, onProgress, signal } = options;
   if (!provider.isReady()) {
     onProgress?.({ phase: "Initializing embedding model", current: 0, total: 1 });
@@ -37293,6 +37541,27 @@ async function getTranscriptsXrefHint(query, config2) {
 }
 
 // src/tools/read.ts
+var DEFAULT_ENTRY_TYPES = ["user", "assistant", "summary"];
+var DIGEST_ENTRIES = 20;
+async function readSessionDigest(sessionId) {
+  const config2 = getConfig();
+  const location = (config2.currentProject ? getSessionFilePath(sessionId, config2.currentProject) : null) ?? getSessionFilePath(sessionId);
+  if (!location) return null;
+  const meta3 = getSessionMetadata(sessionId, location.projectDir);
+  const files = await readAggregate(location.filePath, "files", null);
+  const lastEntries = await readPage(location.filePath, void 0, DIGEST_ENTRIES, DEFAULT_ENTRY_TYPES, "conversation", null);
+  return [
+    meta3 ? formatSessionHeader(meta3.entry) : `Session: ${sessionId}
+Project: ${location.projectDir}`,
+    `Read more: souvenir_read session_id="${sessionId}" project="${location.projectDir}" (from_line for earlier entries, around_uuid for one moment).`,
+    "",
+    "=== Files touched ===",
+    files,
+    "",
+    `=== Last ${DIGEST_ENTRIES} entries ===`,
+    lastEntries
+  ].join("\n");
+}
 async function handleSouvenirRead(params) {
   const config2 = getConfig();
   const projectDir = params.project && params.project !== "all" ? resolveProjectDir(params.project) : void 0;
@@ -37307,7 +37576,7 @@ async function handleSouvenirRead(params) {
     return `Error: Session "${sessionId}" not found in ${searchAllProjects ? "any project" : projectDir ? `project "${params.project}"` : "current project"}. Use souvenir_sessions to list valid session IDs, or specify the project parameter to search in a different project.`;
   }
   const meta3 = getSessionMetadata(sessionId, location.projectDir);
-  const entryTypes = params.entry_types ? params.entry_types.split(",").map((t) => t.trim()) : ["user", "assistant", "summary"];
+  const entryTypes = params.entry_types ? params.entry_types.split(",").map((t) => t.trim()) : DEFAULT_ENTRY_TYPES;
   const maxEntries = Math.min(params.max_entries || 20, 200);
   const detailLevel = params.detail_level || "conversation";
   if (detailLevel === "files" || detailLevel === "tools") {
@@ -37535,9 +37804,40 @@ async function handleSouvenirSessions(params) {
 
 // src/tools/projects.ts
 import { existsSync as existsSync6 } from "fs";
-async function handleSouvenirProjects(params) {
+
+// src/tools/confirm.ts
+var DECLINED = "Cancelled: not confirmed (the user declined or dismissed the dialog, or this session cannot show one, as in claude -p: run it from an interactive session). Nothing was changed.";
+var CONFIRM_KEY = "confirm";
+var ConfirmationNeeded = class extends Error {
+  constructor(question) {
+    super(`Confirmation needed: ${question}`);
+    this.question = question;
+  }
+  question;
+  toInputRequired() {
+    return inputRequired({
+      inputRequests: {
+        // No field: the dialog shows the message with accept / decline
+        [CONFIRM_KEY]: inputRequired.elicit({ message: this.question, requestedSchema: { type: "object", properties: {} } })
+      }
+    });
+  }
+};
+function confirmFor(ctx, legacyCapabilities) {
+  return (message) => {
+    const answer = inputResponse(ctx.mcpReq.inputResponses, CONFIRM_KEY);
+    if (answer.kind === "elicit") return answer.action === "accept";
+    const envelope = ctx.mcpReq.envelope;
+    const capabilities = envelope ? envelope[CLIENT_CAPABILITIES_META_KEY] : legacyCapabilities();
+    if (!capabilities?.elicitation) return true;
+    throw new ConfirmationNeeded(message);
+  };
+}
+
+// src/tools/projects.ts
+async function handleSouvenirProjects(params, confirm2) {
   if (params.action === "clean") {
-    return handleClean();
+    return handleClean(confirm2);
   }
   const config2 = getConfig();
   const allDirs = listProjectDirs();
@@ -37546,7 +37846,7 @@ async function handleSouvenirProjects(params) {
   if (params.search) {
     const term = params.search.toLowerCase();
     filtered = projects.filter(
-      (p) => p.originalPath.toLowerCase().includes(term) || p.dirName.toLowerCase().includes(term)
+      (p) => (p.originalPath ?? "").toLowerCase().includes(term) || p.dirName.toLowerCase().includes(term)
     );
   }
   filtered.sort((a, b) => {
@@ -37564,17 +37864,16 @@ async function handleSouvenirProjects(params) {
     const latest = p.latestDate ? p.latestDate.slice(0, 10) : "???";
     const oldest = p.oldestDate ? p.oldestDate.slice(0, 10) : "???";
     const isCurrent = p.dirName === config2.currentProject;
-    const pathExists = existsSync6(p.originalPath);
-    const statusTag = isCurrent ? " [current]" : pathExists ? "" : " [orphan]";
-    lines.push(`${i + 1}. ${p.originalPath}${statusTag}`);
+    const statusTag = isCurrent ? " [current]" : p.originalPath === null ? " [path unknown]" : existsSync6(p.originalPath) ? "" : " [orphan]";
+    lines.push(`${i + 1}. ${p.originalPath ?? p.dirName}${statusTag}`);
     lines.push(`   Dir: ${p.dirName}`);
     lines.push(`   Sessions: ${p.sessionCount} | Latest: ${latest} | Oldest: ${oldest}`);
     lines.push("");
   }
   try {
     const indexStatus = getIndexStatus();
-    const knownDirs = new Set(allDirs);
-    const indexOnlyOrphans = indexStatus.projects.filter((p) => !knownDirs.has(p.projectDir));
+    const knownDirs = new Set(allDirs.map((d) => d.toLowerCase()));
+    const indexOnlyOrphans = indexStatus.projects.filter((p) => !knownDirs.has(p.projectDir.toLowerCase()));
     if (indexOnlyOrphans.length > 0) {
       lines.push(`--- Index-only orphans (${indexOnlyOrphans.length}) ---`);
       lines.push("These projects have indexed data but no transcripts in ~/.claude/projects/:");
@@ -37589,22 +37888,22 @@ async function handleSouvenirProjects(params) {
   }
   return lines.join("\n");
 }
-async function handleClean() {
+async function handleClean(confirm2) {
   const allDirs = listProjectDirs();
-  const knownDirs = new Set(allDirs);
+  const knownDirs = new Set(allDirs.map((d) => d.toLowerCase()));
   let indexStatus;
   try {
     indexStatus = getIndexStatus();
   } catch {
     return "No index database found. Nothing to clean.";
   }
-  const indexOrphans = indexStatus.projects.filter((p) => !knownDirs.has(p.projectDir));
+  const indexOrphans = indexStatus.projects.filter((p) => !knownDirs.has(p.projectDir.toLowerCase()));
   const pathOrphans = [];
   for (const dir of allDirs) {
     const info = getProjectInfo(dir);
-    if (!info) continue;
+    if (!info?.originalPath) continue;
     if (!existsSync6(info.originalPath)) {
-      const dbProject = indexStatus.projects.find((p) => p.projectDir === dir);
+      const dbProject = indexStatus.projects.find((p) => p.projectDir.toLowerCase() === dir.toLowerCase());
       if (dbProject && dbProject.chunkCount > 0) {
         pathOrphans.push({
           dirName: dir,
@@ -37616,6 +37915,20 @@ async function handleClean() {
   }
   if (indexOrphans.length === 0 && pathOrphans.length === 0) {
     return "No orphaned project data found. Everything is clean.";
+  }
+  const question = [
+    `souvenir: remove the search index data of ${indexOrphans.length + pathOrphans.length} orphaned project(s)?`
+  ];
+  if (indexOrphans.length > 0) {
+    question.push("", `No transcripts left (Claude Code deleted them): the index is the only remaining copy of these conversations.`);
+    question.push(...indexOrphans.map((p) => `- ${p.projectDir} (${p.chunkCount} chunks)`));
+  }
+  if (pathOrphans.length > 0) {
+    question.push("", "Folder deleted, transcripts kept (the index can be rebuilt from them):");
+    question.push(...pathOrphans.map((p) => `- ${p.originalPath} (${p.chunkCount} chunks)`));
+  }
+  if (!confirm2(question.join("\n"))) {
+    return DECLINED;
   }
   const lines = [];
   let totalCleaned = 0;
@@ -37648,7 +37961,7 @@ async function handleClean() {
 
 // src/tools/index-mgmt.ts
 import { existsSync as existsSync7, statSync as statSync3 } from "fs";
-async function handleSouvenirIndex(params, ctx) {
+async function handleSouvenirIndex(params, ctx, confirm2) {
   let config2;
   try {
     config2 = getConfig();
@@ -37663,7 +37976,7 @@ Fix it with /plugin configure asymptomatik-souvenir, then /reload-plugins.`;
       return await runCheck(config2);
     case "build":
     case "rebuild":
-      return await runBuild(config2, { ...params, action: params.action }, ctx);
+      return await runBuild(config2, { ...params, action: params.action }, ctx, confirm2);
     case "vacuum":
       return runVacuum();
     default:
@@ -37745,7 +38058,7 @@ async function runCheck(config2) {
   }
   return lines.join("\n");
 }
-async function runBuild(config2, params, ctx) {
+async function runBuild(config2, params, ctx, confirm2) {
   let projectDirs;
   if (params.project === "all") {
     projectDirs = listProjectDirs();
@@ -37758,6 +38071,14 @@ async function runBuild(config2, params, ctx) {
   }
   const provider = getOrCreateProvider(config2);
   const isRebuild = params.action === "rebuild";
+  if (isRebuild) {
+    const target = params.project === "all" ? `all ${projectDirs.length} projects` : projectDirs[0];
+    if (!confirm2(
+      `souvenir: drop and re-index the search index of ${target}? Re-embedding can take several minutes. If the embedding model changed since the index was built, the index of every project is reset.`
+    )) {
+      return DECLINED;
+    }
+  }
   try {
     const result = await buildIndex(provider, projectDirs, {
       sessionId: params.session_id,
@@ -38241,7 +38562,8 @@ function resolveSourceFiles(projectRoot) {
   }
   return [...fileSet.values()];
 }
-async function buildDocsIndex(projectRoot, provider, options = {}) {
+var buildDocsIndex = serialized(runBuildDocsIndex);
+async function runBuildDocsIndex(projectRoot, provider, options = {}) {
   const { rebuild = false, onProgress, signal } = options;
   if (!provider.isReady()) {
     onProgress?.({ phase: "Initializing embedding model", current: 0, total: 1 });
@@ -38472,12 +38794,9 @@ function formatUnifiedDiff(diff, oldLabel, newLabel) {
 }
 
 // src/tools/docs.ts
-async function handleSouvenirDocs(params) {
+async function handleSouvenirDocs(params, confirm2) {
   const config2 = getConfig();
   const projectRoot = config2.cwd;
-  if (!projectRoot) {
-    return "Error: Could not determine project root directory.";
-  }
   switch (params.action) {
     case "add":
       return handleAdd(projectRoot, params);
@@ -38488,9 +38807,9 @@ async function handleSouvenirDocs(params) {
     case "status":
       return handleStatus(projectRoot);
     case "build":
-      return handleBuild(projectRoot, config2, params.rebuild ?? false);
+      return handleBuild(projectRoot, config2, params.rebuild ?? false, confirm2);
     case "clear":
-      return handleClear(projectRoot);
+      return handleClear(projectRoot, confirm2);
     case "sections":
       return handleSections(projectRoot, params);
     case "history":
@@ -38498,7 +38817,7 @@ async function handleSouvenirDocs(params) {
     case "diff":
       return handleFileDiff(projectRoot, params);
     case "restore":
-      return handleRestore(projectRoot, params);
+      return handleRestore(projectRoot, params, confirm2);
     case "vacuum":
       return handleVacuum(projectRoot);
     default:
@@ -38667,7 +38986,7 @@ async function handleStatus(projectRoot) {
   }
   return lines.join("\n");
 }
-async function handleBuild(projectRoot, config2, rebuild) {
+async function handleBuild(projectRoot, config2, rebuild, confirm2) {
   const sources = docsDbExists(projectRoot) ? getDocSources(projectRoot) : [];
   if (sources.length === 0 && !docsDbExists(projectRoot)) {
     return 'No sources configured. Use souvenir_docs action="add" to track files first.';
@@ -38678,6 +38997,11 @@ async function handleBuild(projectRoot, config2, rebuild) {
     if (dbSources.length === 0) {
       return 'No sources configured. Use souvenir_docs action="add" to track files first.';
     }
+  }
+  if (rebuild && !confirm2(
+    "souvenir: drop and re-index every tracked project file? Re-embedding can take several minutes."
+  )) {
+    return DECLINED;
   }
   const provider = getOrCreateProvider(config2);
   try {
@@ -38701,9 +39025,14 @@ async function handleBuild(projectRoot, config2, rebuild) {
     return `Docs indexing error: ${err instanceof Error ? err.message : String(err)}`;
   }
 }
-async function handleClear(projectRoot) {
+async function handleClear(projectRoot, confirm2) {
   if (!docsDbExists(projectRoot)) {
     return "No docs database found. Nothing to clear.";
+  }
+  if (!confirm2(
+    'souvenir: clear the whole project file index (chunks, sections, index state)? The tracked sources are kept; "build" re-indexes them.'
+  )) {
+    return DECLINED;
   }
   clearAllDocs(projectRoot);
   return 'All docs index data cleared (chunks, sections, index state). Sources are preserved. Run "build" to re-index.';
@@ -38815,7 +39144,7 @@ async function handleFileDiff(projectRoot, params) {
   }
   return formatUnifiedDiff(diff, snapshotLabel, `${relativePath} (current)`);
 }
-async function handleRestore(projectRoot, params) {
+async function handleRestore(projectRoot, params, confirm2) {
   if (!params.path) {
     return 'Error: "path" parameter is required for "restore" action.';
   }
@@ -38833,6 +39162,11 @@ async function handleRestore(projectRoot, params) {
   }
   if (snapshot.file_path !== relativePath) {
     return `Error: Snapshot #${params.snapshot_id} belongs to "${snapshot.file_path}", not "${relativePath}".`;
+  }
+  if (!confirm2(
+    `souvenir: overwrite "${relativePath}" with snapshot #${params.snapshot_id} (${snapshot.created_at.slice(0, 19)})? The current file is saved as a snapshot first, so this can be undone.`
+  )) {
+    return DECLINED;
   }
   let backupSnapshotCreated = null;
   if (existsSync8(absolutePath)) {
@@ -39240,9 +39574,6 @@ function truncateEntries(entries, maxFiles) {
 async function handleSouvenirTree(params) {
   const config2 = getConfig();
   const projectRoot = config2.cwd;
-  if (!projectRoot) {
-    return "Error: Could not detect current project directory.";
-  }
   const maxDepth = Math.min(Math.max(params.depth ?? 3, 1), 10);
   const pattern = params.pattern ?? null;
   const dirsOnly = params.directories_only ?? false;
@@ -39340,7 +39671,7 @@ function scheduleBackgroundIndex() {
       }
       if (signal.aborted) return;
       const projectRoot = config2.cwd;
-      if (projectRoot && docsDbExists(projectRoot)) {
+      if (docsDbExists(projectRoot)) {
         const sources = getDocSources(projectRoot);
         if (sources.length > 0) {
           const docsResult = await buildDocsIndex(projectRoot, provider, {
@@ -39363,6 +39694,153 @@ function scheduleBackgroundIndex() {
   })();
 }
 
+// src/resources.ts
+var LISTED_SESSIONS = 50;
+function sessionUri(sessionId) {
+  return `souvenir://session/${sessionId}`;
+}
+function readablePrompt(text) {
+  const command = /<command-name>([^<]*)<\/command-name>/.exec(text);
+  if (command) {
+    const args = /<command-args>([^<]*)<\/command-args>/.exec(text)?.[1] ?? "";
+    return `${command[1]} ${args}`.trim();
+  }
+  return text;
+}
+function sessionLabel(session) {
+  const date5 = session.created ? session.created.slice(0, 10) : "????-??-??";
+  const title = readablePrompt(session.summary || session.firstPrompt || "No summary").replace(/\s+/g, " ").trim();
+  return `${date5} ${title.length > 70 ? title.slice(0, 70) + "\u2026" : title}`;
+}
+function sessionDescription(session) {
+  const parts = [];
+  if (session.summary && session.firstPrompt && session.firstPrompt !== session.summary) {
+    const first = readablePrompt(session.firstPrompt).replace(/\s+/g, " ").trim();
+    parts.push(`First prompt: "${first.length > 100 ? first.slice(0, 100) + "\u2026" : first}"`);
+  }
+  if (session.gitBranch) parts.push(`branch ${session.gitBranch}`);
+  parts.push(`session_id ${session.sessionId}`);
+  return parts.join(" \xB7 ");
+}
+function registerSessionResources(server2) {
+  server2.registerResource(
+    "session",
+    new ResourceTemplate("souvenir://session/{sessionId}", {
+      list: () => {
+        const project = getConfig().currentProject;
+        if (!project) return { resources: [] };
+        const sessions = getSessions(project, { sort: "newest" }).slice(0, LISTED_SESSIONS);
+        return {
+          // title and description per session, or the SDK repeats the template's on every entry
+          resources: sessions.map((s) => ({
+            uri: sessionUri(s.sessionId),
+            name: sessionLabel(s),
+            title: sessionLabel(s),
+            description: sessionDescription(s),
+            mimeType: "text/plain"
+          }))
+        };
+      }
+    }),
+    {
+      title: "Past Claude Code session",
+      description: `A past Claude Code session: header, files it touched and its last entries. The ${LISTED_SESSIONS} most recent sessions of the current project are listed; any session can be read by its URI (session ids from souvenir_sessions).`,
+      mimeType: "text/plain"
+    },
+    async (uri, { sessionId }) => {
+      const id = Array.isArray(sessionId) ? sessionId[0] : sessionId;
+      const text = id ? await readSessionDigest(id) : null;
+      if (text === null) throw new ResourceNotFoundError(uri.href, `No session "${id}" in any project`);
+      return { contents: [{ uri: uri.href, mimeType: "text/plain", text }] };
+    }
+  );
+}
+
+// src/prompts.ts
+var RECAP_CANDIDATES = 3;
+var WHY_MATCHES = 15;
+var RECAP_INSTRUCTIONS = `Recap this past Claude Code session for the user, in their language:
+- the goal and how it evolved;
+- what was done and decided, with the reasons;
+- the files changed;
+- the state at the end: what works, what was left unfinished or open.
+Read more of the session with souvenir_read when the digest is not enough to answer.`;
+function invalidArgument(message) {
+  return new ProtocolError(ProtocolErrorCode.InvalidParams, message);
+}
+function userText(text) {
+  return { role: "user", content: { type: "text", text } };
+}
+function registerPrompts(server2) {
+  server2.registerPrompt(
+    "recap",
+    {
+      title: "Recap a past session",
+      description: "Recap a past Claude Code session of this project: goal, decisions, files changed, what was left open. Without a session id, the latest session that is not the current conversation.",
+      argsSchema: external_exports.object({
+        session: external_exports.string().optional().describe("Session id (from souvenir_sessions or the @ list). Default: the latest previous session.")
+      })
+    },
+    async ({ session }) => {
+      if (session) {
+        const digest = await readSessionDigest(session);
+        if (digest === null) throw invalidArgument(`No session "${session}" in any project. List them with souvenir_sessions.`);
+        return {
+          messages: [
+            { role: "user", content: { type: "resource", resource: { uri: sessionUri(session), mimeType: "text/plain", text: digest } } },
+            userText(RECAP_INSTRUCTIONS)
+          ]
+        };
+      }
+      const project = getConfig().currentProject;
+      if (!project) throw invalidArgument('This directory has no Claude Code history: give a session id (souvenir_sessions project="all" lists them).');
+      const recent = getSessions(project, { sort: "newest" }).slice(0, RECAP_CANDIDATES);
+      if (recent.length === 0) throw invalidArgument("No past session in this project.");
+      const list = recent.map((s, i) => `${i + 1}. ${sessionLabel(s)} \u2014 session_id: ${s.sessionId}`).join("\n");
+      return {
+        messages: [
+          userText(
+            `The most recent sessions of this project, newest first:
+${list}
+
+The newest one can be this very conversation: if its first prompt is what started the current conversation, take the next one. Read the chosen session with souvenir_read (start from the end, then earlier pages as needed).
+
+` + RECAP_INSTRUCTIONS
+          )
+        ]
+      };
+    }
+  );
+  server2.registerPrompt(
+    "why",
+    {
+      title: "Why did this file change?",
+      description: "Explain why a file changed, from the past conversations that changed it (and its git history).",
+      argsSchema: external_exports.object({
+        file: external_exports.string().describe("File path or name, as it appears in the project (no spaces: Claude Code splits arguments on whitespace).")
+      })
+    },
+    async ({ file: file2 }) => {
+      const matches = await handleSouvenirSearch({ query: file2, mode: "text", max_results: WHY_MATCHES });
+      return {
+        messages: [
+          userText(
+            `Explain to the user, in their language, why "${file2}" changed: what each change was for and what decided it.
+
+1. If the project is a git repository, read the file's history (\`git log --follow -- <path>\`) and search the commit hashes in the conversations with souvenir_search.
+2. Read the moments that matter with souvenir_read around_uuid (the matches below are a start; search again with other terms if they are not enough).
+3. Answer chronologically: each change, its reason, the decision behind it, with the session date. Say what you could not find.
+
+Conversation matches for "${file2}":
+
+${matches}`
+          )
+        ]
+      };
+    }
+  );
+}
+
 // src/index.ts
 var INSTRUCTIONS = `souvenir searches this user's past Claude Code conversations and the project's indexed files.
 
@@ -39372,13 +39850,26 @@ var INSTRUCTIONS = `souvenir searches this user's past Claude Code conversations
 - When a file was damaged or lost (bad edit, wrong checkout, deletion), look at souvenir_docs "history" before any other attempt. Only the files added to souvenir_docs are kept (set up per project, on request: "list" shows them; nothing added means no snapshots); while Claude Code works, they are snapshotted at most every ~30 s, kept 3 days. Before "restore", "diff" the chosen snapshot against the current file to see what restoring would erase. Restore saves the current state as a snapshot first (it can be undone), unlike a git checkout, which discards uncommitted work for good.
 - For work done in another project, search with project "all" (souvenir_projects lists them).
 - To learn why some code or a commit changed, search the commit hash or the file name in the conversations: the session that made the change holds the reason.`;
-var server = new McpServer({ name: "souvenir", version: "0.4.7" }, { instructions: INSTRUCTIONS });
-function withBackgroundIndex(handler) {
+var server = new McpServer({ name: "souvenir", version: "0.5.0" }, { instructions: INSTRUCTIONS });
+var READ_ONLY = { readOnlyHint: true };
+var LARGE_RESULT_META = { "anthropic/maxResultSizeChars": 1e5 };
+function toolHandler(name, handler) {
   return async (params, ctx) => {
-    const result = await handler(params, ctx);
-    scheduleBackgroundIndex();
-    return result;
+    try {
+      const text = await handler(params, ctx);
+      return { content: [{ type: "text", text }] };
+    } catch (err) {
+      if (err instanceof ConfirmationNeeded) return err.toInputRequired();
+      const msg = errorMessage(err);
+      logger.error(`${name} error:`, msg);
+      return { content: [{ type: "text", text: `Error: ${msg}` }], isError: true };
+    } finally {
+      scheduleBackgroundIndex();
+    }
   };
+}
+function confirm(ctx) {
+  return confirmFor(ctx, () => server.server.getClientCapabilities());
 }
 server.registerTool(
   "souvenir_search",
@@ -39396,6 +39887,7 @@ Sources:
 Results include session_id + entry_uuid (transcripts) or file_path + line range (docs). Cross-reference hints show matches in the other source when available.
 
 Workflow: souvenir_search \u2192 souvenir_read around_uuid for full context.`,
+    annotations: READ_ONLY,
     inputSchema: external_exports.object({
       query: external_exports.string().describe("What you are looking for. Works with natural language, exact terms, function names, error messages \u2014 hybrid mode handles all of these."),
       mode: external_exports.enum(["text", "semantic", "hybrid"]).optional().describe('Default: "hybrid" (text + semantic combined). Use "text" only for regex patterns. Use "semantic" for pure meaning-based search.'),
@@ -39412,16 +39904,7 @@ Workflow: souvenir_search \u2192 souvenir_read around_uuid for full context.`,
       regex: external_exports.boolean().optional().describe("For text mode: treat query as regex pattern. Default: false.")
     })
   },
-  withBackgroundIndex(async (params, ctx) => {
-    try {
-      const text = await handleSouvenirSearch(params, ctx);
-      return { content: [{ type: "text", text }] };
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      logger.error("souvenir_search error:", msg);
-      return { content: [{ type: "text", text: `Error: ${msg}` }], isError: true };
-    }
-  })
+  toolHandler("souvenir_search", (params, ctx) => handleSouvenirSearch(params, ctx))
 );
 server.registerTool(
   "souvenir_read",
@@ -39438,6 +39921,8 @@ Reading modes:
 - detail_level="tools": tool usage summary with call counts and error indicators.
 
 Pagination: footer shows page position and navigation hints. Use max_entries=1 with around_uuid to read a single full entry without truncation.`,
+    annotations: READ_ONLY,
+    _meta: LARGE_RESULT_META,
     inputSchema: external_exports.object({
       session_id: external_exports.string().describe('Session UUID to read from. Use "current" for the most recent session.'),
       project: external_exports.string().optional().describe("Project directory name. Default: current project (also searches other projects if not found)."),
@@ -39451,16 +39936,7 @@ Pagination: footer shows page position and navigation hints. Use max_entries=1 w
       entry_types: external_exports.string().optional().describe('Comma-separated types to include. Default: "user,assistant,summary". Add "progress" if needed.')
     })
   },
-  withBackgroundIndex(async (params, _ctx) => {
-    try {
-      const text = await handleSouvenirRead(params);
-      return { content: [{ type: "text", text }] };
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      logger.error("souvenir_read error:", msg);
-      return { content: [{ type: "text", text: `Error: ${msg}` }], isError: true };
-    }
-  })
+  toolHandler("souvenir_read", (params, _ctx) => handleSouvenirRead(params))
 );
 server.registerTool(
   "souvenir_sessions",
@@ -39470,6 +39946,7 @@ server.registerTool(
 Typical workflow: souvenir_projects \u2192 souvenir_sessions (pick a session) \u2192 souvenir_read or souvenir_search with session_id.
 
 Pagination: Shows "Showing X/Y sessions" footer. Increase max_results to see more.`,
+    annotations: READ_ONLY,
     inputSchema: external_exports.object({
       project: external_exports.string().optional().describe("Project directory name or path. Default: current project."),
       search: external_exports.string().optional().describe("Filter sessions where summary or firstPrompt contains this text (case-insensitive)."),
@@ -39480,16 +39957,7 @@ Pagination: Shows "Showing X/Y sessions" footer. Increase max_results to see mor
       include_sidechains: external_exports.boolean().optional().describe("Include sidechain/subagent sessions. Default: false.")
     })
   },
-  withBackgroundIndex(async (params, _ctx) => {
-    try {
-      const text = await handleSouvenirSessions(params);
-      return { content: [{ type: "text", text }] };
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      logger.error("souvenir_sessions error:", msg);
-      return { content: [{ type: "text", text: `Error: ${msg}` }], isError: true };
-    }
-  })
+  toolHandler("souvenir_sessions", (params, _ctx) => handleSouvenirSessions(params))
 );
 server.registerTool(
   "souvenir_projects",
@@ -39498,7 +39966,7 @@ server.registerTool(
 
 Actions:
 - "list" (default): Show all projects with status. Also detects orphaned index data (projects in the semantic index but no longer on disk).
-- "clean": Remove index data for orphaned projects. Frees space in the semantic search database. Transcript files in ~/.claude/projects/ are preserved.
+- "clean": Remove index data for orphaned projects. Frees space in the semantic search database. Transcript files in ~/.claude/projects/ are preserved, but for a project whose transcripts Claude Code already deleted, the index is the last copy of its conversations. Asks the user to confirm when the client supports it.
 
 Typical workflow: souvenir_projects \u2192 souvenir_sessions project="<dir_name>" \u2192 souvenir_read or souvenir_search.`,
     inputSchema: external_exports.object({
@@ -39506,16 +39974,7 @@ Typical workflow: souvenir_projects \u2192 souvenir_sessions project="<dir_name>
       search: external_exports.string().optional().describe("Filter projects whose path contains this text.")
     })
   },
-  withBackgroundIndex(async (params, _ctx) => {
-    try {
-      const text = await handleSouvenirProjects(params);
-      return { content: [{ type: "text", text }] };
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      logger.error("souvenir_projects error:", msg);
-      return { content: [{ type: "text", text: `Error: ${msg}` }], isError: true };
-    }
-  })
+  toolHandler("souvenir_projects", (params, ctx) => handleSouvenirProjects(params, confirm(ctx)))
 );
 server.registerTool(
   "souvenir_index",
@@ -39527,7 +39986,7 @@ Indexing runs automatically in the background after each interaction. Use this t
 - "status": show what's indexed and which embedding model built it.
 - "check": verify the configuration end to end (settings, embedding server, a test embedding, index compatibility). Use it when semantic search fails or after changing settings.
 - "build": index new/updated sessions now (incremental).
-- "rebuild": drop and re-index from scratch. After an embedding model change it resets the whole index (use project="all" to re-index every project now). First-time indexing may take several minutes.
+- "rebuild": drop and re-index from scratch. After an embedding model change it resets the whole index (use project="all" to re-index every project now). First-time indexing may take several minutes. Asks the user to confirm when the client supports it.
 - "vacuum": compact the database file to reclaim disk space from deleted data.`,
     inputSchema: external_exports.object({
       action: external_exports.enum(["status", "check", "build", "rebuild", "vacuum"]).describe('"status": show indexing state. "check": verify configuration and embedding server. "build": incrementally index new content. "rebuild": drop and re-index everything. "vacuum": compact database file.'),
@@ -39535,16 +39994,7 @@ Indexing runs automatically in the background after each interaction. Use this t
       session_id: external_exports.string().optional().describe("Index only a specific session.")
     })
   },
-  withBackgroundIndex(async (params, ctx) => {
-    try {
-      const text = await handleSouvenirIndex(params, ctx);
-      return { content: [{ type: "text", text }] };
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      logger.error("souvenir_index error:", msg);
-      return { content: [{ type: "text", text: `Error: ${msg}` }], isError: true };
-    }
-  })
+  toolHandler("souvenir_index", (params, ctx) => handleSouvenirIndex(params, ctx, confirm(ctx)))
 );
 server.registerTool(
   "souvenir_docs",
@@ -39559,6 +40009,7 @@ Actions \u2014 Setup: "add", "remove", "list", "build" (incremental), "clear".
 Actions \u2014 Navigation: "status", "sections" (markdown TOC with line numbers).
 Actions \u2014 Versioning: "history", "diff", "restore".
 Actions \u2014 Maintenance: "vacuum" (compact DB).
+"restore", "clear" and "build" with rebuild=true ask the user to confirm when the client supports it.
 
 Categories auto-detected by extension: doc (.md, .txt), code (.ts, .py, .go...), config (.json, .yaml...). Override with category parameter.`,
     inputSchema: external_exports.object({
@@ -39571,16 +40022,7 @@ Categories auto-detected by extension: doc (.md, .txt), code (.ts, .py, .go...),
       snapshot_id: external_exports.number().int().optional().describe('For "diff": compare this snapshot to current file. For "restore": snapshot ID to restore (from "history" output).')
     })
   },
-  withBackgroundIndex(async (params, _ctx) => {
-    try {
-      const text = await handleSouvenirDocs(params);
-      return { content: [{ type: "text", text }] };
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      logger.error("souvenir_docs error:", msg);
-      return { content: [{ type: "text", text: `Error: ${msg}` }], isError: true };
-    }
-  })
+  toolHandler("souvenir_docs", (params, ctx) => handleSouvenirDocs(params, confirm(ctx)))
 );
 server.registerTool(
   "souvenir_tree",
@@ -39597,6 +40039,8 @@ Key features beyond a simple tree:
 - directories_only: high-level architecture overview
 
 Output: Standard ASCII tree with connectors + file/directory count summary.`,
+    annotations: READ_ONLY,
+    _meta: LARGE_RESULT_META,
     inputSchema: external_exports.object({
       path: external_exports.string().optional().describe("Subdirectory to display (relative to project root). Default: project root."),
       depth: external_exports.number().int().min(1).max(10).optional().describe("Maximum depth to display. Default: 3."),
@@ -39608,29 +40052,15 @@ Output: Standard ASCII tree with connectors + file/directory count summary.`,
       max_files: external_exports.number().int().min(1).max(1e4).optional().describe('Maximum number of files to show. Directories are always shown. Truncated files show "N more files not shown". Prevents context flooding on large repos.')
     })
   },
-  withBackgroundIndex(async (params, _ctx) => {
-    try {
-      const text = await handleSouvenirTree(params);
-      return { content: [{ type: "text", text }] };
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      logger.error("souvenir_tree error:", msg);
-      return { content: [{ type: "text", text: `Error: ${msg}` }], isError: true };
-    }
-  })
+  toolHandler("souvenir_tree", (params, _ctx) => handleSouvenirTree(params))
 );
+registerSessionResources(server);
+registerPrompts(server);
 async function main() {
   logger.info("Starting souvenir MCP server...");
   const transport = new StdioServerTransport();
   await server.connect(transport);
   logger.info("souvenir MCP server running on stdio");
-  try {
-    const { roots } = await server.server.listRoots();
-    logger.info("MCP roots received:", roots.map((r) => r.uri));
-    setCurrentProjectFromRoots(roots);
-  } catch (err) {
-    logger.info("Could not get MCP roots (client may not support it):", err);
-  }
 }
 var _shuttingDown = false;
 async function gracefulShutdown(signal) {

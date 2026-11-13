@@ -21,6 +21,9 @@ After context compaction, it gets worse: the summary captures *what* was done bu
 - **Search project files** — index docs, code and config of the current project for search by meaning
 - **File versioning** — automatic snapshots of the files you add to the project index, with history, diff and restore (3-day retention)
 - **Read transcripts** — browse a past session or jump to the exact moment a search found
+- **Cite a past session with `@`** — the recent sessions of the project appear in Claude Code's `@` menu; citing one gives Claude its summary, the files it touched and its last exchanges
+- **Recap a session, explain a file** — the `recap` and `why` commands (MCP prompts)
+- **Ask before destroying** — restoring a file, clearing or rebuilding an index, cleaning orphaned projects: Claude Code asks you to confirm first
 - **Stay up to date by itself** — new messages are indexed in the background as you work
 - **Tell Claude when to use it** — at the start of every session, Claude receives short instructions: search past work before asking you to repeat it, find a detail lost in a compaction, check a damaged file's history before anything else, prefer `souvenir_tree` for an overview
 
@@ -65,6 +68,23 @@ Then run **`/asymptomatik-souvenir:souvenir-init`**: it checks the setup, helps 
 
 You can also just ask ("set up souvenir", "is souvenir working?"): Claude uses the same steps.
 
+The MCP server also offers two prompts, listed in the `/` menu as `recap (MCP)` and `why (MCP)`:
+
+| Prompt | What it does |
+|--------|--------------|
+| `recap [session_id]` | Recaps a past session: goal, decisions and their reasons, files changed, what was left open. Without an id, the latest session that is not the current conversation |
+| `why <file>` | Explains why a file changed: souvenir searches the conversations that mention it, Claude reads the moments that matter (and the git history) and answers chronologically. Claude Code splits arguments on spaces, so give a path without spaces |
+
+## Citing past sessions
+
+Type `@` in Claude Code: the 50 most recent sessions of the current project are listed (date and summary) next to your files. Citing one attaches its digest to your message: header, files it touched, its last 20 entries, and how to read further. Any session, from any project, can be cited by its URI: `souvenir://session/<session_id>` (ids from `souvenir_sessions`).
+
+## Confirmations
+
+These actions ask you to confirm in a Claude Code dialog before running, with what they will do: `souvenir_docs` `restore`, `clear` and `build` with `rebuild=true`, `souvenir_index` `rebuild`, `souvenir_projects` `clean`. Their checks run first, so you are only asked for an action that can be done.
+
+A session that cannot show a dialog (`claude -p`, the Agent SDK) cancels the question: these actions then need an interactive session. A client without elicitation support runs them without asking, as before.
+
 ## Configuration
 
 Souvenir works without configuration if Ollama runs locally. Settings are plugin options, changed with `/asymptomatik-souvenir:souvenir-init` or directly with `/plugin configure asymptomatik-souvenir@asymptomatik` (then `/reload-plugins`).
@@ -104,11 +124,15 @@ Ask Claude in plain words; it picks the tools. Some examples:
 | "Recover context after compaction" | `souvenir_search query="..." session_id="current"` |
 | "Show me the project structure" | `souvenir_tree` or `souvenir_tree depth=2 stats=true` |
 | "What changed since the last snapshot?" | `souvenir_docs action="diff" path="src/index.ts"` |
-| "Recover a file after a destructive action" | `souvenir_docs action="history" path="src/index.ts"`, `action="diff" snapshot_id=5` (what restoring would erase), then `action="restore" snapshot_id=5` |
+| "Recover a file after a destructive action" | `souvenir_docs action="history" path="src/index.ts"`, `action="diff" snapshot_id=5` (what restoring would erase), then `action="restore" snapshot_id=5` (you confirm) |
+| "Where were we last time?" | the `recap` prompt from the `/` menu, or cite the session with `@` |
+| "Why is this file like this?" | the `why` prompt with `src/index.ts` |
 
 The first semantic search in a project indexes its existing history; with a long history this takes a few minutes. Progress is shown; press **Esc** to stop waiting (indexing continues in the background) and use `mode="text"` meanwhile. Later searches are incremental and near-instant.
 
 ## MCP tools
+
+`souvenir_search`, `souvenir_read`, `souvenir_sessions` and `souvenir_tree` are marked read-only: Claude Code runs several of their calls in parallel. `souvenir_read` and `souvenir_tree` results stay in the conversation up to 100,000 characters (Claude Code's default moves results over 50,000 characters to a file).
 
 ### souvenir_search
 
@@ -168,10 +192,10 @@ List all projects with conversation history.
 
 | Parameter | Description |
 |-----------|-------------|
-| `action` | `list` (default) or `clean` (remove orphaned index data) |
+| `action` | `list` (default) or `clean` (remove orphaned index data, after your confirmation) |
 | `search` | Filter by path |
 
-Detects orphaned projects (path no longer exists on disk) and orphaned index data.
+Detects orphaned projects (folder deleted, transcripts kept) and orphaned index data (transcripts deleted by Claude Code: the index is then the last copy of those conversations). A project's path comes from Claude Code's session index or from its transcripts; a project whose path cannot be found is shown `[path unknown]` and never treated as orphaned.
 
 ### souvenir_index
 
@@ -260,9 +284,13 @@ All plugin data lives under `.claude/ASymptOmatik/`, the shared namespace for AS
 - Each index records the **embedding identity** it was built with (provider, model, vector size, prefixes). Searches and incremental indexing check it, so vectors from different models are never mixed.
 - Vector size is measured from the model at startup, not configured.
 
+### Current project
+
+The current project is `CLAUDE_PROJECT_DIR`, which Claude Code gives the MCP server and the hooks: the session's project root, unchanged when Claude runs `cd`. Outside Claude Code, the working directory is used.
+
 ### Background indexing
 
-Hooks on Stop, UserPromptSubmit, PostToolUse and PreCompact start an asynchronous indexing run: at most one at a time across all sessions (PID lock), at least 30 s apart. It never blocks Claude.
+Hooks on Stop, UserPromptSubmit, PostToolUse and PreCompact start an asynchronous indexing run: at most one at a time across all sessions (PID lock), at least 30 s apart. It never blocks Claude; a failed run exits with an error on stderr. Inside the MCP server, index builds run one after the other (parallel searches would otherwise embed the same new messages twice).
 
 ### Multi-agent and multi-project
 
@@ -276,10 +304,12 @@ Hooks on Stop, UserPromptSubmit, PostToolUse and PreCompact start an asynchronou
 ```
 src/
 ├── index.ts               # MCP server + tool definitions
+├── resources.ts           # Past sessions as MCP resources (@ mentions)
+├── prompts.ts             # MCP prompts: recap, why
 ├── background-index.ts    # Hook entry point: debounced background indexing
 ├── config.ts              # Project detection + effective configuration
 ├── options.ts             # Plugin options (userConfig) parsing
-├── tools/                 # One handler per MCP tool (+ helpers.ts)
+├── tools/                 # One handler per MCP tool (+ helpers.ts, confirm.ts for confirmations)
 ├── transcript/            # Project/session discovery, JSONL parser, formatting
 ├── indexer/background.ts  # In-server background indexing scheduler
 ├── db/
@@ -296,7 +326,7 @@ src/
 │   ├── openai.ts          # OpenAI-compatible provider
 │   └── chunker.ts         # Transcript → chunks
 ├── search/                # Text and semantic search, density boost
-└── utils/                 # Logger, paths
+└── utils/                 # Logger, paths, one-at-a-time runs (serial.ts)
 ```
 
 ## Development

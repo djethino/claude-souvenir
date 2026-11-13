@@ -2,6 +2,7 @@ import { statSync, readdirSync, readFileSync } from 'fs';
 import { join, relative, resolve } from 'path';
 import { createHash } from 'crypto';
 import { logger } from '../utils/logger.js';
+import { serialized } from '../utils/serial.js';
 import { chunkFile, detectCategory, isSupportedExtension } from './chunker.js';
 import type { EmbeddingProvider } from '../embedding/provider.js';
 import type { DocCategory } from './store.js';
@@ -156,8 +157,13 @@ export function resolveSourceFiles(
 /**
  * Build the docs semantic index for a project.
  * Scans configured sources, detects changes, chunks, and embeds.
+ *
+ * Builds in this process run one after the other: a "build" or "rebuild" from souvenir_docs can
+ * otherwise overlap the background index, and a rebuild recreates the tables the other run writes to.
  */
-export async function buildDocsIndex(
+export const buildDocsIndex = serialized(runBuildDocsIndex);
+
+async function runBuildDocsIndex(
   projectRoot: string,
   provider: EmbeddingProvider,
   options: {

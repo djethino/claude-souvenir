@@ -1,10 +1,9 @@
 #!/usr/bin/env node
 
-import { McpServer } from '@modelcontextprotocol/server';
+import { McpServer, type CallToolResult, type InputRequiredResult } from '@modelcontextprotocol/server';
 import { StdioServerTransport } from '@modelcontextprotocol/server/stdio';
 import { z } from 'zod';
 import { logger } from './utils/logger.js';
-import { setCurrentProjectFromRoots } from './config.js';
 import { handleSouvenirSearch } from './tools/search.js';
 import { handleSouvenirRead } from './tools/read.js';
 import { handleSouvenirSessions } from './tools/sessions.js';
@@ -14,7 +13,10 @@ import { handleSouvenirDocs } from './tools/docs.js';
 import { handleSouvenirTree } from './tools/tree.js';
 import { scheduleBackgroundIndex, abortBackgroundIndex, waitForIndexing } from './indexer/background.js';
 import type { ToolContext } from './tools/helpers.js';
-import { disposeSingletonProvider } from './tools/helpers.js';
+import { disposeSingletonProvider, errorMessage } from './tools/helpers.js';
+import { ConfirmationNeeded, confirmFor, type Confirm } from './tools/confirm.js';
+import { registerSessionResources } from './resources.js';
+import { registerPrompts } from './prompts.js';
 import { closeDb } from './db/store.js';
 import { closeDocsDb } from './docs/store.js';
 
@@ -33,18 +35,41 @@ const INSTRUCTIONS = `souvenir searches this user's past Claude Code conversatio
 
 const server = new McpServer({ name: 'souvenir', version: __SOUVENIR_VERSION__ }, { instructions: INSTRUCTIONS });
 
-type ToolResult = { content: Array<{ type: 'text'; text: string }>; isError?: boolean };
+/** Tools that change nothing: Claude Code runs their calls in parallel with other read-only calls. */
+const READ_ONLY = { readOnlyHint: true } as const;
 
 /**
- * Wrap a tool handler to add background indexing and pass through the MCP context
- * (progress notifications, abort signal).
+ * Claude Code saves a text result longer than 50,000 characters to a file and gives Claude only a
+ * reference to it, unless the tool raises its own threshold. 100,000 characters is about the
+ * default MCP output budget (MAX_MCP_OUTPUT_TOKENS = 25,000 tokens): long reads and trees stay
+ * in the conversation instead of being redirected to a file early.
  */
-function withBackgroundIndex<T>(handler: (params: T, ctx: ToolContext) => Promise<ToolResult>) {
-  return async (params: T, ctx: ToolContext) => {
-    const result = await handler(params, ctx);
-    scheduleBackgroundIndex();
-    return result;
+const LARGE_RESULT_META = { 'anthropic/maxResultSizeChars': 100_000 };
+
+/**
+ * Turn a handler returning text into an MCP tool callback: a thrown error becomes an error result,
+ * a pending confirmation becomes the question to the user (see tools/confirm.ts), and every call
+ * schedules a background index of the current project.
+ */
+function toolHandler<T>(name: string, handler: (params: T, ctx: ToolContext) => Promise<string>) {
+  return async (params: T, ctx: ToolContext): Promise<CallToolResult | InputRequiredResult> => {
+    try {
+      const text = await handler(params, ctx);
+      return { content: [{ type: 'text', text }] };
+    } catch (err) {
+      if (err instanceof ConfirmationNeeded) return err.toInputRequired();
+      const msg = errorMessage(err);
+      logger.error(`${name} error:`, msg);
+      return { content: [{ type: 'text', text: `Error: ${msg}` }], isError: true };
+    } finally {
+      scheduleBackgroundIndex();
+    }
   };
+}
+
+/** Confirmation of destructive actions for one tool call. */
+function confirm(ctx: ToolContext): Confirm {
+  return confirmFor(ctx, () => server.server.getClientCapabilities());
 }
 
 // --- souvenir_search ---
@@ -64,6 +89,7 @@ Sources:
 Results include session_id + entry_uuid (transcripts) or file_path + line range (docs). Cross-reference hints show matches in the other source when available.
 
 Workflow: souvenir_search → souvenir_read around_uuid for full context.`,
+    annotations: READ_ONLY,
     inputSchema: z.object({
       query: z.string().describe('What you are looking for. Works with natural language, exact terms, function names, error messages — hybrid mode handles all of these.'),
       mode: z.enum(['text', 'semantic', 'hybrid']).optional().describe('Default: "hybrid" (text + semantic combined). Use "text" only for regex patterns. Use "semantic" for pure meaning-based search.'),
@@ -80,16 +106,7 @@ Workflow: souvenir_search → souvenir_read around_uuid for full context.`,
       regex: z.boolean().optional().describe('For text mode: treat query as regex pattern. Default: false.'),
     }),
   },
-  withBackgroundIndex(async (params, ctx) => {
-    try {
-      const text = await handleSouvenirSearch(params, ctx);
-      return { content: [{ type: 'text' as const, text }] };
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      logger.error('souvenir_search error:', msg);
-      return { content: [{ type: 'text' as const, text: `Error: ${msg}` }], isError: true };
-    }
-  }),
+  toolHandler('souvenir_search', (params, ctx) => handleSouvenirSearch(params, ctx)),
 );
 
 // --- souvenir_read ---
@@ -108,6 +125,8 @@ Reading modes:
 - detail_level="tools": tool usage summary with call counts and error indicators.
 
 Pagination: footer shows page position and navigation hints. Use max_entries=1 with around_uuid to read a single full entry without truncation.`,
+    annotations: READ_ONLY,
+    _meta: LARGE_RESULT_META,
     inputSchema: z.object({
       session_id: z.string().describe('Session UUID to read from. Use "current" for the most recent session.'),
       project: z.string().optional().describe('Project directory name. Default: current project (also searches other projects if not found).'),
@@ -121,16 +140,7 @@ Pagination: footer shows page position and navigation hints. Use max_entries=1 w
       entry_types: z.string().optional().describe('Comma-separated types to include. Default: "user,assistant,summary". Add "progress" if needed.'),
     }),
   },
-  withBackgroundIndex(async (params, _ctx) => {
-    try {
-      const text = await handleSouvenirRead(params);
-      return { content: [{ type: 'text' as const, text }] };
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      logger.error('souvenir_read error:', msg);
-      return { content: [{ type: 'text' as const, text: `Error: ${msg}` }], isError: true };
-    }
-  }),
+  toolHandler('souvenir_read', (params, _ctx) => handleSouvenirRead(params)),
 );
 
 // --- souvenir_sessions ---
@@ -142,6 +152,7 @@ server.registerTool(
 Typical workflow: souvenir_projects → souvenir_sessions (pick a session) → souvenir_read or souvenir_search with session_id.
 
 Pagination: Shows "Showing X/Y sessions" footer. Increase max_results to see more.`,
+    annotations: READ_ONLY,
     inputSchema: z.object({
       project: z.string().optional().describe('Project directory name or path. Default: current project.'),
       search: z.string().optional().describe('Filter sessions where summary or firstPrompt contains this text (case-insensitive).'),
@@ -152,16 +163,7 @@ Pagination: Shows "Showing X/Y sessions" footer. Increase max_results to see mor
       include_sidechains: z.boolean().optional().describe('Include sidechain/subagent sessions. Default: false.'),
     }),
   },
-  withBackgroundIndex(async (params, _ctx) => {
-    try {
-      const text = await handleSouvenirSessions(params);
-      return { content: [{ type: 'text' as const, text }] };
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      logger.error('souvenir_sessions error:', msg);
-      return { content: [{ type: 'text' as const, text: `Error: ${msg}` }], isError: true };
-    }
-  }),
+  toolHandler('souvenir_sessions', (params, _ctx) => handleSouvenirSessions(params)),
 );
 
 // --- souvenir_projects ---
@@ -172,7 +174,7 @@ server.registerTool(
 
 Actions:
 - "list" (default): Show all projects with status. Also detects orphaned index data (projects in the semantic index but no longer on disk).
-- "clean": Remove index data for orphaned projects. Frees space in the semantic search database. Transcript files in ~/.claude/projects/ are preserved.
+- "clean": Remove index data for orphaned projects. Frees space in the semantic search database. Transcript files in ~/.claude/projects/ are preserved, but for a project whose transcripts Claude Code already deleted, the index is the last copy of its conversations. Asks the user to confirm when the client supports it.
 
 Typical workflow: souvenir_projects → souvenir_sessions project="<dir_name>" → souvenir_read or souvenir_search.`,
     inputSchema: z.object({
@@ -180,16 +182,7 @@ Typical workflow: souvenir_projects → souvenir_sessions project="<dir_name>" �
       search: z.string().optional().describe('Filter projects whose path contains this text.'),
     }),
   },
-  withBackgroundIndex(async (params, _ctx) => {
-    try {
-      const text = await handleSouvenirProjects(params);
-      return { content: [{ type: 'text' as const, text }] };
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      logger.error('souvenir_projects error:', msg);
-      return { content: [{ type: 'text' as const, text: `Error: ${msg}` }], isError: true };
-    }
-  }),
+  toolHandler('souvenir_projects', (params, ctx) => handleSouvenirProjects(params, confirm(ctx))),
 );
 
 // --- souvenir_index ---
@@ -203,7 +196,7 @@ Indexing runs automatically in the background after each interaction. Use this t
 - "status": show what's indexed and which embedding model built it.
 - "check": verify the configuration end to end (settings, embedding server, a test embedding, index compatibility). Use it when semantic search fails or after changing settings.
 - "build": index new/updated sessions now (incremental).
-- "rebuild": drop and re-index from scratch. After an embedding model change it resets the whole index (use project="all" to re-index every project now). First-time indexing may take several minutes.
+- "rebuild": drop and re-index from scratch. After an embedding model change it resets the whole index (use project="all" to re-index every project now). First-time indexing may take several minutes. Asks the user to confirm when the client supports it.
 - "vacuum": compact the database file to reclaim disk space from deleted data.`,
     inputSchema: z.object({
       action: z.enum(['status', 'check', 'build', 'rebuild', 'vacuum']).describe('"status": show indexing state. "check": verify configuration and embedding server. "build": incrementally index new content. "rebuild": drop and re-index everything. "vacuum": compact database file.'),
@@ -211,16 +204,7 @@ Indexing runs automatically in the background after each interaction. Use this t
       session_id: z.string().optional().describe('Index only a specific session.'),
     }),
   },
-  withBackgroundIndex(async (params, ctx) => {
-    try {
-      const text = await handleSouvenirIndex(params, ctx);
-      return { content: [{ type: 'text' as const, text }] };
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      logger.error('souvenir_index error:', msg);
-      return { content: [{ type: 'text' as const, text: `Error: ${msg}` }], isError: true };
-    }
-  }),
+  toolHandler('souvenir_index', (params, ctx) => handleSouvenirIndex(params, ctx, confirm(ctx))),
 );
 
 // --- souvenir_docs ---
@@ -237,6 +221,7 @@ Actions — Setup: "add", "remove", "list", "build" (incremental), "clear".
 Actions — Navigation: "status", "sections" (markdown TOC with line numbers).
 Actions — Versioning: "history", "diff", "restore".
 Actions — Maintenance: "vacuum" (compact DB).
+"restore", "clear" and "build" with rebuild=true ask the user to confirm when the client supports it.
 
 Categories auto-detected by extension: doc (.md, .txt), code (.ts, .py, .go...), config (.json, .yaml...). Override with category parameter.`,
     inputSchema: z.object({
@@ -249,16 +234,7 @@ Categories auto-detected by extension: doc (.md, .txt), code (.ts, .py, .go...),
       snapshot_id: z.number().int().optional().describe('For "diff": compare this snapshot to current file. For "restore": snapshot ID to restore (from "history" output).'),
     }),
   },
-  withBackgroundIndex(async (params, _ctx) => {
-    try {
-      const text = await handleSouvenirDocs(params);
-      return { content: [{ type: 'text' as const, text }] };
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      logger.error('souvenir_docs error:', msg);
-      return { content: [{ type: 'text' as const, text: `Error: ${msg}` }], isError: true };
-    }
-  }),
+  toolHandler('souvenir_docs', (params, ctx) => handleSouvenirDocs(params, confirm(ctx))),
 );
 
 // --- souvenir_tree ---
@@ -277,6 +253,8 @@ Key features beyond a simple tree:
 - directories_only: high-level architecture overview
 
 Output: Standard ASCII tree with connectors + file/directory count summary.`,
+    annotations: READ_ONLY,
+    _meta: LARGE_RESULT_META,
     inputSchema: z.object({
       path: z.string().optional().describe('Subdirectory to display (relative to project root). Default: project root.'),
       depth: z.number().int().min(1).max(10).optional().describe('Maximum depth to display. Default: 3.'),
@@ -288,17 +266,11 @@ Output: Standard ASCII tree with connectors + file/directory count summary.`,
       max_files: z.number().int().min(1).max(10000).optional().describe('Maximum number of files to show. Directories are always shown. Truncated files show "N more files not shown". Prevents context flooding on large repos.'),
     }),
   },
-  withBackgroundIndex(async (params, _ctx) => {
-    try {
-      const text = await handleSouvenirTree(params);
-      return { content: [{ type: 'text' as const, text }] };
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      logger.error('souvenir_tree error:', msg);
-      return { content: [{ type: 'text' as const, text: `Error: ${msg}` }], isError: true };
-    }
-  }),
+  toolHandler('souvenir_tree', (params, _ctx) => handleSouvenirTree(params)),
 );
+
+registerSessionResources(server);
+registerPrompts(server);
 
 // --- Start server ---
 async function main() {
@@ -306,16 +278,6 @@ async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
   logger.info('souvenir MCP server running on stdio');
-
-  // Request workspace roots from Claude Code as fallback for project detection.
-  // Primary detection uses process.cwd(), roots is a backup via MCP protocol.
-  try {
-    const { roots } = await server.server.listRoots();
-    logger.info('MCP roots received:', roots.map((r) => r.uri));
-    setCurrentProjectFromRoots(roots);
-  } catch (err) {
-    logger.info('Could not get MCP roots (client may not support it):', err);
-  }
 }
 
 // --- Graceful shutdown ---

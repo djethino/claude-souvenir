@@ -474,10 +474,6 @@ export async function handleSouvenirTree(params: {
   const config = getConfig();
   const projectRoot = config.cwd;
 
-  if (!projectRoot) {
-    return 'Error: Could not detect current project directory.';
-  }
-
   const maxDepth = Math.min(Math.max(params.depth ?? 3, 1), 10);
   const pattern = params.pattern ?? null;
   const dirsOnly = params.directories_only ?? false;
