@@ -12,7 +12,7 @@ import { applySessionDensityBoost } from '../search/density-boost.js';
 import type { SearchResult } from '../transcript/types.js';
 import { searchDocsSemantic, docsDbExists, getDocsChunkCount } from '../docs/store.js';
 import type { DocCategory, DocVecSearchResult } from '../docs/store.js';
-import type { ToolExtra } from './helpers.js';
+import type { ToolContext } from './helpers.js';
 import { createProgressNotifier } from './helpers.js';
 
 /**
@@ -67,7 +67,7 @@ export async function handleSouvenirSearch(params: {
   offset?: number;
   case_sensitive?: boolean;
   regex?: boolean;
-}, extra?: ToolExtra): Promise<string> {
+}, ctx?: ToolContext): Promise<string> {
   const config = getConfig();
   const mode = params.mode || 'hybrid';
   const source = params.source || 'transcripts';
@@ -111,9 +111,9 @@ export async function handleSouvenirSearch(params: {
   if (mode === 'text') {
     result = await performTextSearch(params, projectDirs, maxResults);
   } else if (mode === 'semantic') {
-    result = await performSemanticSearch(params, projectDirs, maxResults, extra);
+    result = await performSemanticSearch(params, projectDirs, maxResults, ctx);
   } else if (mode === 'hybrid') {
-    result = await performHybridSearch(params, projectDirs, maxResults, extra);
+    result = await performHybridSearch(params, projectDirs, maxResults, ctx);
   } else {
     return `Unknown search mode: "${mode}". Use "text", "semantic", or "hybrid".`;
   }
@@ -205,7 +205,7 @@ async function performSemanticSearch(
   },
   projectDirs: string[],
   maxResults: number,
-  extra?: ToolExtra,
+  ctx?: ToolContext,
 ): Promise<string> {
   const config = getConfig();
 
@@ -221,7 +221,7 @@ async function performSemanticSearch(
       try {
         await buildIndex(provider, projectDirs, {
           rebuild: false,
-          onProgress: createProgressNotifier(extra),
+          onProgress: createProgressNotifier(ctx),
         });
       } catch (err) {
         logger.warn('Auto-index failed, continuing with existing index:', err);
@@ -303,7 +303,7 @@ async function performHybridSearch(
   },
   projectDirs: string[],
   maxResults: number,
-  extra?: ToolExtra,
+  ctx?: ToolContext,
 ): Promise<string> {
   // Run text and semantic search in parallel
   const textPromise = textSearch({
@@ -339,7 +339,7 @@ async function performHybridSearch(
         try {
           await buildIndex(provider, projectDirs, {
             rebuild: false,
-            onProgress: createProgressNotifier(extra),
+            onProgress: createProgressNotifier(ctx),
           });
         } catch (err) {
           logger.warn('Auto-index failed in hybrid mode:', err);

@@ -1,6 +1,6 @@
 {
   "name": "asymptomatik-souvenir",
-  "version": "0.4.6",
+  "version": "0.4.7",
   "description": "MCP server for searching and browsing Claude Code conversation transcripts",
   "type": "module",
   "bin": {
@@ -18,7 +18,7 @@
     "prepublishOnly": "npm run build"
   },
   "devDependencies": {
-    "@modelcontextprotocol/sdk": "^1.32.2",
+    "@modelcontextprotocol/server": "^2.4.0",
     "@types/node": "^22.20.5",
     "esbuild": "0.28.2",
     "typescript": "^7.0.2",

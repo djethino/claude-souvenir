@@ -315,7 +315,7 @@ Add the clone as a local marketplace (`/plugin marketplace add <path>`), install
 Technical details:
 
 - TypeScript (ESM), bundled into `dist/index.js` (MCP server) and `dist/background-index.js` (hooks)
-- No runtime dependency to install: `@modelcontextprotocol/sdk` and `zod` are bundled, SQLite is `node:sqlite`, sqlite-vec is vendored per platform (`vendor/sqlite-vec/README.md`)
+- No runtime dependency to install: `@modelcontextprotocol/server` and `zod` are bundled, SQLite is `node:sqlite`, sqlite-vec is vendored per platform (`vendor/sqlite-vec/README.md`)
 - Auto-detected file categories: `.md .txt .rst .adoc` (doc), `.ts .tsx .js .jsx .mjs .cjs .py .go .rs .java .c .cpp .h .hpp .cs .rb .php .swift .kt .lua .sh .bash .ps1 .bat .vue .svelte .css .scss .less .html .xml .sql .graphql .gql .gd .gdshader` (code), `.json .yaml .yml .toml .ini .editorconfig` (config)
 
 ## Ecosystem
