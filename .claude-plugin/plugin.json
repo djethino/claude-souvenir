@@ -1,6 +1,6 @@
 {
   "name": "asymptomatik-souvenir",
-  "version": "0.4.5",
+  "version": "0.4.6",
   "description": "Search and browse past Claude Code conversation transcripts with text and semantic search",
   "author": {
     "name": "ASymptOmatik"
