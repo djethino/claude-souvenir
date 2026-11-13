@@ -1,5 +1,5 @@
-import { getSessionFilePath, getSessionMetadata, resolveCurrentSession } from '../transcript/discovery.js';
-import { parseTranscript } from '../transcript/parser.js';
+import { getSessionFilePath, getSessionMetadata, resolveCurrentSession, withEntryCount } from '../transcript/discovery.js';
+import { DEFAULT_ENTRY_TYPES, parseTranscript } from '../transcript/parser.js';
 import {
   formatEntry,
   formatSessionHeader,
@@ -11,6 +11,42 @@ import {
 import { getConfig } from '../config.js';
 import { resolveProjectDir } from '../utils/paths.js';
 import type { DetailLevel } from '../transcript/types.js';
+
+/** Metadata for a session header, with the real entry count. */
+function headerMetadata(sessionId: string, projectDir: string): ReturnType<typeof getSessionMetadata> {
+  const meta = getSessionMetadata(sessionId, projectDir);
+  return meta && { ...meta, entry: withEntryCount(meta.entry, meta.projectDir) };
+}
+
+/** Last entries a session digest shows (souvenir_read's default page size). */
+const DIGEST_ENTRIES = 20;
+
+/**
+ * What Claude gets when a past session is cited (@ resource) or recapped (prompt): the session
+ * header, the files it touched, and its last entries, with how to read further.
+ * Looks in the current project first, then in every project. Returns null when the session does not exist.
+ */
+export async function readSessionDigest(sessionId: string): Promise<string | null> {
+  const config = getConfig();
+  const location = (config.currentProject ? getSessionFilePath(sessionId, config.currentProject) : null)
+    ?? getSessionFilePath(sessionId);
+  if (!location) return null;
+
+  const meta = headerMetadata(sessionId, location.projectDir);
+  const files = await readAggregate(location.filePath, 'files', null);
+  const lastEntries = await readPage(location.filePath, undefined, DIGEST_ENTRIES, DEFAULT_ENTRY_TYPES, 'conversation', null);
+
+  return [
+    meta ? formatSessionHeader(meta.entry) : `Session: ${sessionId}\nProject: ${location.projectDir}`,
+    `Read more: souvenir_read session_id="${sessionId}" project="${location.projectDir}" (from_line for earlier entries, around_uuid for one moment).`,
+    '',
+    '=== Files touched ===',
+    files,
+    '',
+    `=== Last ${DIGEST_ENTRIES} entries ===`,
+    lastEntries,
+  ].join('\n');
+}
 
 export async function handleSouvenirRead(params: {
   session_id: string;
@@ -46,13 +82,12 @@ export async function handleSouvenirRead(params: {
     return `Error: Session "${sessionId}" not found in ${searchAllProjects ? 'any project' : projectDir ? `project "${params.project}"` : 'current project'}. Use souvenir_sessions to list valid session IDs, or specify the project parameter to search in a different project.`;
   }
 
-  // Get session metadata
-  const meta = getSessionMetadata(sessionId, location.projectDir);
+  const meta = headerMetadata(sessionId, location.projectDir);
 
   // Parse entry types
   const entryTypes = params.entry_types
     ? params.entry_types.split(',').map((t) => t.trim())
-    : ['user', 'assistant', 'summary'];
+    : DEFAULT_ENTRY_TYPES;
 
   const maxEntries = Math.min(params.max_entries || 20, 200);
   const detailLevel: DetailLevel = params.detail_level || 'conversation';

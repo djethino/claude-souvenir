@@ -1,7 +1,8 @@
 import { readFileSync, readdirSync, existsSync, statSync, openSync, readSync, closeSync } from 'fs';
 import { join, basename } from 'path';
 import { logger } from '../utils/logger.js';
-import { getProjectsDir, getProjectTranscriptDir } from '../utils/paths.js';
+import { getProjectsDir, getProjectTranscriptDir, isProjectPath } from '../utils/paths.js';
+import { countTranscriptEntries } from './entry-count.js';
 import type { SessionIndex, SessionIndexEntry } from './types.js';
 
 // Cache session indexes in memory (small data, read frequently)
@@ -94,6 +95,8 @@ export function getSessions(
     entries = entries.filter((e) => new Date(e.created).getTime() <= to);
   }
 
+  entries = entries.map((e) => withEntryCount(e, projectDir));
+
   // Sort
   const sort = options.sort || 'newest';
   entries.sort((a, b) => {
@@ -110,6 +113,28 @@ export function getSessions(
   });
 
   return entries;
+}
+
+/**
+ * The session with its real entry count. Neither source has it: sessions-index.json (no longer
+ * written by Claude Code) holds a count frozen when it was written, and the metadata of sessions
+ * missing from it comes from the file's first 64 KB only.
+ */
+/** messageCount of a session whose transcript could not be counted. */
+export const UNKNOWN_COUNT = -1;
+
+export function withEntryCount(entry: SessionIndexEntry, projectDir: string): SessionIndexEntry {
+  const filePath = entry.fullPath && existsSync(entry.fullPath)
+    ? entry.fullPath
+    : join(getProjectTranscriptDir(projectDir), `${entry.sessionId}.jsonl`);
+  if (!existsSync(filePath)) return entry; // transcript deleted: keep what the index recorded
+  try {
+    return { ...entry, messageCount: countTranscriptEntries(filePath) };
+  } catch (err) {
+    // One unreadable transcript must not fail the whole list: its count shows as unknown
+    logger.warn(`Could not count the entries of ${filePath}:`, err);
+    return { ...entry, messageCount: UNKNOWN_COUNT };
+  }
 }
 
 /**
@@ -146,7 +171,8 @@ export function getSessionFilePath(
 }
 
 /**
- * Get session metadata from the index.
+ * Get session metadata from the index (summary, first prompt, dates). Cheap: messageCount is not
+ * computed (it reads the whole transcript); pass the result to withEntryCount where it is shown.
  */
 export function getSessionMetadata(
   sessionId: string,
@@ -218,7 +244,7 @@ export function listTranscriptFiles(
 
       subagentFiles.push(...agentFiles);
     } catch (err) {
-      logger.debug(`Error reading subagents for ${entry.name}:`, err);
+      logger.warn(`Error reading subagents for ${entry.name}:`, err);
     }
   }
 
@@ -253,7 +279,14 @@ export function discoverOrphanSessions(projectDir: string): SessionIndexEntry[] 
       const meta = extractMinimalMetadata(filePath, sessionId, projectDir);
       if (meta) orphans.push(meta);
     } catch (err) {
-      logger.debug(`Failed to read orphan session ${sessionId}:`, err);
+      // Listed anyway, with the reason as its title: a session that vanished from lists would go unnoticed
+      logger.warn(`Failed to read session ${sessionId}:`, err);
+      const mtime = new Date(statSync(filePath).mtimeMs).toISOString();
+      orphans.push({
+        sessionId, fullPath: filePath, fileMtime: Date.parse(mtime), summary: '',
+        firstPrompt: `(unreadable: ${err instanceof Error ? err.message : String(err)})`,
+        messageCount: 0, created: mtime, modified: mtime, gitBranch: '', projectPath: '', isSidechain: false,
+      });
     }
   }
 
@@ -263,6 +296,8 @@ export function discoverOrphanSessions(projectDir: string): SessionIndexEntry[] 
 /**
  * Read the beginning of a .jsonl file to extract minimal session metadata.
  * Uses sync read of first 64KB to avoid async complexity while keeping it fast.
+ * messageCount is left at 0: it needs the whole file (see withEntryCount, applied by getSessions
+ * and by souvenir_read's headers; listing projects and search results do not need it).
  */
 function extractMinimalMetadata(
   filePath: string,
@@ -287,7 +322,9 @@ function extractMinimalMetadata(
 
   let firstPrompt = '';
   let firstTimestamp = '';
-  let messageCount = 0;
+  let hasMessage = false;
+  let gitBranch = '';
+  let projectPath = '';
 
   for (const line of lines) {
     if (!line.trim()) continue;
@@ -301,11 +338,21 @@ function extractMinimalMetadata(
       }
 
       if (entry.type === 'user' || entry.type === 'assistant') {
-        messageCount++;
+        hasMessage = true;
       }
 
-      // Capture first user message as firstPrompt
-      if (entry.type === 'user' && !firstPrompt) {
+      if (entry.gitBranch && !gitBranch) {
+        gitBranch = entry.gitBranch;
+      }
+
+      // The project's real path: a cwd that encodes to this project dir (a session can start elsewhere)
+      if (!projectPath && typeof entry.cwd === 'string' && isProjectPath(entry.cwd, projectDir)) {
+        projectPath = entry.cwd;
+      }
+
+      // Capture first user message as firstPrompt (isMeta entries are Claude Code's own
+      // context, such as the <local-command-caveat> recorded before a slash command)
+      if (entry.type === 'user' && !entry.isMeta && !firstPrompt) {
         if (typeof entry.message?.content === 'string') {
           firstPrompt = entry.message.content.slice(0, 200);
         } else if (Array.isArray(entry.message?.content)) {
@@ -321,7 +368,7 @@ function extractMinimalMetadata(
   }
 
   // Skip completely empty files
-  if (messageCount === 0 && !firstPrompt) return null;
+  if (!hasMessage && !firstPrompt) return null;
 
   return {
     sessionId,
@@ -329,11 +376,12 @@ function extractMinimalMetadata(
     fileMtime: stat.mtimeMs,
     firstPrompt,
     summary: '', // No summary available for orphans
-    messageCount,
+    messageCount: 0,
     created: firstTimestamp || new Date(stat.birthtimeMs).toISOString(),
     modified: new Date(stat.mtimeMs).toISOString(),
-    gitBranch: '',
-    projectPath: projectDir,
+    gitBranch,
+    projectPath, // '' when no entry in the first 64 KB ran in the project root
+
     isSidechain: false,
   };
 }
@@ -350,10 +398,15 @@ export function resolveCurrentSession(projectDir?: string): string | null {
 
 /**
  * Get project info: original path and session count.
+ *
+ * originalPath comes from sessions-index.json, else from the transcripts (the cwd of an entry run
+ * in the project root). It is null when neither gives it: the dir name cannot be decoded back
+ * ("-" stands for any non-alphanumeric character), and a guessed path would make a live project
+ * look deleted.
  */
 export function getProjectInfo(projectDir: string): {
   dirName: string;
-  originalPath: string;
+  originalPath: string | null;
   sessionCount: number;
   latestDate: string | null;
   oldestDate: string | null;
@@ -370,7 +423,7 @@ export function getProjectInfo(projectDir: string): {
 
   return {
     dirName: projectDir,
-    originalPath: index?.originalPath || projectDir.replace(/--/g, '/'),
+    originalPath: index?.originalPath || allEntries.find((e) => e.projectPath && isProjectPath(e.projectPath, projectDir))?.projectPath || null,
     sessionCount: nonSidechain.length,
     latestDate: dates.length ? new Date(Math.max(...dates)).toISOString() : null,
     oldestDate: dates.length ? new Date(Math.min(...dates)).toISOString() : null,

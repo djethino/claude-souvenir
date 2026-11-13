@@ -10,6 +10,7 @@ export async function handleSouvenirSessions(params: {
   date_to?: string;
   sort?: 'newest' | 'oldest' | 'messages';
   max_results?: number;
+  offset?: number;
   include_sidechains?: boolean;
 }): Promise<string> {
   const config = getConfig();
@@ -30,9 +31,11 @@ export async function handleSouvenirSessions(params: {
   });
 
   const maxResults = Math.min(params.max_results || 20, 50);
-  const displayed = sessions.slice(0, maxResults);
+  const offset = params.offset ?? 0;
+  const displayed = sessions.slice(offset, offset + maxResults);
 
   if (displayed.length === 0) {
+    if (sessions.length > 0) return `No sessions after offset ${offset} (${sessions.length} in all).`;
     return params.search
       ? `No sessions found matching "${params.search}" in project "${projectDir}".`
       : `No sessions found for project "${projectDir}".`;
@@ -42,15 +45,15 @@ export async function handleSouvenirSessions(params: {
   const index = loadSessionIndex(projectDir);
   const originalPath = index?.originalPath || projectDir;
   const total = sessions.length;
-  const hasMore = total > maxResults;
+  const endIndex = offset + displayed.length;
 
   const header = `Project: ${originalPath} (${total} session${total > 1 ? 's' : ''})\n`;
 
-  const entries = displayed.map((s, i) => formatSessionListEntry(s, i));
+  const entries = displayed.map((s, i) => formatSessionListEntry(s, offset + i));
 
-  const footer = hasMore
-    ? `\n--- Showing ${maxResults}/${total} sessions | ${total - maxResults} more | Increase max_results to see more ---`
-    : '';
+  const footer = endIndex < total
+    ? `\n--- Showing ${offset + 1}-${endIndex} of ${total} sessions | ${total - endIndex} more | Next page: offset=${endIndex} ---`
+    : offset > 0 ? `\n--- Showing ${offset + 1}-${endIndex} of ${total} sessions (end) ---` : '';
 
   return header + '\n' + entries.join('\n\n') + footer;
 }

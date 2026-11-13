@@ -69,27 +69,17 @@ function acquireLock(): boolean {
   return false;
 }
 
-// ── Resolve current project from hook stdin ─────────────────────────────────
-let cwd: string | undefined;
-try {
-  const data = JSON.parse(readFileSync(0, 'utf-8')) as { cwd?: string };
-  cwd = data.cwd;
-} catch {
-  cwd = process.cwd();
-}
-
-if (!cwd || !acquireLock()) {
+if (!acquireLock()) {
   process.exit(0);
 }
 
-// Set CWD env so getConfig() detects the project
-process.env.CWD = cwd;
-
 // ── Run indexation ──────────────────────────────────────────────────────────
+// The project comes from CLAUDE_PROJECT_DIR (see getConfig), not from the hook input's `cwd`,
+// which follows Claude's `cd` and would miss the project (and its docs index) in a subfolder.
 async function run(): Promise<void> {
   const config = getConfig();
   if (!config.currentProject) {
-    return; // CWD doesn't match any known project
+    return; // The project has no Claude Code history yet
   }
 
   const provider = createEmbeddingProvider(config);
@@ -104,7 +94,7 @@ async function run(): Promise<void> {
 
     // 2. Index docs (local DB) if sources are configured
     const projectRoot = config.cwd;
-    if (projectRoot && docsDbExists(projectRoot)) {
+    if (docsDbExists(projectRoot)) {
       const sources = getDocSources(projectRoot);
       if (sources.length > 0) {
         const docsResult = await buildDocsIndex(projectRoot, provider, { rebuild: false });
@@ -120,6 +110,7 @@ async function run(): Promise<void> {
 
 run().catch((err) => {
   process.stderr.write(`[souvenir] Background index error: ${err?.message || err}\n`);
+  process.exitCode = 1;
 }).finally(() => {
   // Record the end of this run for the debounce, then let the next run take the lock
   writeFileSync(LAST_RUN_FILE, String(Date.now()));

@@ -3,13 +3,14 @@ import { listProjectDirs, getProjectInfo } from '../transcript/discovery.js';
 import { getConfig } from '../config.js';
 import { getIndexStatus, clearProject } from '../db/store.js';
 import { logger } from '../utils/logger.js';
+import { DECLINED, type Confirm } from './confirm.js';
 
 export async function handleSouvenirProjects(params: {
   search?: string;
   action?: 'list' | 'clean';
-}): Promise<string> {
+}, confirm: Confirm): Promise<string> {
   if (params.action === 'clean') {
-    return handleClean();
+    return handleClean(confirm);
   }
 
   const config = getConfig();
@@ -25,7 +26,7 @@ export async function handleSouvenirProjects(params: {
     const term = params.search.toLowerCase();
     filtered = projects.filter(
       (p) =>
-        p.originalPath.toLowerCase().includes(term) ||
+        (p.originalPath ?? '').toLowerCase().includes(term) ||
         p.dirName.toLowerCase().includes(term),
     );
   }
@@ -51,10 +52,11 @@ export async function handleSouvenirProjects(params: {
     const oldest = p.oldestDate ? p.oldestDate.slice(0, 10) : '???';
 
     const isCurrent = p.dirName === config.currentProject;
-    const pathExists = existsSync(p.originalPath);
-    const statusTag = isCurrent ? ' [current]' : pathExists ? '' : ' [orphan]';
+    const statusTag = isCurrent ? ' [current]'
+      : p.originalPath === null ? ' [path unknown]'
+      : existsSync(p.originalPath) ? '' : ' [orphan]';
 
-    lines.push(`${i + 1}. ${p.originalPath}${statusTag}`);
+    lines.push(`${i + 1}. ${p.originalPath ?? p.dirName}${statusTag}`);
     lines.push(`   Dir: ${p.dirName}`);
     lines.push(`   Sessions: ${p.sessionCount} | Latest: ${latest} | Oldest: ${oldest}`);
     lines.push('');
@@ -63,8 +65,8 @@ export async function handleSouvenirProjects(params: {
   // Check for index-only orphans (projects in DB but not in ~/.claude/projects/)
   try {
     const indexStatus = getIndexStatus();
-    const knownDirs = new Set(allDirs);
-    const indexOnlyOrphans = indexStatus.projects.filter((p) => !knownDirs.has(p.projectDir));
+    const knownDirs = new Set(allDirs.map((d) => d.toLowerCase()));
+    const indexOnlyOrphans = indexStatus.projects.filter((p) => !knownDirs.has(p.projectDir.toLowerCase()));
 
     if (indexOnlyOrphans.length > 0) {
       lines.push(`--- Index-only orphans (${indexOnlyOrphans.length}) ---`);
@@ -86,9 +88,10 @@ export async function handleSouvenirProjects(params: {
 // Clean orphaned project data
 // ---------------------------------------------------------------------------
 
-async function handleClean(): Promise<string> {
+async function handleClean(confirm: Confirm): Promise<string> {
   const allDirs = listProjectDirs();
-  const knownDirs = new Set(allDirs);
+  // Case-insensitive: on Windows one project can be stored as "D--…" and "d--…"
+  const knownDirs = new Set(allDirs.map((d) => d.toLowerCase()));
 
   let indexStatus;
   try {
@@ -98,15 +101,15 @@ async function handleClean(): Promise<string> {
   }
 
   // Find orphans: projects in the index but not in ~/.claude/projects/
-  const indexOrphans = indexStatus.projects.filter((p) => !knownDirs.has(p.projectDir));
+  const indexOrphans = indexStatus.projects.filter((p) => !knownDirs.has(p.projectDir.toLowerCase()));
 
-  // Find orphans: projects whose real path no longer exists on disk
+  // Find orphans: projects whose real path no longer exists on disk (never one whose path is unknown)
   const pathOrphans: Array<{ dirName: string; originalPath: string; chunkCount: number }> = [];
   for (const dir of allDirs) {
     const info = getProjectInfo(dir);
-    if (!info) continue;
+    if (!info?.originalPath) continue;
     if (!existsSync(info.originalPath)) {
-      const dbProject = indexStatus.projects.find((p) => p.projectDir === dir);
+      const dbProject = indexStatus.projects.find((p) => p.projectDir.toLowerCase() === dir.toLowerCase());
       if (dbProject && dbProject.chunkCount > 0) {
         pathOrphans.push({
           dirName: dir,
@@ -119,6 +122,21 @@ async function handleClean(): Promise<string> {
 
   if (indexOrphans.length === 0 && pathOrphans.length === 0) {
     return 'No orphaned project data found. Everything is clean.';
+  }
+
+  const question = [
+    `souvenir: remove the search index data of ${indexOrphans.length + pathOrphans.length} orphaned project(s)?`,
+  ];
+  if (indexOrphans.length > 0) {
+    question.push('', `No transcripts left (Claude Code deleted them): the index is the only remaining copy of these conversations.`);
+    question.push(...indexOrphans.map((p) => `- ${p.projectDir} (${p.chunkCount} chunks)`));
+  }
+  if (pathOrphans.length > 0) {
+    question.push('', 'Folder deleted, transcripts kept (the index can be rebuilt from them):');
+    question.push(...pathOrphans.map((p) => `- ${p.originalPath} (${p.chunkCount} chunks)`));
+  }
+  if (!confirm(question.join('\n'))) {
+    return DECLINED;
   }
 
   const lines: string[] = [];

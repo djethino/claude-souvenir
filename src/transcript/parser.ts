@@ -22,7 +22,11 @@ export interface ParsedLine {
   rawLength: number;
 }
 
-const SKIP_TYPE = '"file-history-snapshot"';
+/** Lines never read: file-history-snapshot, the dominant type, never useful. */
+export const SKIPPED_LINE_MARKER = '"file-history-snapshot"';
+
+/** Entry types read when the caller names none. */
+export const DEFAULT_ENTRY_TYPES = ['user', 'assistant', 'summary'];
 
 /**
  * Stream-parse a JSONL transcript file, yielding entries one at a time.
@@ -33,7 +37,7 @@ export async function* parseTranscript(
   options: ParseOptions = {},
 ): AsyncGenerator<ParsedLine> {
   const {
-    includeTypes = ['user', 'assistant', 'summary'],
+    includeTypes = DEFAULT_ENTRY_TYPES,
     fromLine = 1,
     maxEntries,
     containsText,
@@ -62,7 +66,7 @@ export async function* parseTranscript(
       if (!line.trim()) continue;
 
       // Pre-filter 1: Skip file-history-snapshot (dominant type, never useful for search)
-      if (line.includes(SKIP_TYPE)) continue;
+      if (line.includes(SKIPPED_LINE_MARKER)) continue;
 
       // Pre-filter 2: If searching for text, skip lines that don't contain it
       if (searchText) {

@@ -223,15 +223,38 @@ export function formatEntry(
 /**
  * Format a session header.
  */
+/**
+ * A prompt as the user typed it: a slash command is recorded as
+ * <command-name>/x</command-name><command-message>…</command-message><command-args>a</command-args>.
+ */
+export function readablePrompt(text: string): string {
+  const command = /<command-name>([^<]*)<\/command-name>/.exec(text);
+  if (command) {
+    const args = /<command-args>([^<]*)<\/command-args>/.exec(text)?.[1] ?? '';
+    return `${command[1]} ${args}`.trim();
+  }
+  return text;
+}
+
+/** A session's entry count for display (negative = its transcript could not be counted). */
+export function formatEntryCount(count: number): string {
+  return count < 0 ? 'unknown' : String(count);
+}
+
+/** Title of a session: its summary, else its first prompt as typed. */
+export function sessionTitle(meta: SessionIndexEntry): string {
+  return readablePrompt(meta.summary || meta.firstPrompt || 'No summary');
+}
+
 export function formatSessionHeader(meta: SessionIndexEntry): string {
   const created = formatTimestamp(meta.created);
   const modified = formatTimestamp(meta.modified);
   const lines = [
-    `Session: ${meta.summary || meta.firstPrompt || 'No summary'}`,
+    `Session: ${sessionTitle(meta)}`,
     `ID: ${meta.sessionId}`,
     `Project: ${meta.projectPath || 'Unknown'}`,
     `Date: ${created} - ${modified}`,
-    `Messages: ${meta.messageCount}${meta.gitBranch ? ` | Branch: ${meta.gitBranch}` : ''}`,
+    `Entries: ${formatEntryCount(meta.messageCount)}${meta.gitBranch ? ` | Branch: ${meta.gitBranch}` : ''}`,
   ];
   return lines.join('\n');
 }
@@ -242,7 +265,7 @@ export function formatSessionHeader(meta: SessionIndexEntry): string {
 export function formatSessionListEntry(meta: SessionIndexEntry, index: number): string {
   const date = meta.created ? meta.created.slice(0, 10) : '???';
   const relative = meta.modified ? formatTimestampCompact(meta.modified) : '';
-  const title = meta.summary || meta.firstPrompt || 'No summary';
+  const title = sessionTitle(meta);
   const truncTitle = title.length > 100 ? title.slice(0, 100) + '...' : title;
 
   const lines = [
@@ -250,15 +273,13 @@ export function formatSessionListEntry(meta: SessionIndexEntry, index: number): 
     `   session_id: ${meta.sessionId}`,
   ];
 
-  if (meta.firstPrompt && meta.firstPrompt !== title) {
-    const firstPrompt = meta.firstPrompt.length > 80
-      ? meta.firstPrompt.slice(0, 80) + '...'
-      : meta.firstPrompt;
-    lines.push(`   First: "${firstPrompt}"`);
+  const first = meta.firstPrompt ? readablePrompt(meta.firstPrompt) : '';
+  if (first && first !== title) {
+    lines.push(`   First: "${first.length > 80 ? first.slice(0, 80) + '...' : first}"`);
   }
 
   const details: string[] = [];
-  details.push(`Messages: ${meta.messageCount}`);
+  details.push(`Entries: ${formatEntryCount(meta.messageCount)}`);
   if (meta.gitBranch) details.push(`Branch: ${meta.gitBranch}`);
   lines.push(`   ${details.join(' | ')}`);
 

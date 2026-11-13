@@ -16799,14 +16799,14 @@ var nonoptionalProcessor = (schema, ctx, _json, params) => {
 var UNREPRESENTABLE_DEFAULT = /* @__PURE__ */ Symbol();
 function serializeDefaultValue(value, schema, ctx, json2, params) {
   let unrepresentable = false;
-  const serialized = JSON.stringify(value, (_, val) => {
+  const serialized2 = JSON.stringify(value, (_, val) => {
     if (typeof val !== "bigint")
       return val;
     unrepresentable = true;
     return null;
   });
   if (!unrepresentable)
-    return JSON.parse(serialized);
+    return JSON.parse(serialized2);
   handleUnrepresentable(schema, ctx, json2, params, "BigInt defaults cannot be represented in JSON Schema");
   return UNREPRESENTABLE_DEFAULT;
 }
@@ -24098,6 +24098,29 @@ var inputRequired = Object.assign(buildInputRequired, {
     return { method: "roots/list" };
   }
 });
+function inputResponse(responses, key) {
+  if (responses === void 0 || typeof responses !== "object" || responses === null) return { kind: "missing" };
+  const entry = responses[key];
+  if (entry === null || typeof entry !== "object" || Array.isArray(entry)) return { kind: "missing" };
+  const candidate = entry;
+  if (candidate["action"] === "accept" || candidate["action"] === "decline" || candidate["action"] === "cancel") {
+    const content = candidate["content"];
+    return {
+      kind: "elicit",
+      action: candidate["action"],
+      ...content !== null && typeof content === "object" && !Array.isArray(content) && { content }
+    };
+  }
+  if (Array.isArray(candidate["roots"])) return {
+    kind: "roots",
+    roots: candidate["roots"]
+  };
+  if (typeof candidate["role"] === "string" && candidate["content"] !== void 0) return {
+    kind: "sampling",
+    result: candidate
+  };
+  return { kind: "missing" };
+}
 var REQUEST_STATE_ONLY_LEG_PACING_MS = 250;
 function inputRequiredRoundsExceededMessage(method, maxRounds) {
   return `Multi-round-trip request '${method}' still required input after ${maxRounds} rounds (inputRequired.maxRounds)`;
@@ -25318,6 +25341,208 @@ function validateAndWarnToolName(name) {
   issueToolNameWarning(name, result.warnings);
   return result.isValid;
 }
+var MAX_TEMPLATE_LENGTH = 1e6;
+var MAX_VARIABLE_LENGTH = 1e6;
+var MAX_TEMPLATE_EXPRESSIONS = 1e4;
+var MAX_REGEX_LENGTH = 1e6;
+var UriTemplate = class UriTemplate2 {
+  /**
+  * Returns true if the given string contains any URI template expressions.
+  * A template expression is a sequence of characters enclosed in curly braces,
+  * like `{foo}` or `{?bar}`.
+  */
+  static isTemplate(str) {
+    return /\{[^}\s]+\}/.test(str);
+  }
+  static validateLength(str, max, context) {
+    if (str.length > max) throw new Error(`${context} exceeds maximum length of ${max} characters (got ${str.length})`);
+  }
+  template;
+  parts;
+  get variableNames() {
+    return this.parts.flatMap((part) => typeof part === "string" ? [] : part.names);
+  }
+  constructor(template) {
+    UriTemplate2.validateLength(template, MAX_TEMPLATE_LENGTH, "Template");
+    this.template = template;
+    this.parts = this.parse(template);
+  }
+  toString() {
+    return this.template;
+  }
+  parse(template) {
+    const parts = [];
+    let currentText = "";
+    let i = 0;
+    let expressionCount = 0;
+    while (i < template.length) if (template[i] === "{") {
+      if (currentText) {
+        parts.push(currentText);
+        currentText = "";
+      }
+      const end = template.indexOf("}", i);
+      if (end === -1) throw new Error("Unclosed template expression");
+      expressionCount++;
+      if (expressionCount > MAX_TEMPLATE_EXPRESSIONS) throw new Error(`Template contains too many expressions (max ${MAX_TEMPLATE_EXPRESSIONS})`);
+      const expr = template.slice(i + 1, end);
+      const operator = this.getOperator(expr);
+      const exploded = expr.includes("*");
+      const names = this.getNames(expr);
+      const name = names[0];
+      for (const name$1 of names) UriTemplate2.validateLength(name$1, MAX_VARIABLE_LENGTH, "Variable name");
+      parts.push({
+        name,
+        operator,
+        names,
+        exploded
+      });
+      i = end + 1;
+    } else {
+      currentText += template[i];
+      i++;
+    }
+    if (currentText) parts.push(currentText);
+    return parts;
+  }
+  getOperator(expr) {
+    return [
+      "+",
+      "#",
+      ".",
+      "/",
+      "?",
+      "&"
+    ].find((op) => expr.startsWith(op)) || "";
+  }
+  getNames(expr) {
+    const operator = this.getOperator(expr);
+    return expr.slice(operator.length).split(",").map((name) => name.replace("*", "").trim()).filter((name) => name.length > 0);
+  }
+  encodeValue(value, operator) {
+    UriTemplate2.validateLength(value, MAX_VARIABLE_LENGTH, "Variable value");
+    if (operator === "+" || operator === "#") return encodeURI(value);
+    return encodeURIComponent(value);
+  }
+  expandPart(part, variables) {
+    if (part.operator === "?" || part.operator === "&") {
+      const pairs = part.names.map((name) => {
+        const value$1 = variables[name];
+        if (value$1 === void 0) return "";
+        return `${name}=${Array.isArray(value$1) ? value$1.map((v) => this.encodeValue(v, part.operator)).join(",") : this.encodeValue(value$1.toString(), part.operator)}`;
+      }).filter((pair) => pair.length > 0);
+      if (pairs.length === 0) return "";
+      return (part.operator === "?" ? "?" : "&") + pairs.join("&");
+    }
+    if (part.names.length > 1) {
+      const values = part.names.map((name) => variables[name]).filter((v) => v !== void 0);
+      if (values.length === 0) return "";
+      return values.map((v) => Array.isArray(v) ? v[0] : v).join(",");
+    }
+    const value = variables[part.name];
+    if (value === void 0) return "";
+    const encoded = (Array.isArray(value) ? value : [value]).map((v) => this.encodeValue(v, part.operator));
+    switch (part.operator) {
+      case "":
+        return encoded.join(",");
+      case "+":
+        return encoded.join(",");
+      case "#":
+        return "#" + encoded.join(",");
+      case ".":
+        return "." + encoded.join(".");
+      case "/":
+        return "/" + encoded.join("/");
+      default:
+        return encoded.join(",");
+    }
+  }
+  expand(variables) {
+    let result = "";
+    let hasQueryParam = false;
+    for (const part of this.parts) {
+      if (typeof part === "string") {
+        result += part;
+        continue;
+      }
+      const expanded = this.expandPart(part, variables);
+      if (!expanded) continue;
+      result += (part.operator === "?" || part.operator === "&") && hasQueryParam ? expanded.replace("?", "&") : expanded;
+      if (part.operator === "?" || part.operator === "&") hasQueryParam = true;
+    }
+    return result;
+  }
+  escapeRegExp(str) {
+    return str.replaceAll(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`);
+  }
+  partToRegExp(part) {
+    const patterns = [];
+    for (const name$1 of part.names) UriTemplate2.validateLength(name$1, MAX_VARIABLE_LENGTH, "Variable name");
+    if (part.operator === "?" || part.operator === "&") {
+      for (let i = 0; i < part.names.length; i++) {
+        const name$1 = part.names[i];
+        const prefix = i === 0 ? "\\" + part.operator : "&";
+        patterns.push({
+          pattern: prefix + this.escapeRegExp(name$1) + "=([^&]+)",
+          name: name$1
+        });
+      }
+      return patterns;
+    }
+    let pattern;
+    const name = part.name;
+    switch (part.operator) {
+      case "":
+        pattern = part.exploded ? "([^/,]+(?:,[^/,]+)*)" : "([^/,]+)";
+        break;
+      case "+":
+      case "#":
+        pattern = "(.+)";
+        break;
+      case ".":
+        pattern = String.raw`\.([^/,]+)`;
+        break;
+      case "/":
+        pattern = "/" + (part.exploded ? "([^/,]+(?:,[^/,]+)*)" : "([^/,]+)");
+        break;
+      default:
+        pattern = "([^/]+)";
+    }
+    patterns.push({
+      pattern,
+      name
+    });
+    return patterns;
+  }
+  match(uri) {
+    UriTemplate2.validateLength(uri, MAX_TEMPLATE_LENGTH, "URI");
+    let pattern = "^";
+    const names = [];
+    for (const part of this.parts) if (typeof part === "string") pattern += this.escapeRegExp(part);
+    else {
+      const patterns = this.partToRegExp(part);
+      for (const { pattern: partPattern2, name } of patterns) {
+        pattern += partPattern2;
+        names.push({
+          name,
+          exploded: part.exploded
+        });
+      }
+    }
+    pattern += "$";
+    UriTemplate2.validateLength(pattern, MAX_REGEX_LENGTH, "Generated regex pattern");
+    const regex = new RegExp(pattern);
+    const match = uri.match(regex);
+    if (!match) return null;
+    const result = {};
+    for (const [i, name_] of names.entries()) {
+      const { name, exploded } = name_;
+      const value = match[i + 1];
+      const cleanName = name.replace("*", "");
+      result[cleanName] = exploded && value.includes(",") ? value.split(",") : value;
+    }
+    return result;
+  }
+};
 function isZodV4Schema(v) {
   return typeof v === "object" && v !== null && "_zod" in v;
 }
@@ -34300,6 +34525,31 @@ var McpServer = class {
     if (this.isConnected()) this.server.sendPromptListChanged();
   }
 };
+var ResourceTemplate = class {
+  _uriTemplate;
+  constructor(uriTemplate, _callbacks) {
+    this._callbacks = _callbacks;
+    this._uriTemplate = typeof uriTemplate === "string" ? new UriTemplate(uriTemplate) : uriTemplate;
+  }
+  /**
+  * Gets the URI template pattern.
+  */
+  get uriTemplate() {
+    return this._uriTemplate;
+  }
+  /**
+  * Gets the list callback, if one was provided.
+  */
+  get listCallback() {
+    return this._callbacks.list;
+  }
+  /**
+  * Gets the callback for completing a specific URI template variable, if one was provided.
+  */
+  completeCallback(variable) {
+    return this._callbacks.complete?.[variable];
+  }
+};
 function createToolExecutor(inputSchema, handler) {
   if (inputSchema) {
     const callback$1 = handler;
@@ -34504,145 +34754,14 @@ var logger = {
   }
 };
 
-// src/utils/paths.ts
-import { homedir } from "os";
-import { join, sep } from "path";
-
-// src/options.ts
-import { isAbsolute } from "path";
-var PROVIDERS = ["ollama", "openai"];
-function option(key) {
-  const value = process.env[`CLAUDE_PLUGIN_OPTION_${key}`]?.trim();
-  return value ? value : void 0;
-}
-function readPluginOptions() {
-  const provider = option("EMBEDDING_PROVIDER") ?? "ollama";
-  if (!PROVIDERS.includes(provider)) {
-    throw new Error(`Invalid embedding_provider "${provider}": use ${PROVIDERS.join(" or ")}`);
-  }
-  const dimensionsText = option("EMBEDDING_DIMENSIONS");
-  let embeddingDimensions;
-  if (dimensionsText !== void 0) {
-    embeddingDimensions = Number(dimensionsText);
-    if (!Number.isInteger(embeddingDimensions) || embeddingDimensions <= 0) {
-      throw new Error(`Invalid embedding_dimensions "${dimensionsText}": expected a positive integer`);
-    }
-  }
-  const dbPath = option("DB_PATH");
-  if (dbPath !== void 0 && !isAbsolute(dbPath)) {
-    throw new Error(`Invalid db_path "${dbPath}": it must be an absolute path`);
-  }
-  return {
-    embeddingProvider: provider,
-    embeddingUrl: option("EMBEDDING_URL"),
-    embeddingModel: option("EMBEDDING_MODEL"),
-    embeddingDimensions,
-    embeddingApiKey: option("EMBEDDING_API_KEY"),
-    dbPath
-  };
-}
-
-// src/utils/paths.ts
-function getClaudeDir() {
-  return process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude");
-}
-function getProjectsDir() {
-  return join(getClaudeDir(), "projects");
-}
-function getSouvenirDir() {
-  return join(getClaudeDir(), "ASymptOmatik", "souvenir");
-}
-function getDbPath() {
-  return readPluginOptions().dbPath ?? join(getSouvenirDir(), "souvenir.db");
-}
-function cwdToProjectDir(cwd) {
-  const cleaned = cwd.replace(/[\\/]+$/, "");
-  return cleaned.replace(/:/g, "-").replace(/[\\/]/g, "-");
-}
-function resolveProjectDir(project) {
-  if (project.includes(sep) || project.includes("/") && !project.startsWith("D--")) {
-    return cwdToProjectDir(project);
-  }
-  return project;
-}
-function getProjectTranscriptDir(projectDir) {
-  return join(getProjectsDir(), projectDir);
-}
-
-// src/config.ts
-import { existsSync } from "fs";
-import { join as join2 } from "path";
-var PROVIDER_DEFAULTS = {
-  ollama: { url: "http://localhost:11434", model: "embeddinggemma" },
-  openai: { url: "https://api.openai.com/v1", model: "text-embedding-3-small" }
-};
-var _config = null;
-function resolvePathToProject(path) {
-  const projectDir = cwdToProjectDir(path);
-  const projectPath = join2(getProjectsDir(), projectDir);
-  if (existsSync(projectPath)) {
-    return projectDir;
-  }
-  return null;
-}
-function getConfig() {
-  if (_config) return _config;
-  const cwd = process.env.CWD || process.cwd();
-  const options = readPluginOptions();
-  const defaults = PROVIDER_DEFAULTS[options.embeddingProvider];
-  const detectedProject = resolvePathToProject(cwd);
-  if (detectedProject) {
-    logger.info(`Detected project from CWD: ${detectedProject}`);
-  } else {
-    logger.info(`CWD "${cwd}" did not match any project. Waiting for MCP roots.`);
-  }
-  _config = {
-    cwd,
-    currentProject: detectedProject,
-    embedding: {
-      provider: options.embeddingProvider,
-      url: (options.embeddingUrl ?? defaults.url).replace(/\/+$/, ""),
-      model: options.embeddingModel ?? defaults.model,
-      dimensions: options.embeddingDimensions,
-      apiKey: options.embeddingApiKey
-    }
-  };
-  return _config;
-}
-function setCurrentProjectFromRoots(roots) {
-  if (!_config) getConfig();
-  if (_config.currentProject) {
-    logger.info(`Project already detected: ${_config.currentProject}`);
-    return;
-  }
-  for (const root of roots) {
-    let path = root.uri;
-    if (path.startsWith("file:///")) {
-      path = decodeURIComponent(path.slice(7));
-    } else if (path.startsWith("file://")) {
-      path = decodeURIComponent(path.slice(7));
-    }
-    if (/^\/[A-Za-z]:/.test(path)) {
-      path = path.slice(1);
-    }
-    const project = resolvePathToProject(path);
-    if (project) {
-      _config.currentProject = project;
-      _config.cwd = path;
-      logger.info(`Detected project from MCP roots: ${project} (${path})`);
-      return;
-    }
-  }
-  logger.warn("MCP roots did not match any known project:", roots.map((r) => r.uri));
-}
-
 // src/transcript/parser.ts
 import { createReadStream } from "fs";
 import { createInterface } from "readline";
-var SKIP_TYPE = '"file-history-snapshot"';
+var SKIPPED_LINE_MARKER = '"file-history-snapshot"';
+var DEFAULT_ENTRY_TYPES = ["user", "assistant", "summary"];
 async function* parseTranscript(filePath, options = {}) {
   const {
-    includeTypes = ["user", "assistant", "summary"],
+    includeTypes = DEFAULT_ENTRY_TYPES,
     fromLine = 1,
     maxEntries,
     containsText,
@@ -34659,7 +34778,7 @@ async function* parseTranscript(filePath, options = {}) {
       if (lineNumber < fromLine) continue;
       if (maxEntries && yielded >= maxEntries) break;
       if (!line.trim()) continue;
-      if (line.includes(SKIP_TYPE)) continue;
+      if (line.includes(SKIPPED_LINE_MARKER)) continue;
       if (searchText) {
         const haystack = caseInsensitive ? line.toLowerCase() : line;
         if (!haystack.includes(searchText)) continue;
@@ -34712,22 +34831,133 @@ function extractText(entry) {
 }
 
 // src/transcript/discovery.ts
-import { readFileSync, readdirSync, existsSync as existsSync2, statSync, openSync, readSync, closeSync } from "fs";
-import { join as join3, basename } from "path";
+import { readFileSync, readdirSync, existsSync, statSync as statSync2, openSync as openSync2, readSync as readSync2, closeSync as closeSync2 } from "fs";
+import { join as join2, basename } from "path";
+
+// src/utils/paths.ts
+import { homedir } from "os";
+import { join } from "path";
+
+// src/options.ts
+import { isAbsolute } from "path";
+var PROVIDERS = ["ollama", "openai"];
+function option(key) {
+  const value = process.env[`CLAUDE_PLUGIN_OPTION_${key}`]?.trim();
+  return value ? value : void 0;
+}
+function readPluginOptions() {
+  const provider = option("EMBEDDING_PROVIDER") ?? "ollama";
+  if (!PROVIDERS.includes(provider)) {
+    throw new Error(`Invalid embedding_provider "${provider}": use ${PROVIDERS.join(" or ")}`);
+  }
+  const dimensionsText = option("EMBEDDING_DIMENSIONS");
+  let embeddingDimensions;
+  if (dimensionsText !== void 0) {
+    embeddingDimensions = Number(dimensionsText);
+    if (!Number.isInteger(embeddingDimensions) || embeddingDimensions <= 0) {
+      throw new Error(`Invalid embedding_dimensions "${dimensionsText}": expected a positive integer`);
+    }
+  }
+  const dbPath = option("DB_PATH");
+  if (dbPath !== void 0 && !isAbsolute(dbPath)) {
+    throw new Error(`Invalid db_path "${dbPath}": it must be an absolute path`);
+  }
+  return {
+    embeddingProvider: provider,
+    embeddingUrl: option("EMBEDDING_URL"),
+    embeddingModel: option("EMBEDDING_MODEL"),
+    embeddingDimensions,
+    embeddingApiKey: option("EMBEDDING_API_KEY"),
+    dbPath
+  };
+}
+
+// src/utils/paths.ts
+function getClaudeDir() {
+  return process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude");
+}
+function getProjectsDir() {
+  return join(getClaudeDir(), "projects");
+}
+function getSouvenirDir() {
+  return join(getClaudeDir(), "ASymptOmatik", "souvenir");
+}
+function getDbPath() {
+  return readPluginOptions().dbPath ?? join(getSouvenirDir(), "souvenir.db");
+}
+function cwdToProjectDir(cwd) {
+  return cwd.replace(/[\\/]+$/, "").replace(/[^a-zA-Z0-9]/g, "-");
+}
+function isProjectPath(path, projectDir) {
+  return cwdToProjectDir(path).toLowerCase() === projectDir.toLowerCase();
+}
+function resolveProjectDir(project) {
+  return /[\\/]/.test(project) ? cwdToProjectDir(project) : project;
+}
+function getProjectTranscriptDir(projectDir) {
+  return join(getProjectsDir(), projectDir);
+}
+
+// src/transcript/entry-count.ts
+import { closeSync, openSync, readSync, statSync } from "fs";
+function countTranscriptEntries(filePath) {
+  const size = statSync(filePath).size;
+  let state = counts.get(filePath);
+  if (!state || size < state.offset) {
+    state = { offset: 0, complete: 0, pending: Buffer.alloc(0) };
+    counts.set(filePath, state);
+  }
+  if (size > state.offset) {
+    const fd = openSync(filePath, "r");
+    try {
+      const chunk = Buffer.alloc(CHUNK_SIZE);
+      while (state.offset < size) {
+        const read = readSync(fd, chunk, 0, Math.min(CHUNK_SIZE, size - state.offset), state.offset);
+        if (read === 0) break;
+        state.offset += read;
+        let data = state.pending.length ? Buffer.concat([state.pending, chunk.subarray(0, read)]) : chunk.subarray(0, read);
+        let start = 0;
+        for (let nl = data.indexOf(NEWLINE, start); nl !== -1; nl = data.indexOf(NEWLINE, start)) {
+          if (isEntry(data.toString("utf8", start, nl))) state.complete++;
+          start = nl + 1;
+        }
+        data = data.subarray(start);
+        state.pending = Buffer.from(data);
+      }
+    } finally {
+      closeSync(fd);
+    }
+  }
+  return state.complete + (state.pending.length && isEntry(state.pending.toString("utf8")) ? 1 : 0);
+}
+var CHUNK_SIZE = 1024 * 1024;
+var NEWLINE = 10;
+var COUNTED_TYPES = new Set(DEFAULT_ENTRY_TYPES);
+var counts = /* @__PURE__ */ new Map();
+function isEntry(line) {
+  if (!line.trim() || line.includes(SKIPPED_LINE_MARKER)) return false;
+  try {
+    return COUNTED_TYPES.has(JSON.parse(line).type ?? "");
+  } catch {
+    return false;
+  }
+}
+
+// src/transcript/discovery.ts
 var indexCache = /* @__PURE__ */ new Map();
 function listProjectDirs() {
   const projectsDir = getProjectsDir();
-  if (!existsSync2(projectsDir)) return [];
+  if (!existsSync(projectsDir)) return [];
   return readdirSync(projectsDir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
 }
 function loadSessionIndex(projectDir) {
-  const indexPath = join3(getProjectTranscriptDir(projectDir), "sessions-index.json");
-  if (!existsSync2(indexPath)) {
+  const indexPath = join2(getProjectTranscriptDir(projectDir), "sessions-index.json");
+  if (!existsSync(indexPath)) {
     logger.debug(`No sessions-index.json for ${projectDir}`);
     return null;
   }
   try {
-    const stat = statSync(indexPath);
+    const stat = statSync2(indexPath);
     const cached2 = indexCache.get(projectDir);
     if (cached2 && cached2.mtime === stat.mtimeMs) {
       return cached2.data;
@@ -34763,6 +34993,7 @@ function getSessions(projectDir, options = {}) {
     const to = new Date(options.dateTo).getTime();
     entries = entries.filter((e) => new Date(e.created).getTime() <= to);
   }
+  entries = entries.map((e) => withEntryCount(e, projectDir));
   const sort = options.sort || "newest";
   entries.sort((a, b) => {
     switch (sort) {
@@ -34778,6 +35009,17 @@ function getSessions(projectDir, options = {}) {
   });
   return entries;
 }
+var UNKNOWN_COUNT = -1;
+function withEntryCount(entry, projectDir) {
+  const filePath = entry.fullPath && existsSync(entry.fullPath) ? entry.fullPath : join2(getProjectTranscriptDir(projectDir), `${entry.sessionId}.jsonl`);
+  if (!existsSync(filePath)) return entry;
+  try {
+    return { ...entry, messageCount: countTranscriptEntries(filePath) };
+  } catch (err) {
+    logger.warn(`Could not count the entries of ${filePath}:`, err);
+    return { ...entry, messageCount: UNKNOWN_COUNT };
+  }
+}
 function getSessionFilePath(sessionId, projectDir) {
   const projectDirs = projectDir ? [projectDir] : listProjectDirs();
   for (const dir of projectDirs) {
@@ -34785,14 +35027,14 @@ function getSessionFilePath(sessionId, projectDir) {
     if (index) {
       const session = index.entries.find((e) => e.sessionId === sessionId);
       if (session) {
-        const filePath = session.fullPath || join3(getProjectTranscriptDir(dir), `${sessionId}.jsonl`);
-        if (existsSync2(filePath)) {
+        const filePath = session.fullPath || join2(getProjectTranscriptDir(dir), `${sessionId}.jsonl`);
+        if (existsSync(filePath)) {
           return { filePath, projectDir: dir };
         }
       }
     }
-    const directPath = join3(getProjectTranscriptDir(dir), `${sessionId}.jsonl`);
-    if (existsSync2(directPath)) {
+    const directPath = join2(getProjectTranscriptDir(dir), `${sessionId}.jsonl`);
+    if (existsSync(directPath)) {
       return { filePath: directPath, projectDir: dir };
     }
   }
@@ -34806,8 +35048,8 @@ function getSessionMetadata(sessionId, projectDir) {
       const entry = index.entries.find((e) => e.sessionId === sessionId);
       if (entry) return { entry, projectDir: dir };
     }
-    const filePath = join3(getProjectTranscriptDir(dir), `${sessionId}.jsonl`);
-    if (existsSync2(filePath)) {
+    const filePath = join2(getProjectTranscriptDir(dir), `${sessionId}.jsonl`);
+    if (existsSync(filePath)) {
       const meta3 = extractMinimalMetadata(filePath, sessionId, dir);
       if (meta3) return { entry: meta3, projectDir: dir };
     }
@@ -34816,8 +35058,8 @@ function getSessionMetadata(sessionId, projectDir) {
 }
 function listTranscriptFiles(projectDir, options = {}) {
   const dir = getProjectTranscriptDir(projectDir);
-  if (!existsSync2(dir)) return [];
-  const mainFiles = readdirSync(dir).filter((f) => f.endsWith(".jsonl")).map((f) => join3(dir, f));
+  if (!existsSync(dir)) return [];
+  const mainFiles = readdirSync(dir).filter((f) => f.endsWith(".jsonl")).map((f) => join2(dir, f));
   if (!options.includeSubagents) return mainFiles;
   const subagentFiles = [];
   const entries = readdirSync(dir, { withFileTypes: true });
@@ -34825,56 +35067,72 @@ function listTranscriptFiles(projectDir, options = {}) {
     if (!entry.isDirectory()) continue;
     if (!entry.name.match(/^[0-9a-f]{8}-/)) continue;
     if (options.sessionId && entry.name !== options.sessionId) continue;
-    const subagentDir = join3(dir, entry.name, "subagents");
-    if (!existsSync2(subagentDir)) continue;
+    const subagentDir = join2(dir, entry.name, "subagents");
+    if (!existsSync(subagentDir)) continue;
     try {
       const agentFiles = readdirSync(subagentDir).filter((f) => {
         if (!f.endsWith(".jsonl")) return false;
         if (f.includes("aprompt_suggestion")) return false;
         return true;
-      }).map((f) => join3(subagentDir, f));
+      }).map((f) => join2(subagentDir, f));
       subagentFiles.push(...agentFiles);
     } catch (err) {
-      logger.debug(`Error reading subagents for ${entry.name}:`, err);
+      logger.warn(`Error reading subagents for ${entry.name}:`, err);
     }
   }
   return [...mainFiles, ...subagentFiles];
 }
 function discoverOrphanSessions(projectDir) {
   const dir = getProjectTranscriptDir(projectDir);
-  if (!existsSync2(dir)) return [];
+  if (!existsSync(dir)) return [];
   const index = loadSessionIndex(projectDir);
   const indexedIds = new Set(index?.entries.map((e) => e.sessionId) ?? []);
   const jsonlFiles = readdirSync(dir).filter((f) => f.endsWith(".jsonl")).map((f) => basename(f, ".jsonl")).filter((id) => !indexedIds.has(id));
   if (jsonlFiles.length === 0) return [];
   const orphans = [];
   for (const sessionId of jsonlFiles) {
-    const filePath = join3(dir, `${sessionId}.jsonl`);
+    const filePath = join2(dir, `${sessionId}.jsonl`);
     try {
       const meta3 = extractMinimalMetadata(filePath, sessionId, projectDir);
       if (meta3) orphans.push(meta3);
     } catch (err) {
-      logger.debug(`Failed to read orphan session ${sessionId}:`, err);
+      logger.warn(`Failed to read session ${sessionId}:`, err);
+      const mtime = new Date(statSync2(filePath).mtimeMs).toISOString();
+      orphans.push({
+        sessionId,
+        fullPath: filePath,
+        fileMtime: Date.parse(mtime),
+        summary: "",
+        firstPrompt: `(unreadable: ${err instanceof Error ? err.message : String(err)})`,
+        messageCount: 0,
+        created: mtime,
+        modified: mtime,
+        gitBranch: "",
+        projectPath: "",
+        isSidechain: false
+      });
     }
   }
   return orphans;
 }
 function extractMinimalMetadata(filePath, sessionId, projectDir) {
-  const stat = statSync(filePath);
+  const stat = statSync2(filePath);
   if (stat.size === 0) return null;
-  const CHUNK_SIZE = 64 * 1024;
-  const buf = Buffer.alloc(Math.min(CHUNK_SIZE, stat.size));
-  const fd = openSync(filePath, "r");
+  const CHUNK_SIZE2 = 64 * 1024;
+  const buf = Buffer.alloc(Math.min(CHUNK_SIZE2, stat.size));
+  const fd = openSync2(filePath, "r");
   try {
-    readSync(fd, buf, 0, buf.length, 0);
+    readSync2(fd, buf, 0, buf.length, 0);
   } finally {
-    closeSync(fd);
+    closeSync2(fd);
   }
   const text = buf.toString("utf-8");
   const lines = text.split("\n");
   let firstPrompt = "";
   let firstTimestamp = "";
-  let messageCount = 0;
+  let hasMessage = false;
+  let gitBranch = "";
+  let projectPath = "";
   for (const line of lines) {
     if (!line.trim()) continue;
     if (line.includes('"file-history-snapshot"')) continue;
@@ -34884,9 +35142,15 @@ function extractMinimalMetadata(filePath, sessionId, projectDir) {
         firstTimestamp = entry.timestamp;
       }
       if (entry.type === "user" || entry.type === "assistant") {
-        messageCount++;
+        hasMessage = true;
       }
-      if (entry.type === "user" && !firstPrompt) {
+      if (entry.gitBranch && !gitBranch) {
+        gitBranch = entry.gitBranch;
+      }
+      if (!projectPath && typeof entry.cwd === "string" && isProjectPath(entry.cwd, projectDir)) {
+        projectPath = entry.cwd;
+      }
+      if (entry.type === "user" && !entry.isMeta && !firstPrompt) {
         if (typeof entry.message?.content === "string") {
           firstPrompt = entry.message.content.slice(0, 200);
         } else if (Array.isArray(entry.message?.content)) {
@@ -34899,7 +35163,7 @@ function extractMinimalMetadata(filePath, sessionId, projectDir) {
     } catch {
     }
   }
-  if (messageCount === 0 && !firstPrompt) return null;
+  if (!hasMessage && !firstPrompt) return null;
   return {
     sessionId,
     fullPath: filePath,
@@ -34907,11 +35171,12 @@ function extractMinimalMetadata(filePath, sessionId, projectDir) {
     firstPrompt,
     summary: "",
     // No summary available for orphans
-    messageCount,
+    messageCount: 0,
     created: firstTimestamp || new Date(stat.birthtimeMs).toISOString(),
     modified: new Date(stat.mtimeMs).toISOString(),
-    gitBranch: "",
-    projectPath: projectDir,
+    gitBranch,
+    projectPath,
+    // '' when no entry in the first 64 KB ran in the project root
     isSidechain: false
   };
 }
@@ -34930,7 +35195,7 @@ function getProjectInfo(projectDir) {
   const dates = nonSidechain.map((e) => new Date(e.created).getTime()).filter((d) => !isNaN(d));
   return {
     dirName: projectDir,
-    originalPath: index?.originalPath || projectDir.replace(/--/g, "/"),
+    originalPath: index?.originalPath || allEntries.find((e) => e.projectPath && isProjectPath(e.projectPath, projectDir))?.projectPath || null,
     sessionCount: nonSidechain.length,
     latestDate: dates.length ? new Date(Math.max(...dates)).toISOString() : null,
     oldestDate: dates.length ? new Date(Math.min(...dates)).toISOString() : null
@@ -34980,6 +35245,8 @@ async function textSearch(options) {
   } = options;
   const allResults = [];
   let filesSearched = 0;
+  const unreadable = [];
+  const sessionMeta = /* @__PURE__ */ new Map();
   let regexPattern = null;
   if (regex) {
     try {
@@ -35037,7 +35304,11 @@ async function textSearch(options) {
           }
           if (matched) {
             const entrySessionId = entry.sessionId || basename2(filePath, ".jsonl");
-            const meta3 = getSessionMetadata(entrySessionId, projectDir);
+            let meta3 = sessionMeta.get(entrySessionId);
+            if (meta3 === void 0) {
+              meta3 = getSessionMetadata(entrySessionId, projectDir);
+              sessionMeta.set(entrySessionId, meta3);
+            }
             allResults.push({
               sessionId: entrySessionId,
               projectDir,
@@ -35055,6 +35326,7 @@ async function textSearch(options) {
         }
       } catch (err) {
         logger.warn(`Error searching ${filePath}:`, err);
+        unreadable.push(`${basename2(filePath, ".jsonl")}: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
   }
@@ -35065,7 +35337,8 @@ async function textSearch(options) {
   return {
     results: allResults.slice(offset, offset + maxResults),
     totalMatches: allResults.length,
-    filesSearched
+    filesSearched,
+    unreadable
   };
 }
 
@@ -35221,33 +35494,47 @@ ${sum.summary}`;
       return "";
   }
 }
+function readablePrompt(text) {
+  const command = /<command-name>([^<]*)<\/command-name>/.exec(text);
+  if (command) {
+    const args = /<command-args>([^<]*)<\/command-args>/.exec(text)?.[1] ?? "";
+    return `${command[1]} ${args}`.trim();
+  }
+  return text;
+}
+function formatEntryCount(count) {
+  return count < 0 ? "unknown" : String(count);
+}
+function sessionTitle(meta3) {
+  return readablePrompt(meta3.summary || meta3.firstPrompt || "No summary");
+}
 function formatSessionHeader(meta3) {
   const created = formatTimestamp(meta3.created);
   const modified = formatTimestamp(meta3.modified);
   const lines = [
-    `Session: ${meta3.summary || meta3.firstPrompt || "No summary"}`,
+    `Session: ${sessionTitle(meta3)}`,
     `ID: ${meta3.sessionId}`,
     `Project: ${meta3.projectPath || "Unknown"}`,
     `Date: ${created} - ${modified}`,
-    `Messages: ${meta3.messageCount}${meta3.gitBranch ? ` | Branch: ${meta3.gitBranch}` : ""}`
+    `Entries: ${formatEntryCount(meta3.messageCount)}${meta3.gitBranch ? ` | Branch: ${meta3.gitBranch}` : ""}`
   ];
   return lines.join("\n");
 }
 function formatSessionListEntry(meta3, index) {
   const date5 = meta3.created ? meta3.created.slice(0, 10) : "???";
   const relative3 = meta3.modified ? formatTimestampCompact(meta3.modified) : "";
-  const title = meta3.summary || meta3.firstPrompt || "No summary";
+  const title = sessionTitle(meta3);
   const truncTitle = title.length > 100 ? title.slice(0, 100) + "..." : title;
   const lines = [
     `${index + 1}. [${date5}${relative3 ? ` - ${relative3}` : ""}] ${truncTitle}`,
     `   session_id: ${meta3.sessionId}`
   ];
-  if (meta3.firstPrompt && meta3.firstPrompt !== title) {
-    const firstPrompt = meta3.firstPrompt.length > 80 ? meta3.firstPrompt.slice(0, 80) + "..." : meta3.firstPrompt;
-    lines.push(`   First: "${firstPrompt}"`);
+  const first = meta3.firstPrompt ? readablePrompt(meta3.firstPrompt) : "";
+  if (first && first !== title) {
+    lines.push(`   First: "${first.length > 80 ? first.slice(0, 80) + "..." : first}"`);
   }
   const details = [];
-  details.push(`Messages: ${meta3.messageCount}`);
+  details.push(`Entries: ${formatEntryCount(meta3.messageCount)}`);
   if (meta3.gitBranch) details.push(`Branch: ${meta3.gitBranch}`);
   lines.push(`   ${details.join(" | ")}`);
   return lines.join("\n");
@@ -35420,6 +35707,49 @@ function formatToolsOutput(records) {
     lines.push(`  ${r.name}: ${r.count}${error62}`);
   }
   return lines.join("\n");
+}
+
+// src/config.ts
+import { existsSync as existsSync2 } from "fs";
+import { join as join3 } from "path";
+var PROVIDER_DEFAULTS = {
+  ollama: { url: "http://localhost:11434", model: "embeddinggemma" },
+  openai: { url: "https://api.openai.com/v1", model: "text-embedding-3-small" }
+};
+var _config = null;
+function resolvePathToProject(path) {
+  const projectDir = cwdToProjectDir(path);
+  const projectPath = join3(getProjectsDir(), projectDir);
+  if (existsSync2(projectPath)) {
+    return projectDir;
+  }
+  return null;
+}
+function getConfig() {
+  if (_config) return _config;
+  const fromEnv = process.env.CLAUDE_PROJECT_DIR;
+  const cwd = fromEnv || process.cwd();
+  const options = readPluginOptions();
+  const defaults = PROVIDER_DEFAULTS[options.embeddingProvider];
+  const detectedProject = resolvePathToProject(cwd);
+  const source = fromEnv ? "CLAUDE_PROJECT_DIR" : "working directory (CLAUDE_PROJECT_DIR not set)";
+  if (detectedProject) {
+    logger.info(`Current project from ${source}: ${detectedProject}`);
+  } else {
+    logger.info(`${source} "${cwd}" has no Claude Code history: no current project.`);
+  }
+  _config = {
+    cwd,
+    currentProject: detectedProject,
+    embedding: {
+      provider: options.embeddingProvider,
+      url: (options.embeddingUrl ?? defaults.url).replace(/\/+$/, ""),
+      model: options.embeddingModel ?? defaults.model,
+      dimensions: options.embeddingDimensions,
+      apiKey: options.embeddingApiKey
+    }
+  };
+  return _config;
 }
 
 // src/db/store.ts
@@ -36196,8 +36526,19 @@ async function disposeSingletonProvider() {
 }
 
 // src/db/indexer.ts
-import { statSync as statSync2 } from "fs";
+import { statSync as statSync3 } from "fs";
 import { basename as basename3 } from "path";
+
+// src/utils/serial.ts
+function serialized(fn) {
+  let queue = Promise.resolve();
+  return (...args) => {
+    const run = queue.then(() => fn(...args));
+    queue = run.catch(() => {
+    });
+    return run;
+  };
+}
 
 // src/embedding/chunker.ts
 var MAX_EMBED_CHARS = 1600;
@@ -36242,9 +36583,9 @@ async function chunkTranscript(filePath, sessionId, projectDir, options = {}) {
       continue;
     }
     if (entry.type === "user") {
-      const userText = extractText(entry);
-      let turnText = userText;
-      let contentParts = [`USER: ${userText}`];
+      const userText2 = extractText(entry);
+      let turnText = userText2;
+      let contentParts = [`USER: ${userText2}`];
       if (i + 1 < entries.length && entries[i + 1].entry.type === "assistant") {
         const assistantEntry = entries[i + 1].entry;
         const assistantText = extractText(assistantEntry);
@@ -36292,7 +36633,8 @@ async function chunkTranscript(filePath, sessionId, projectDir, options = {}) {
 
 // src/db/indexer.ts
 var EMBED_BATCH_SIZE = 32;
-async function buildIndex(provider, projectDirs, options = {}) {
+var buildIndex = serialized(runBuildIndex);
+async function runBuildIndex(provider, projectDirs, options = {}) {
   const { sessionId, includeSubagents = true, rebuild = false, onProgress, signal } = options;
   if (!provider.isReady()) {
     onProgress?.({ phase: "Initializing embedding model", current: 0, total: 1 });
@@ -36336,7 +36678,7 @@ async function buildIndex(provider, projectDirs, options = {}) {
         detail: `Session ${fileSessionId.slice(0, 8)}...`
       });
       try {
-        const stat = statSync2(filePath);
+        const stat = statSync3(filePath);
         const indexState = getIndexState(filePath);
         if (indexState && !rebuild) {
           if (indexState.file_size === stat.size) {
@@ -36870,6 +37212,43 @@ function getDocsChunkCount(projectRoot, category) {
 }
 
 // src/tools/search.ts
+function resultCount(total, more) {
+  return more ? `${total}+` : `${total}`;
+}
+function pageFooter(endIndex, maxResults, total, more, nextScore) {
+  if (endIndex >= total && !more) return `
+--- All ${total} results shown ---`;
+  const page = more ? `Page ${Math.ceil(endIndex / maxResults)}` : `Page ${Math.ceil(endIndex / maxResults)}/${Math.ceil(total / maxResults)}`;
+  const remaining = endIndex < total ? `${total - endIndex}${more ? "+" : ""} more results` : "more results";
+  const best = nextScore !== void 0 ? ` (best score: ${nextScore.toFixed(2)})` : "";
+  return `
+--- ${page} | ${remaining}${best} | Next page: offset=${endIndex} ---`;
+}
+async function indexBeforeSemanticSearch(provider, projectDirs, ctx) {
+  if (projectDirs.length !== 1) {
+    return 'Note: across several projects, only messages already indexed are searched: recent sessions of other projects may be missing (souvenir_index action="build" project="all" indexes them; text mode reads the transcripts directly).';
+  }
+  try {
+    const result = await buildIndex(provider, projectDirs, { rebuild: false, onProgress: createProgressNotifier(ctx) });
+    if (result.errors.length === 0) return null;
+    const count = result.errors.length >= 5 ? "5 or more" : String(result.errors.length);
+    return `Note: ${count} transcript(s) could not be indexed, so their newest messages may be missing from semantic results (first error: ${result.errors[0]}). Text mode reads the transcripts directly.`;
+  } catch (err) {
+    logger.warn("Indexing before search failed:", err);
+    return `Note: indexing new messages failed (${errorMessage(err)}), so the latest messages may be missing from semantic results. Text mode reads the transcripts directly.`;
+  }
+}
+function unreadableNote(unreadable) {
+  if (unreadable.length === 0) return null;
+  return `Note: ${unreadable.length} transcript(s) could not be read, their matches are missing (${unreadable.slice(0, 3).join("; ")}${unreadable.length > 3 ? "; \u2026" : ""}).`;
+}
+function sessionMetadataLookup() {
+  const cache = /* @__PURE__ */ new Map();
+  return (sessionId, projectDir) => {
+    if (!cache.has(sessionId)) cache.set(sessionId, getSessionMetadata(sessionId, projectDir));
+    return cache.get(sessionId) ?? null;
+  };
+}
 function extractSmartSnippet(content, query, maxLen = 250) {
   const contentLower = content.toLowerCase();
   const words = query.toLowerCase().split(/\s+/).filter((w) => w.length > 2);
@@ -36949,28 +37328,30 @@ async function performTextSearch(params, projectDirs, maxResults) {
     dateFrom: params.date_from,
     dateTo: params.date_to,
     includeSubagents: params.include_subagents ?? false,
-    maxResults: 1e4,
+    maxResults: Infinity,
     offset: 0,
     caseSensitive: params.case_sensitive ?? false,
     regex: params.regex ?? false
   });
+  const note = unreadableNote(result.unreadable);
+  const noteBlock = note ? `${note}
+
+` : "";
   if (result.results.length === 0) {
-    return `No results found for "${params.query}" (searched ${result.filesSearched} files).`;
+    return `${noteBlock}No results found for "${params.query}" (searched ${result.filesSearched} files).`;
   }
   const { results: boostedResults, sessionHitCounts } = applySessionDensityBoost(result.results);
   const offset = params.offset || 0;
   const sliced = boostedResults.slice(offset, offset + maxResults);
   const total = boostedResults.length;
   const endIndex = offset + sliced.length;
-  const hasMore = endIndex < total;
-  const header = `Found ${total} result(s) for "${params.query}" (showing ${offset + 1}-${endIndex}, searched ${result.filesSearched} files):
+  if (sliced.length === 0) return `${noteBlock}No results after offset ${offset} for "${params.query}" (${total} in all).`;
+  const header = `${noteBlock}Found ${total} result(s) for "${params.query}" (showing ${offset + 1}-${endIndex}, searched ${result.filesSearched} files):
 `;
   const formatted = sliced.map(
     (r, i) => formatSearchResult(r, offset + i, sessionHitCounts.get(r.sessionId))
   );
-  let footer = hasMore ? `
---- Page ${Math.ceil(endIndex / maxResults)}/${Math.ceil(total / maxResults)} | ${total - endIndex} more results | Next page: offset=${endIndex} ---` : `
---- All ${total} results shown ---`;
+  let footer = pageFooter(endIndex, maxResults, total, false, boostedResults[endIndex]?.score);
   const hint = await getSemanticHint(params.query, projectDirs);
   if (hint) {
     footer += `
@@ -36985,31 +37366,29 @@ async function performSemanticSearch(params, projectDirs, maxResults, ctx) {
     if (!provider.isReady()) {
       await provider.initialize();
     }
-    if (projectDirs.length === 1) {
-      try {
-        await buildIndex(provider, projectDirs, {
-          rebuild: false,
-          onProgress: createProgressNotifier(ctx)
-        });
-      } catch (err) {
-        logger.warn("Auto-index failed, continuing with existing index:", err);
-      }
-    }
+    const indexNote = await indexBeforeSemanticSearch(provider, projectDirs, ctx);
+    const noteBlock = indexNote ? `${indexNote}
+
+` : "";
     const queryEmbedding = await provider.embedQuery(params.query);
     const projectDir = projectDirs.length === 1 ? projectDirs[0] : void 0;
+    const offset = params.offset || 0;
+    const topK = offset + maxResults + 1;
     const vecResults = searchSemantic(provider.identity, queryEmbedding, {
-      topK: maxResults + (params.offset || 0),
+      topK,
       projectDir,
       sessionId: params.session_id,
       speaker: params.role === "both" ? void 0 : params.role,
       dateFrom: params.date_from,
       dateTo: params.date_to
     });
+    const more = vecResults.length === topK;
     if (vecResults.length === 0) {
-      return `No semantic results found for "${params.query}". The index may be empty for the specified project. Run souvenir_index with action="status" to check.`;
+      return `${noteBlock}No semantic results found for "${params.query}". The index may be empty for the specified project. Run souvenir_index with action="status" to check.`;
     }
+    const metadataOf = sessionMetadataLookup();
     const allResults = vecResults.map((vr) => {
-      const meta3 = getSessionMetadata(vr.session_id);
+      const meta3 = metadataOf(vr.session_id, vr.project_dir);
       return {
         sessionId: vr.session_id,
         projectDir: vr.project_dir,
@@ -37026,23 +37405,21 @@ async function performSemanticSearch(params, projectDirs, maxResults, ctx) {
       };
     });
     const { results: boostedResults, sessionHitCounts } = applySessionDensityBoost(allResults);
-    const offset = params.offset || 0;
     const sliced = boostedResults.slice(offset, offset + maxResults);
     const total = boostedResults.length;
     const endIndex = offset + sliced.length;
-    const hasMore = endIndex < total;
-    const header = `Found ${total} semantic result(s) for "${params.query}" (showing ${offset + 1}-${endIndex}):
+    if (sliced.length === 0) return `${noteBlock}No semantic results after offset ${offset} for "${params.query}" (${total} in all).`;
+    const header = `${noteBlock}Found ${resultCount(total, more)} semantic result(s) for "${params.query}" (showing ${offset + 1}-${endIndex}):
 `;
     const formatted = sliced.map((r, i) => formatSearchResult(r, offset + i, sessionHitCounts.get(r.sessionId)));
-    const footer = hasMore ? `
---- Page ${Math.ceil(endIndex / maxResults)}/${Math.ceil(total / maxResults)} | ${total - endIndex} more results | Next page: offset=${endIndex} ---` : `
---- All ${total} results shown ---`;
-    return header + "\n" + formatted.join("\n\n") + footer;
+    return header + "\n" + formatted.join("\n\n") + pageFooter(endIndex, maxResults, total, more, boostedResults[endIndex]?.score);
   } catch (err) {
     return `Semantic search error: ${err instanceof Error ? err.message : String(err)}`;
   }
 }
 async function performHybridSearch(params, projectDirs, maxResults, ctx) {
+  const offset = params.offset || 0;
+  const depth = (offset + maxResults) * 2;
   const textPromise = textSearch({
     query: params.query,
     projectDirs,
@@ -37051,7 +37428,7 @@ async function performHybridSearch(params, projectDirs, maxResults, ctx) {
     dateFrom: params.date_from,
     dateTo: params.date_to,
     includeSubagents: params.include_subagents ?? false,
-    maxResults: maxResults * 2,
+    maxResults: depth,
     offset: 0,
     caseSensitive: params.case_sensitive ?? false,
     regex: params.regex ?? false
@@ -37059,7 +37436,7 @@ async function performHybridSearch(params, projectDirs, maxResults, ctx) {
     (result) => ({ ...result, error: null }),
     (err) => {
       logger.warn("Text search failed in hybrid mode:", err);
-      return { results: [], totalMatches: 0, filesSearched: 0, error: errorMessage(err) };
+      return { results: [], totalMatches: 0, filesSearched: 0, unreadable: [], error: errorMessage(err) };
     }
   );
   const semanticPromise = (async () => {
@@ -37069,37 +37446,30 @@ async function performHybridSearch(params, projectDirs, maxResults, ctx) {
       if (!provider.isReady()) {
         await provider.initialize();
       }
-      if (projectDirs.length === 1) {
-        try {
-          await buildIndex(provider, projectDirs, {
-            rebuild: false,
-            onProgress: createProgressNotifier(ctx)
-          });
-        } catch (err) {
-          logger.warn("Auto-index failed in hybrid mode:", err);
-        }
-      }
+      const indexNote = await indexBeforeSemanticSearch(provider, projectDirs, ctx);
       const queryEmbedding = await provider.embedQuery(params.query);
       const projectDir = projectDirs.length === 1 ? projectDirs[0] : void 0;
       const results = searchSemantic(provider.identity, queryEmbedding, {
-        topK: maxResults * 2,
+        topK: depth,
         projectDir,
         sessionId: params.session_id,
         speaker: params.role === "both" ? void 0 : params.role,
         dateFrom: params.date_from,
         dateTo: params.date_to
       });
-      return { results, error: null };
+      return { results, error: null, indexNote };
     } catch (err) {
       logger.warn("Semantic search failed in hybrid mode:", err);
-      return { results: [], error: errorMessage(err) };
+      return { results: [], error: errorMessage(err), indexNote: null };
     }
   })();
   const [textResult, semantic] = await Promise.all([textPromise, semanticPromise]);
   const vecResults = semantic.results;
   const notices = [
     semantic.error && `Note: semantic search unavailable, showing text matches only (${semantic.error})`,
-    textResult.error && `Note: text search failed, showing semantic matches only (${textResult.error})`
+    textResult.error && `Note: text search failed, showing semantic matches only (${textResult.error})`,
+    unreadableNote(textResult.unreadable),
+    semantic.indexNote
   ].filter(Boolean).join("\n");
   const noticeBlock = notices ? `${notices}
 
@@ -37109,8 +37479,9 @@ async function performHybridSearch(params, projectDirs, maxResults, ctx) {
     const key = `${r.sessionId}:${r.lineNumber}`;
     merged.set(key, { ...r, score: r.score * 0.4 });
   }
+  const metadataOf = sessionMetadataLookup();
   for (const vr of vecResults) {
-    const meta3 = getSessionMetadata(vr.session_id);
+    const meta3 = metadataOf(vr.session_id, vr.project_dir);
     const key = `${vr.session_id}:${vr.line_number}`;
     const similarity = 1 - vr.distance;
     const semanticScore = similarity * 0.6;
@@ -37135,20 +37506,17 @@ async function performHybridSearch(params, projectDirs, maxResults, ctx) {
   }
   const allResults = [...merged.values()].sort((a, b) => b.score - a.score);
   const { results: boostedResults, sessionHitCounts } = applySessionDensityBoost(allResults);
-  const offset = params.offset || 0;
   const sliced = boostedResults.slice(offset, offset + maxResults);
-  if (sliced.length === 0) {
-    return `${noticeBlock}No results found for "${params.query}".`;
-  }
   const total = boostedResults.length;
+  if (sliced.length === 0) {
+    return total === 0 ? `${noticeBlock}No results found for "${params.query}".` : `${noticeBlock}No hybrid results after offset ${offset} for "${params.query}" (${total} in all).`;
+  }
+  const more = textResult.totalMatches > textResult.results.length || vecResults.length === depth;
   const endIndex = offset + sliced.length;
-  const hasMore = endIndex < total;
-  const header = `${noticeBlock}Found ${total} hybrid result(s) for "${params.query}" (showing ${offset + 1}-${endIndex}):
+  const header = `${noticeBlock}Found ${resultCount(total, more)} hybrid result(s) for "${params.query}" (showing ${offset + 1}-${endIndex}):
 `;
   const formatted = sliced.map((r, i) => formatSearchResult(r, offset + i, sessionHitCounts.get(r.sessionId)));
-  const footer = hasMore ? `
---- Page ${Math.ceil(endIndex / maxResults)}/${Math.ceil(total / maxResults)} | ${total - endIndex} more results | Next page: offset=${endIndex} ---` : `
---- All ${total} results shown ---`;
+  const footer = pageFooter(endIndex, maxResults, total, more, boostedResults[endIndex]?.score);
   return header + "\n" + formatted.join("\n\n") + footer;
 }
 async function getSemanticHint(query, projectDirs) {
@@ -37220,10 +37588,12 @@ async function performDocsSearch(params, config2, source, mode) {
   const queryEmbedding = await provider.embedQuery(params.query);
   const maxResults = Math.min(params.max_results || 10, 50);
   const offset = params.offset || 0;
+  const topK = offset + maxResults + 1;
   const vecResults = searchDocsSemantic(projectRoot, provider.identity, queryEmbedding, {
-    topK: maxResults + offset,
+    topK,
     category: categoryFilter
   });
+  const more = vecResults.length === topK;
   if (vecResults.length === 0) {
     const label = categoryFilter ? `${categoryFilter} files` : "project files";
     return `No results found for "${params.query}" in ${label}. Check that files are indexed with souvenir_docs action="status".`;
@@ -37231,14 +37601,13 @@ async function performDocsSearch(params, config2, source, mode) {
   const sliced = vecResults.slice(offset, offset + maxResults);
   const total = vecResults.length;
   const endIndex = offset + sliced.length;
-  const hasMore = endIndex < total;
+  if (sliced.length === 0) return `No results after offset ${offset} for "${params.query}" (${total} in all).`;
   const sourceLabel = categoryFilter || "project";
-  const header = `Found ${total} result(s) in ${sourceLabel} files for "${params.query}" (showing ${offset + 1}-${endIndex}):
+  const header = `Found ${resultCount(total, more)} result(s) in ${sourceLabel} files for "${params.query}" (showing ${offset + 1}-${endIndex}):
 `;
   const formatted = sliced.map((r, i) => formatDocResult(r, offset + i));
-  let footer = hasMore ? `
---- Page ${Math.ceil(endIndex / maxResults)}/${Math.ceil(total / maxResults)} | ${total - endIndex} more results | Next page: offset=${endIndex} ---` : `
---- All ${total} results shown ---`;
+  const next = vecResults[endIndex];
+  let footer = pageFooter(endIndex, maxResults, total, more, next && 1 - next.distance);
   const xrefHint = await getTranscriptsXrefHint(params.query, config2);
   if (xrefHint) {
     footer += `
@@ -37293,6 +37662,30 @@ async function getTranscriptsXrefHint(query, config2) {
 }
 
 // src/tools/read.ts
+function headerMetadata(sessionId, projectDir) {
+  const meta3 = getSessionMetadata(sessionId, projectDir);
+  return meta3 && { ...meta3, entry: withEntryCount(meta3.entry, meta3.projectDir) };
+}
+var DIGEST_ENTRIES = 20;
+async function readSessionDigest(sessionId) {
+  const config2 = getConfig();
+  const location = (config2.currentProject ? getSessionFilePath(sessionId, config2.currentProject) : null) ?? getSessionFilePath(sessionId);
+  if (!location) return null;
+  const meta3 = headerMetadata(sessionId, location.projectDir);
+  const files = await readAggregate(location.filePath, "files", null);
+  const lastEntries = await readPage(location.filePath, void 0, DIGEST_ENTRIES, DEFAULT_ENTRY_TYPES, "conversation", null);
+  return [
+    meta3 ? formatSessionHeader(meta3.entry) : `Session: ${sessionId}
+Project: ${location.projectDir}`,
+    `Read more: souvenir_read session_id="${sessionId}" project="${location.projectDir}" (from_line for earlier entries, around_uuid for one moment).`,
+    "",
+    "=== Files touched ===",
+    files,
+    "",
+    `=== Last ${DIGEST_ENTRIES} entries ===`,
+    lastEntries
+  ].join("\n");
+}
 async function handleSouvenirRead(params) {
   const config2 = getConfig();
   const projectDir = params.project && params.project !== "all" ? resolveProjectDir(params.project) : void 0;
@@ -37306,8 +37699,8 @@ async function handleSouvenirRead(params) {
   if (!location) {
     return `Error: Session "${sessionId}" not found in ${searchAllProjects ? "any project" : projectDir ? `project "${params.project}"` : "current project"}. Use souvenir_sessions to list valid session IDs, or specify the project parameter to search in a different project.`;
   }
-  const meta3 = getSessionMetadata(sessionId, location.projectDir);
-  const entryTypes = params.entry_types ? params.entry_types.split(",").map((t) => t.trim()) : ["user", "assistant", "summary"];
+  const meta3 = headerMetadata(sessionId, location.projectDir);
+  const entryTypes = params.entry_types ? params.entry_types.split(",").map((t) => t.trim()) : DEFAULT_ENTRY_TYPES;
   const maxEntries = Math.min(params.max_entries || 20, 200);
   const detailLevel = params.detail_level || "conversation";
   if (detailLevel === "files" || detailLevel === "tools") {
@@ -37517,27 +37910,61 @@ async function handleSouvenirSessions(params) {
     includeSidechains: params.include_sidechains ?? false
   });
   const maxResults = Math.min(params.max_results || 20, 50);
-  const displayed = sessions.slice(0, maxResults);
+  const offset = params.offset ?? 0;
+  const displayed = sessions.slice(offset, offset + maxResults);
   if (displayed.length === 0) {
+    if (sessions.length > 0) return `No sessions after offset ${offset} (${sessions.length} in all).`;
     return params.search ? `No sessions found matching "${params.search}" in project "${projectDir}".` : `No sessions found for project "${projectDir}".`;
   }
   const index = loadSessionIndex(projectDir);
   const originalPath = index?.originalPath || projectDir;
   const total = sessions.length;
-  const hasMore = total > maxResults;
+  const endIndex = offset + displayed.length;
   const header = `Project: ${originalPath} (${total} session${total > 1 ? "s" : ""})
 `;
-  const entries = displayed.map((s, i) => formatSessionListEntry(s, i));
-  const footer = hasMore ? `
---- Showing ${maxResults}/${total} sessions | ${total - maxResults} more | Increase max_results to see more ---` : "";
+  const entries = displayed.map((s, i) => formatSessionListEntry(s, offset + i));
+  const footer = endIndex < total ? `
+--- Showing ${offset + 1}-${endIndex} of ${total} sessions | ${total - endIndex} more | Next page: offset=${endIndex} ---` : offset > 0 ? `
+--- Showing ${offset + 1}-${endIndex} of ${total} sessions (end) ---` : "";
   return header + "\n" + entries.join("\n\n") + footer;
 }
 
 // src/tools/projects.ts
 import { existsSync as existsSync6 } from "fs";
-async function handleSouvenirProjects(params) {
+
+// src/tools/confirm.ts
+var DECLINED = "Cancelled: not confirmed (the user declined or dismissed the dialog, or this session cannot show one, as in claude -p: run it from an interactive session). Nothing was changed.";
+var CONFIRM_KEY = "confirm";
+var ConfirmationNeeded = class extends Error {
+  constructor(question) {
+    super(`Confirmation needed: ${question}`);
+    this.question = question;
+  }
+  question;
+  toInputRequired() {
+    return inputRequired({
+      inputRequests: {
+        // No field: the dialog shows the message with accept / decline
+        [CONFIRM_KEY]: inputRequired.elicit({ message: this.question, requestedSchema: { type: "object", properties: {} } })
+      }
+    });
+  }
+};
+function confirmFor(ctx, legacyCapabilities) {
+  return (message) => {
+    const answer = inputResponse(ctx.mcpReq.inputResponses, CONFIRM_KEY);
+    if (answer.kind === "elicit") return answer.action === "accept";
+    const envelope = ctx.mcpReq.envelope;
+    const capabilities = envelope ? envelope[CLIENT_CAPABILITIES_META_KEY] : legacyCapabilities();
+    if (!capabilities?.elicitation) return true;
+    throw new ConfirmationNeeded(message);
+  };
+}
+
+// src/tools/projects.ts
+async function handleSouvenirProjects(params, confirm2) {
   if (params.action === "clean") {
-    return handleClean();
+    return handleClean(confirm2);
   }
   const config2 = getConfig();
   const allDirs = listProjectDirs();
@@ -37546,7 +37973,7 @@ async function handleSouvenirProjects(params) {
   if (params.search) {
     const term = params.search.toLowerCase();
     filtered = projects.filter(
-      (p) => p.originalPath.toLowerCase().includes(term) || p.dirName.toLowerCase().includes(term)
+      (p) => (p.originalPath ?? "").toLowerCase().includes(term) || p.dirName.toLowerCase().includes(term)
     );
   }
   filtered.sort((a, b) => {
@@ -37564,17 +37991,16 @@ async function handleSouvenirProjects(params) {
     const latest = p.latestDate ? p.latestDate.slice(0, 10) : "???";
     const oldest = p.oldestDate ? p.oldestDate.slice(0, 10) : "???";
     const isCurrent = p.dirName === config2.currentProject;
-    const pathExists = existsSync6(p.originalPath);
-    const statusTag = isCurrent ? " [current]" : pathExists ? "" : " [orphan]";
-    lines.push(`${i + 1}. ${p.originalPath}${statusTag}`);
+    const statusTag = isCurrent ? " [current]" : p.originalPath === null ? " [path unknown]" : existsSync6(p.originalPath) ? "" : " [orphan]";
+    lines.push(`${i + 1}. ${p.originalPath ?? p.dirName}${statusTag}`);
     lines.push(`   Dir: ${p.dirName}`);
     lines.push(`   Sessions: ${p.sessionCount} | Latest: ${latest} | Oldest: ${oldest}`);
     lines.push("");
   }
   try {
     const indexStatus = getIndexStatus();
-    const knownDirs = new Set(allDirs);
-    const indexOnlyOrphans = indexStatus.projects.filter((p) => !knownDirs.has(p.projectDir));
+    const knownDirs = new Set(allDirs.map((d) => d.toLowerCase()));
+    const indexOnlyOrphans = indexStatus.projects.filter((p) => !knownDirs.has(p.projectDir.toLowerCase()));
     if (indexOnlyOrphans.length > 0) {
       lines.push(`--- Index-only orphans (${indexOnlyOrphans.length}) ---`);
       lines.push("These projects have indexed data but no transcripts in ~/.claude/projects/:");
@@ -37589,22 +38015,22 @@ async function handleSouvenirProjects(params) {
   }
   return lines.join("\n");
 }
-async function handleClean() {
+async function handleClean(confirm2) {
   const allDirs = listProjectDirs();
-  const knownDirs = new Set(allDirs);
+  const knownDirs = new Set(allDirs.map((d) => d.toLowerCase()));
   let indexStatus;
   try {
     indexStatus = getIndexStatus();
   } catch {
     return "No index database found. Nothing to clean.";
   }
-  const indexOrphans = indexStatus.projects.filter((p) => !knownDirs.has(p.projectDir));
+  const indexOrphans = indexStatus.projects.filter((p) => !knownDirs.has(p.projectDir.toLowerCase()));
   const pathOrphans = [];
   for (const dir of allDirs) {
     const info = getProjectInfo(dir);
-    if (!info) continue;
+    if (!info?.originalPath) continue;
     if (!existsSync6(info.originalPath)) {
-      const dbProject = indexStatus.projects.find((p) => p.projectDir === dir);
+      const dbProject = indexStatus.projects.find((p) => p.projectDir.toLowerCase() === dir.toLowerCase());
       if (dbProject && dbProject.chunkCount > 0) {
         pathOrphans.push({
           dirName: dir,
@@ -37616,6 +38042,20 @@ async function handleClean() {
   }
   if (indexOrphans.length === 0 && pathOrphans.length === 0) {
     return "No orphaned project data found. Everything is clean.";
+  }
+  const question = [
+    `souvenir: remove the search index data of ${indexOrphans.length + pathOrphans.length} orphaned project(s)?`
+  ];
+  if (indexOrphans.length > 0) {
+    question.push("", `No transcripts left (Claude Code deleted them): the index is the only remaining copy of these conversations.`);
+    question.push(...indexOrphans.map((p) => `- ${p.projectDir} (${p.chunkCount} chunks)`));
+  }
+  if (pathOrphans.length > 0) {
+    question.push("", "Folder deleted, transcripts kept (the index can be rebuilt from them):");
+    question.push(...pathOrphans.map((p) => `- ${p.originalPath} (${p.chunkCount} chunks)`));
+  }
+  if (!confirm2(question.join("\n"))) {
+    return DECLINED;
   }
   const lines = [];
   let totalCleaned = 0;
@@ -37647,8 +38087,8 @@ async function handleClean() {
 }
 
 // src/tools/index-mgmt.ts
-import { existsSync as existsSync7, statSync as statSync3 } from "fs";
-async function handleSouvenirIndex(params, ctx) {
+import { existsSync as existsSync7, statSync as statSync4 } from "fs";
+async function handleSouvenirIndex(params, ctx, confirm2) {
   let config2;
   try {
     config2 = getConfig();
@@ -37663,7 +38103,7 @@ Fix it with /plugin configure asymptomatik-souvenir, then /reload-plugins.`;
       return await runCheck(config2);
     case "build":
     case "rebuild":
-      return await runBuild(config2, { ...params, action: params.action }, ctx);
+      return await runBuild(config2, { ...params, action: params.action }, ctx, confirm2);
     case "vacuum":
       return runVacuum();
     default:
@@ -37745,7 +38185,7 @@ async function runCheck(config2) {
   }
   return lines.join("\n");
 }
-async function runBuild(config2, params, ctx) {
+async function runBuild(config2, params, ctx, confirm2) {
   let projectDirs;
   if (params.project === "all") {
     projectDirs = listProjectDirs();
@@ -37758,6 +38198,14 @@ async function runBuild(config2, params, ctx) {
   }
   const provider = getOrCreateProvider(config2);
   const isRebuild = params.action === "rebuild";
+  if (isRebuild) {
+    const target = params.project === "all" ? `all ${projectDirs.length} projects` : projectDirs[0];
+    if (!confirm2(
+      `souvenir: drop and re-index the search index of ${target}? Re-embedding can take several minutes. If the embedding model changed since the index was built, the index of every project is reset.`
+    )) {
+      return DECLINED;
+    }
+  }
   try {
     const result = await buildIndex(provider, projectDirs, {
       sessionId: params.session_id,
@@ -37791,7 +38239,7 @@ async function runBuild(config2, params, ctx) {
   }
 }
 function databaseSize(dbPath) {
-  const size = (path) => existsSync7(path) ? statSync3(path).size : 0;
+  const size = (path) => existsSync7(path) ? statSync4(path).size : 0;
   return size(dbPath) + size(`${dbPath}-wal`);
 }
 function formatSize2(bytes) {
@@ -37811,12 +38259,12 @@ function runVacuum() {
 }
 
 // src/tools/docs.ts
-import { existsSync as existsSync8, statSync as statSync5, readFileSync as readFileSync4, writeFileSync } from "fs";
+import { existsSync as existsSync8, statSync as statSync6, readFileSync as readFileSync4, writeFileSync } from "fs";
 import { resolve as resolve2, relative as relative2 } from "path";
 import { createHash as createHash2 } from "crypto";
 
 // src/docs/indexer.ts
-import { statSync as statSync4, readdirSync as readdirSync2, readFileSync as readFileSync3 } from "fs";
+import { statSync as statSync5, readdirSync as readdirSync2, readFileSync as readFileSync3 } from "fs";
 import { join as join5, relative, resolve } from "path";
 import { createHash } from "crypto";
 
@@ -38241,7 +38689,8 @@ function resolveSourceFiles(projectRoot) {
   }
   return [...fileSet.values()];
 }
-async function buildDocsIndex(projectRoot, provider, options = {}) {
+var buildDocsIndex = serialized(runBuildDocsIndex);
+async function runBuildDocsIndex(projectRoot, provider, options = {}) {
   const { rebuild = false, onProgress, signal } = options;
   if (!provider.isReady()) {
     onProgress?.({ phase: "Initializing embedding model", current: 0, total: 1 });
@@ -38269,7 +38718,7 @@ async function buildDocsIndex(projectRoot, provider, options = {}) {
       detail: relativePath
     });
     try {
-      const stat = statSync4(absolutePath);
+      const stat = statSync5(absolutePath);
       if (stat.size > MAX_FILE_SIZE) {
         skipped++;
         continue;
@@ -38472,12 +38921,9 @@ function formatUnifiedDiff(diff, oldLabel, newLabel) {
 }
 
 // src/tools/docs.ts
-async function handleSouvenirDocs(params) {
+async function handleSouvenirDocs(params, confirm2) {
   const config2 = getConfig();
   const projectRoot = config2.cwd;
-  if (!projectRoot) {
-    return "Error: Could not determine project root directory.";
-  }
   switch (params.action) {
     case "add":
       return handleAdd(projectRoot, params);
@@ -38488,9 +38934,9 @@ async function handleSouvenirDocs(params) {
     case "status":
       return handleStatus(projectRoot);
     case "build":
-      return handleBuild(projectRoot, config2, params.rebuild ?? false);
+      return handleBuild(projectRoot, config2, params.rebuild ?? false, confirm2);
     case "clear":
-      return handleClear(projectRoot);
+      return handleClear(projectRoot, confirm2);
     case "sections":
       return handleSections(projectRoot, params);
     case "history":
@@ -38498,7 +38944,7 @@ async function handleSouvenirDocs(params) {
     case "diff":
       return handleFileDiff(projectRoot, params);
     case "restore":
-      return handleRestore(projectRoot, params);
+      return handleRestore(projectRoot, params, confirm2);
     case "vacuum":
       return handleVacuum(projectRoot);
     default:
@@ -38514,7 +38960,7 @@ async function handleAdd(projectRoot, params) {
   if (!existsSync8(absolutePath)) {
     return `Error: Path "${params.path}" does not exist (resolved to ${absolutePath}).`;
   }
-  const stat = statSync5(absolutePath);
+  const stat = statSync6(absolutePath);
   const type = stat.isDirectory() ? "directory" : "file";
   if (type === "file" && !params.category) {
     const detected = detectCategory(absolutePath);
@@ -38653,7 +39099,7 @@ async function handleStatus(projectRoot) {
   let pendingCount = 0;
   for (const f of files) {
     try {
-      const stat = statSync5(f.absolutePath);
+      const stat = statSync6(f.absolutePath);
       const indexState = getDocIndexState(projectRoot, f.relativePath);
       if (!indexState || indexState.file_size !== stat.size || indexState.file_mtime !== stat.mtime.toISOString()) {
         pendingCount++;
@@ -38667,7 +39113,7 @@ async function handleStatus(projectRoot) {
   }
   return lines.join("\n");
 }
-async function handleBuild(projectRoot, config2, rebuild) {
+async function handleBuild(projectRoot, config2, rebuild, confirm2) {
   const sources = docsDbExists(projectRoot) ? getDocSources(projectRoot) : [];
   if (sources.length === 0 && !docsDbExists(projectRoot)) {
     return 'No sources configured. Use souvenir_docs action="add" to track files first.';
@@ -38678,6 +39124,11 @@ async function handleBuild(projectRoot, config2, rebuild) {
     if (dbSources.length === 0) {
       return 'No sources configured. Use souvenir_docs action="add" to track files first.';
     }
+  }
+  if (rebuild && !confirm2(
+    "souvenir: drop and re-index every tracked project file? Re-embedding can take several minutes."
+  )) {
+    return DECLINED;
   }
   const provider = getOrCreateProvider(config2);
   try {
@@ -38701,9 +39152,14 @@ async function handleBuild(projectRoot, config2, rebuild) {
     return `Docs indexing error: ${err instanceof Error ? err.message : String(err)}`;
   }
 }
-async function handleClear(projectRoot) {
+async function handleClear(projectRoot, confirm2) {
   if (!docsDbExists(projectRoot)) {
     return "No docs database found. Nothing to clear.";
+  }
+  if (!confirm2(
+    'souvenir: clear the whole project file index (chunks, sections, index state)? The tracked sources are kept; "build" re-indexes them.'
+  )) {
+    return DECLINED;
   }
   clearAllDocs(projectRoot);
   return 'All docs index data cleared (chunks, sections, index state). Sources are preserved. Run "build" to re-index.';
@@ -38815,7 +39271,7 @@ async function handleFileDiff(projectRoot, params) {
   }
   return formatUnifiedDiff(diff, snapshotLabel, `${relativePath} (current)`);
 }
-async function handleRestore(projectRoot, params) {
+async function handleRestore(projectRoot, params, confirm2) {
   if (!params.path) {
     return 'Error: "path" parameter is required for "restore" action.';
   }
@@ -38834,12 +39290,17 @@ async function handleRestore(projectRoot, params) {
   if (snapshot.file_path !== relativePath) {
     return `Error: Snapshot #${params.snapshot_id} belongs to "${snapshot.file_path}", not "${relativePath}".`;
   }
+  if (!confirm2(
+    `souvenir: overwrite "${relativePath}" with snapshot #${params.snapshot_id} (${snapshot.created_at.slice(0, 19)})? The current file is saved as a snapshot first, so this can be undone.`
+  )) {
+    return DECLINED;
+  }
   let backupSnapshotCreated = null;
   if (existsSync8(absolutePath)) {
     try {
       const currentContent = readFileSync4(absolutePath, "utf-8");
       const currentHash = createHash2("sha256").update(currentContent).digest("hex");
-      const currentStat = statSync5(absolutePath);
+      const currentStat = statSync6(absolutePath);
       backupSnapshotCreated = insertSnapshot(
         projectRoot,
         relativePath,
@@ -38885,7 +39346,7 @@ async function handleVacuum(projectRoot) {
 }
 
 // src/tools/tree.ts
-import { readdirSync as readdirSync3, statSync as statSync6 } from "fs";
+import { readdirSync as readdirSync3, statSync as statSync7 } from "fs";
 import { join as join6, resolve as resolve3, extname as extname2 } from "path";
 import { createReadStream as createReadStream2 } from "fs";
 import { createInterface as createInterface2 } from "readline";
@@ -39104,7 +39565,7 @@ function walkTree(dir, currentDepth, opts, parentPrefixes) {
       entry.ext = extname2(item.name).toLowerCase() || "(no ext)";
       if (opts.showModified) {
         try {
-          entry.mtimeMs = statSync6(fullPath).mtimeMs;
+          entry.mtimeMs = statSync7(fullPath).mtimeMs;
         } catch {
         }
       }
@@ -39130,9 +39591,9 @@ async function populateLineCounts(entries) {
   const BATCH = 50;
   for (let i = 0; i < fileEntries.length; i += BATCH) {
     const batch = fileEntries.slice(i, i + BATCH);
-    const counts = await Promise.all(batch.map((e) => countLines(e.fullPath)));
+    const counts2 = await Promise.all(batch.map((e) => countLines(e.fullPath)));
     for (let j = 0; j < batch.length; j++) {
-      batch[j].lineCount = counts[j];
+      batch[j].lineCount = counts2[j];
     }
   }
 }
@@ -39200,7 +39661,7 @@ function formatTree(entries, rootPath, opts) {
     footer += ` (filtered by ${opts.pattern})`;
   }
   if (opts.truncatedCount > 0) {
-    footer += ` \u2014 truncated, ${opts.truncatedCount} more files not shown`;
+    footer += ` \u2014 truncated, ${opts.truncatedCount} more files not shown (raise max_files, or show a subdirectory with path)`;
   }
   lines.push(footer);
   if (opts.showStats) {
@@ -39240,9 +39701,6 @@ function truncateEntries(entries, maxFiles) {
 async function handleSouvenirTree(params) {
   const config2 = getConfig();
   const projectRoot = config2.cwd;
-  if (!projectRoot) {
-    return "Error: Could not detect current project directory.";
-  }
   const maxDepth = Math.min(Math.max(params.depth ?? 3, 1), 10);
   const pattern = params.pattern ?? null;
   const dirsOnly = params.directories_only ?? false;
@@ -39340,7 +39798,7 @@ function scheduleBackgroundIndex() {
       }
       if (signal.aborted) return;
       const projectRoot = config2.cwd;
-      if (projectRoot && docsDbExists(projectRoot)) {
+      if (docsDbExists(projectRoot)) {
         const sources = getDocSources(projectRoot);
         if (sources.length > 0) {
           const docsResult = await buildDocsIndex(projectRoot, provider, {
@@ -39363,6 +39821,146 @@ function scheduleBackgroundIndex() {
   })();
 }
 
+// src/resources.ts
+var LISTED_SESSIONS = 50;
+function sessionUri(sessionId) {
+  return `souvenir://session/${sessionId}`;
+}
+function sessionLabel(session) {
+  const date5 = session.created ? session.created.slice(0, 10) : "????-??-??";
+  const title = sessionTitle(session).replace(/\s+/g, " ").trim();
+  return `${date5} ${title.length > 70 ? title.slice(0, 70) + "\u2026" : title}`;
+}
+function sessionDescription(session) {
+  const parts = [];
+  if (session.summary && session.firstPrompt && session.firstPrompt !== session.summary) {
+    const first = readablePrompt(session.firstPrompt).replace(/\s+/g, " ").trim();
+    parts.push(`First prompt: "${first.length > 100 ? first.slice(0, 100) + "\u2026" : first}"`);
+  }
+  parts.push(`${formatEntryCount(session.messageCount)} entries`);
+  if (session.gitBranch) parts.push(`branch ${session.gitBranch}`);
+  parts.push(`session_id ${session.sessionId}`);
+  return parts.join(" \xB7 ");
+}
+function registerSessionResources(server2) {
+  server2.registerResource(
+    "session",
+    new ResourceTemplate("souvenir://session/{sessionId}", {
+      list: () => {
+        const project = getConfig().currentProject;
+        if (!project) return { resources: [] };
+        const sessions = getSessions(project, { sort: "newest" }).slice(0, LISTED_SESSIONS);
+        return {
+          // title and description per session, or the SDK repeats the template's on every entry
+          resources: sessions.map((s) => ({
+            uri: sessionUri(s.sessionId),
+            name: sessionLabel(s),
+            title: sessionLabel(s),
+            description: sessionDescription(s),
+            mimeType: "text/plain"
+          }))
+        };
+      }
+    }),
+    {
+      title: "Past Claude Code session",
+      description: `A past Claude Code session: header, files it touched and its last entries. The ${LISTED_SESSIONS} most recent sessions of the current project are listed; any session can be read by its URI (session ids from souvenir_sessions).`,
+      mimeType: "text/plain"
+    },
+    async (uri, { sessionId }) => {
+      const id = Array.isArray(sessionId) ? sessionId[0] : sessionId;
+      const text = id ? await readSessionDigest(id) : null;
+      if (text === null) throw new ResourceNotFoundError(uri.href, `No session "${id}" in any project`);
+      return { contents: [{ uri: uri.href, mimeType: "text/plain", text }] };
+    }
+  );
+}
+
+// src/prompts.ts
+var RECAP_CANDIDATES = 3;
+var WHY_MATCHES = 15;
+var RECAP_INSTRUCTIONS = `Recap this past Claude Code session for the user, in their language:
+- the goal and how it evolved;
+- what was done and decided, with the reasons;
+- the files changed;
+- the state at the end: what works, what was left unfinished or open.
+Read more of the session with souvenir_read when the digest is not enough to answer.`;
+function invalidArgument(message) {
+  return new ProtocolError(ProtocolErrorCode.InvalidParams, message);
+}
+function userText(text) {
+  return { role: "user", content: { type: "text", text } };
+}
+function registerPrompts(server2) {
+  server2.registerPrompt(
+    "recap",
+    {
+      title: "Recap a past session",
+      description: "Recap a past Claude Code session of this project: goal, decisions, files changed, what was left open. Without a session id, the latest session that is not the current conversation.",
+      argsSchema: external_exports.object({
+        session: external_exports.string().optional().describe("Session id (from souvenir_sessions or the @ list). Default: the latest previous session.")
+      })
+    },
+    async ({ session }) => {
+      if (session) {
+        const digest = await readSessionDigest(session);
+        if (digest === null) throw invalidArgument(`No session "${session}" in any project. List them with souvenir_sessions.`);
+        return {
+          messages: [
+            { role: "user", content: { type: "resource", resource: { uri: sessionUri(session), mimeType: "text/plain", text: digest } } },
+            userText(RECAP_INSTRUCTIONS)
+          ]
+        };
+      }
+      const project = getConfig().currentProject;
+      if (!project) throw invalidArgument('This directory has no Claude Code history: give a session id (souvenir_sessions project="all" lists them).');
+      const recent = getSessions(project, { sort: "newest" }).slice(0, RECAP_CANDIDATES);
+      if (recent.length === 0) throw invalidArgument("No past session in this project.");
+      const list = recent.map((s, i) => `${i + 1}. ${sessionLabel(s)} \u2014 session_id: ${s.sessionId}`).join("\n");
+      return {
+        messages: [
+          userText(
+            `The most recent sessions of this project, newest first:
+${list}
+
+The newest one can be this very conversation: if its first prompt is what started the current conversation, take the next one (souvenir_sessions lists older sessions). Read the chosen session with souvenir_read (start from the end, then earlier pages as needed).
+
+` + RECAP_INSTRUCTIONS
+          )
+        ]
+      };
+    }
+  );
+  server2.registerPrompt(
+    "why",
+    {
+      title: "Why did this file change?",
+      description: "Explain why a file changed, from the past conversations that changed it (and its git history).",
+      argsSchema: external_exports.object({
+        file: external_exports.string().describe("File path or name, as it appears in the project (no spaces: Claude Code splits arguments on whitespace).")
+      })
+    },
+    async ({ file: file2 }) => {
+      const matches = await handleSouvenirSearch({ query: file2, mode: "text", max_results: WHY_MATCHES });
+      return {
+        messages: [
+          userText(
+            `Explain to the user, in their language, why "${file2}" changed: what each change was for and what decided it.
+
+1. If the project is a git repository, read the file's history (\`git log --follow -- <path>\`) and search the commit hashes in the conversations with souvenir_search.
+2. Read the moments that matter with souvenir_read around_uuid. The matches below are the first page: their footer gives the offset of the next one; search again with other terms if they are not enough.
+3. Answer chronologically: each change, its reason, the decision behind it, with the session date. Say what you could not find.
+
+Conversation matches for "${file2}":
+
+${matches}`
+          )
+        ]
+      };
+    }
+  );
+}
+
 // src/index.ts
 var INSTRUCTIONS = `souvenir searches this user's past Claude Code conversations and the project's indexed files.
 
@@ -39371,14 +39969,28 @@ var INSTRUCTIONS = `souvenir searches this user's past Claude Code conversations
 - For an overview of a directory, use souvenir_tree rather than chains of ls/find/Glob: one call, noise hidden, with line counts (show_lines), recent changes (show_modified) and an extension filter (pattern).
 - When a file was damaged or lost (bad edit, wrong checkout, deletion), look at souvenir_docs "history" before any other attempt. Only the files added to souvenir_docs are kept (set up per project, on request: "list" shows them; nothing added means no snapshots); while Claude Code works, they are snapshotted at most every ~30 s, kept 3 days. Before "restore", "diff" the chosen snapshot against the current file to see what restoring would erase. Restore saves the current state as a snapshot first (it can be undone), unlike a git checkout, which discards uncommitted work for good.
 - For work done in another project, search with project "all" (souvenir_projects lists them).
-- To learn why some code or a commit changed, search the commit hash or the file name in the conversations: the session that made the change holds the reason.`;
-var server = new McpServer({ name: "souvenir", version: "0.4.7" }, { instructions: INSTRUCTIONS });
-function withBackgroundIndex(handler) {
+- To learn why some code or a commit changed, search the commit hash or the file name in the conversations: the session that made the change holds the reason.
+- Past sessions are also resources (souvenir://session/<session_id>) that the user can cite with @; the @ list holds the 50 most recent of the project, souvenir_sessions lists them all, page by page.`;
+var server = new McpServer({ name: "souvenir", version: "0.5.0" }, { instructions: INSTRUCTIONS });
+var READ_ONLY = { readOnlyHint: true };
+var LARGE_RESULT_META = { "anthropic/maxResultSizeChars": 1e5 };
+function toolHandler(name, handler) {
   return async (params, ctx) => {
-    const result = await handler(params, ctx);
-    scheduleBackgroundIndex();
-    return result;
+    try {
+      const text = await handler(params, ctx);
+      return { content: [{ type: "text", text }] };
+    } catch (err) {
+      if (err instanceof ConfirmationNeeded) return err.toInputRequired();
+      const msg = errorMessage(err);
+      logger.error(`${name} error:`, msg);
+      return { content: [{ type: "text", text: `Error: ${msg}` }], isError: true };
+    } finally {
+      scheduleBackgroundIndex();
+    }
   };
+}
+function confirm(ctx) {
+  return confirmFor(ctx, () => server.server.getClientCapabilities());
 }
 server.registerTool(
   "souvenir_search",
@@ -39396,6 +40008,7 @@ Sources:
 Results include session_id + entry_uuid (transcripts) or file_path + line range (docs). Cross-reference hints show matches in the other source when available.
 
 Workflow: souvenir_search \u2192 souvenir_read around_uuid for full context.`,
+    annotations: READ_ONLY,
     inputSchema: external_exports.object({
       query: external_exports.string().describe("What you are looking for. Works with natural language, exact terms, function names, error messages \u2014 hybrid mode handles all of these."),
       mode: external_exports.enum(["text", "semantic", "hybrid"]).optional().describe('Default: "hybrid" (text + semantic combined). Use "text" only for regex patterns. Use "semantic" for pure meaning-based search.'),
@@ -39412,16 +40025,7 @@ Workflow: souvenir_search \u2192 souvenir_read around_uuid for full context.`,
       regex: external_exports.boolean().optional().describe("For text mode: treat query as regex pattern. Default: false.")
     })
   },
-  withBackgroundIndex(async (params, ctx) => {
-    try {
-      const text = await handleSouvenirSearch(params, ctx);
-      return { content: [{ type: "text", text }] };
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      logger.error("souvenir_search error:", msg);
-      return { content: [{ type: "text", text: `Error: ${msg}` }], isError: true };
-    }
-  })
+  toolHandler("souvenir_search", (params, ctx) => handleSouvenirSearch(params, ctx))
 );
 server.registerTool(
   "souvenir_read",
@@ -39438,6 +40042,8 @@ Reading modes:
 - detail_level="tools": tool usage summary with call counts and error indicators.
 
 Pagination: footer shows page position and navigation hints. Use max_entries=1 with around_uuid to read a single full entry without truncation.`,
+    annotations: READ_ONLY,
+    _meta: LARGE_RESULT_META,
     inputSchema: external_exports.object({
       session_id: external_exports.string().describe('Session UUID to read from. Use "current" for the most recent session.'),
       project: external_exports.string().optional().describe("Project directory name. Default: current project (also searches other projects if not found)."),
@@ -39451,45 +40057,29 @@ Pagination: footer shows page position and navigation hints. Use max_entries=1 w
       entry_types: external_exports.string().optional().describe('Comma-separated types to include. Default: "user,assistant,summary". Add "progress" if needed.')
     })
   },
-  withBackgroundIndex(async (params, _ctx) => {
-    try {
-      const text = await handleSouvenirRead(params);
-      return { content: [{ type: "text", text }] };
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      logger.error("souvenir_read error:", msg);
-      return { content: [{ type: "text", text: `Error: ${msg}` }], isError: true };
-    }
-  })
+  toolHandler("souvenir_read", (params, _ctx) => handleSouvenirRead(params))
 );
 server.registerTool(
   "souvenir_sessions",
   {
-    description: `List all conversation sessions for a project with their metadata (first prompt, summary, dates, message count). Use this to find which session to search or read. Results are sorted by most recent first by default. Includes orphan sessions (transcript files not in the index).
+    description: `List all conversation sessions for a project with their metadata (first prompt, summary, dates, entry count as souvenir_read pages them). Use this to find which session to search or read. Results are sorted by most recent first by default. Includes orphan sessions (transcript files not in the index).
 
 Typical workflow: souvenir_projects \u2192 souvenir_sessions (pick a session) \u2192 souvenir_read or souvenir_search with session_id.
 
-Pagination: Shows "Showing X/Y sessions" footer. Increase max_results to see more.`,
+Pagination: the footer shows "Showing A-B of N sessions" and the offset of the next page.`,
+    annotations: READ_ONLY,
     inputSchema: external_exports.object({
       project: external_exports.string().optional().describe("Project directory name or path. Default: current project."),
       search: external_exports.string().optional().describe("Filter sessions where summary or firstPrompt contains this text (case-insensitive)."),
       date_from: external_exports.string().optional().describe("Only sessions created after this ISO date."),
       date_to: external_exports.string().optional().describe("Only sessions created before this ISO date."),
-      sort: external_exports.enum(["newest", "oldest", "messages"]).optional().describe('Sort order. Default: "newest".'),
+      sort: external_exports.enum(["newest", "oldest", "messages"]).optional().describe('Sort order. Default: "newest". "messages": most entries first.'),
       max_results: external_exports.number().int().min(1).max(50).optional().describe("Maximum sessions to return. Default: 20."),
+      offset: external_exports.number().int().min(0).optional().describe("Skip the first N sessions, for the next page (given in the footer). Default: 0."),
       include_sidechains: external_exports.boolean().optional().describe("Include sidechain/subagent sessions. Default: false.")
     })
   },
-  withBackgroundIndex(async (params, _ctx) => {
-    try {
-      const text = await handleSouvenirSessions(params);
-      return { content: [{ type: "text", text }] };
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      logger.error("souvenir_sessions error:", msg);
-      return { content: [{ type: "text", text: `Error: ${msg}` }], isError: true };
-    }
-  })
+  toolHandler("souvenir_sessions", (params, _ctx) => handleSouvenirSessions(params))
 );
 server.registerTool(
   "souvenir_projects",
@@ -39498,7 +40088,7 @@ server.registerTool(
 
 Actions:
 - "list" (default): Show all projects with status. Also detects orphaned index data (projects in the semantic index but no longer on disk).
-- "clean": Remove index data for orphaned projects. Frees space in the semantic search database. Transcript files in ~/.claude/projects/ are preserved.
+- "clean": Remove index data for orphaned projects. Frees space in the semantic search database. Transcript files in ~/.claude/projects/ are preserved, but for a project whose transcripts Claude Code already deleted, the index is the last copy of its conversations. Asks the user to confirm when the client supports it.
 
 Typical workflow: souvenir_projects \u2192 souvenir_sessions project="<dir_name>" \u2192 souvenir_read or souvenir_search.`,
     inputSchema: external_exports.object({
@@ -39506,16 +40096,7 @@ Typical workflow: souvenir_projects \u2192 souvenir_sessions project="<dir_name>
       search: external_exports.string().optional().describe("Filter projects whose path contains this text.")
     })
   },
-  withBackgroundIndex(async (params, _ctx) => {
-    try {
-      const text = await handleSouvenirProjects(params);
-      return { content: [{ type: "text", text }] };
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      logger.error("souvenir_projects error:", msg);
-      return { content: [{ type: "text", text: `Error: ${msg}` }], isError: true };
-    }
-  })
+  toolHandler("souvenir_projects", (params, ctx) => handleSouvenirProjects(params, confirm(ctx)))
 );
 server.registerTool(
   "souvenir_index",
@@ -39527,7 +40108,7 @@ Indexing runs automatically in the background after each interaction. Use this t
 - "status": show what's indexed and which embedding model built it.
 - "check": verify the configuration end to end (settings, embedding server, a test embedding, index compatibility). Use it when semantic search fails or after changing settings.
 - "build": index new/updated sessions now (incremental).
-- "rebuild": drop and re-index from scratch. After an embedding model change it resets the whole index (use project="all" to re-index every project now). First-time indexing may take several minutes.
+- "rebuild": drop and re-index from scratch. After an embedding model change it resets the whole index (use project="all" to re-index every project now). First-time indexing may take several minutes. Asks the user to confirm when the client supports it.
 - "vacuum": compact the database file to reclaim disk space from deleted data.`,
     inputSchema: external_exports.object({
       action: external_exports.enum(["status", "check", "build", "rebuild", "vacuum"]).describe('"status": show indexing state. "check": verify configuration and embedding server. "build": incrementally index new content. "rebuild": drop and re-index everything. "vacuum": compact database file.'),
@@ -39535,16 +40116,7 @@ Indexing runs automatically in the background after each interaction. Use this t
       session_id: external_exports.string().optional().describe("Index only a specific session.")
     })
   },
-  withBackgroundIndex(async (params, ctx) => {
-    try {
-      const text = await handleSouvenirIndex(params, ctx);
-      return { content: [{ type: "text", text }] };
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      logger.error("souvenir_index error:", msg);
-      return { content: [{ type: "text", text: `Error: ${msg}` }], isError: true };
-    }
-  })
+  toolHandler("souvenir_index", (params, ctx) => handleSouvenirIndex(params, ctx, confirm(ctx)))
 );
 server.registerTool(
   "souvenir_docs",
@@ -39559,6 +40131,7 @@ Actions \u2014 Setup: "add", "remove", "list", "build" (incremental), "clear".
 Actions \u2014 Navigation: "status", "sections" (markdown TOC with line numbers).
 Actions \u2014 Versioning: "history", "diff", "restore".
 Actions \u2014 Maintenance: "vacuum" (compact DB).
+"restore", "clear" and "build" with rebuild=true ask the user to confirm when the client supports it.
 
 Categories auto-detected by extension: doc (.md, .txt), code (.ts, .py, .go...), config (.json, .yaml...). Override with category parameter.`,
     inputSchema: external_exports.object({
@@ -39571,16 +40144,7 @@ Categories auto-detected by extension: doc (.md, .txt), code (.ts, .py, .go...),
       snapshot_id: external_exports.number().int().optional().describe('For "diff": compare this snapshot to current file. For "restore": snapshot ID to restore (from "history" output).')
     })
   },
-  withBackgroundIndex(async (params, _ctx) => {
-    try {
-      const text = await handleSouvenirDocs(params);
-      return { content: [{ type: "text", text }] };
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      logger.error("souvenir_docs error:", msg);
-      return { content: [{ type: "text", text: `Error: ${msg}` }], isError: true };
-    }
-  })
+  toolHandler("souvenir_docs", (params, ctx) => handleSouvenirDocs(params, confirm(ctx)))
 );
 server.registerTool(
   "souvenir_tree",
@@ -39597,6 +40161,8 @@ Key features beyond a simple tree:
 - directories_only: high-level architecture overview
 
 Output: Standard ASCII tree with connectors + file/directory count summary.`,
+    annotations: READ_ONLY,
+    _meta: LARGE_RESULT_META,
     inputSchema: external_exports.object({
       path: external_exports.string().optional().describe("Subdirectory to display (relative to project root). Default: project root."),
       depth: external_exports.number().int().min(1).max(10).optional().describe("Maximum depth to display. Default: 3."),
@@ -39608,29 +40174,15 @@ Output: Standard ASCII tree with connectors + file/directory count summary.`,
       max_files: external_exports.number().int().min(1).max(1e4).optional().describe('Maximum number of files to show. Directories are always shown. Truncated files show "N more files not shown". Prevents context flooding on large repos.')
     })
   },
-  withBackgroundIndex(async (params, _ctx) => {
-    try {
-      const text = await handleSouvenirTree(params);
-      return { content: [{ type: "text", text }] };
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      logger.error("souvenir_tree error:", msg);
-      return { content: [{ type: "text", text: `Error: ${msg}` }], isError: true };
-    }
-  })
+  toolHandler("souvenir_tree", (params, _ctx) => handleSouvenirTree(params))
 );
+registerSessionResources(server);
+registerPrompts(server);
 async function main() {
   logger.info("Starting souvenir MCP server...");
   const transport = new StdioServerTransport();
   await server.connect(transport);
   logger.info("souvenir MCP server running on stdio");
-  try {
-    const { roots } = await server.server.listRoots();
-    logger.info("MCP roots received:", roots.map((r) => r.uri));
-    setCurrentProjectFromRoots(roots);
-  } catch (err) {
-    logger.info("Could not get MCP roots (client may not support it):", err);
-  }
 }
 var _shuttingDown = false;
 async function gracefulShutdown(signal) {

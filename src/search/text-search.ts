@@ -74,6 +74,8 @@ export async function textSearch(options: TextSearchOptions): Promise<{
   results: SearchResult[];
   totalMatches: number;
   filesSearched: number;
+  /** "session: error" for each transcript that could not be read */
+  unreadable: string[];
 }> {
   const {
     query,
@@ -90,6 +92,10 @@ export async function textSearch(options: TextSearchOptions): Promise<{
 
   const allResults: SearchResult[] = [];
   let filesSearched = 0;
+  // Transcripts that failed mid-read: reported with the results, which lack their matches
+  const unreadable: string[] = [];
+  // Metadata of each matched session, read once per search (a session can match thousands of times)
+  const sessionMeta = new Map<string, ReturnType<typeof getSessionMetadata>>();
 
   // Compile regex if needed
   let regexPattern: RegExp | null = null;
@@ -165,7 +171,11 @@ export async function textSearch(options: TextSearchOptions): Promise<{
 
           if (matched) {
             const entrySessionId = entry.sessionId || basename(filePath, '.jsonl');
-            const meta = getSessionMetadata(entrySessionId, projectDir);
+            let meta = sessionMeta.get(entrySessionId);
+            if (meta === undefined) {
+              meta = getSessionMetadata(entrySessionId, projectDir);
+              sessionMeta.set(entrySessionId, meta);
+            }
 
             allResults.push({
               sessionId: entrySessionId,
@@ -184,6 +194,7 @@ export async function textSearch(options: TextSearchOptions): Promise<{
         }
       } catch (err) {
         logger.warn(`Error searching ${filePath}:`, err);
+        unreadable.push(`${basename(filePath, '.jsonl')}: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
   }
@@ -198,5 +209,6 @@ export async function textSearch(options: TextSearchOptions): Promise<{
     results: allResults.slice(offset, offset + maxResults),
     totalMatches: allResults.length,
     filesSearched,
+    unreadable,
   };
 }

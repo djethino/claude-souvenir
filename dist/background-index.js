@@ -7,7 +7,7 @@ import { join as join6 } from "path";
 
 // src/utils/paths.ts
 import { homedir } from "os";
-import { join, sep } from "path";
+import { join } from "path";
 
 // src/options.ts
 import { isAbsolute } from "path";
@@ -56,9 +56,8 @@ function getSouvenirDir() {
 function getDbPath() {
   return readPluginOptions().dbPath ?? join(getSouvenirDir(), "souvenir.db");
 }
-function cwdToProjectDir(cwd2) {
-  const cleaned = cwd2.replace(/[\\/]+$/, "");
-  return cleaned.replace(/:/g, "-").replace(/[\\/]/g, "-");
+function cwdToProjectDir(cwd) {
+  return cwd.replace(/[\\/]+$/, "").replace(/[^a-zA-Z0-9]/g, "-");
 }
 function getProjectTranscriptDir(projectDir) {
   return join(getProjectsDir(), projectDir);
@@ -119,17 +118,19 @@ function resolvePathToProject(path) {
 }
 function getConfig() {
   if (_config) return _config;
-  const cwd2 = process.env.CWD || process.cwd();
+  const fromEnv = process.env.CLAUDE_PROJECT_DIR;
+  const cwd = fromEnv || process.cwd();
   const options = readPluginOptions();
   const defaults = PROVIDER_DEFAULTS[options.embeddingProvider];
-  const detectedProject = resolvePathToProject(cwd2);
+  const detectedProject = resolvePathToProject(cwd);
+  const source = fromEnv ? "CLAUDE_PROJECT_DIR" : "working directory (CLAUDE_PROJECT_DIR not set)";
   if (detectedProject) {
-    logger.info(`Detected project from CWD: ${detectedProject}`);
+    logger.info(`Current project from ${source}: ${detectedProject}`);
   } else {
-    logger.info(`CWD "${cwd2}" did not match any project. Waiting for MCP roots.`);
+    logger.info(`${source} "${cwd}" has no Claude Code history: no current project.`);
   }
   _config = {
-    cwd: cwd2,
+    cwd,
     currentProject: detectedProject,
     embedding: {
       provider: options.embeddingProvider,
@@ -424,43 +425,29 @@ function createEmbeddingProvider(config) {
 import { statSync as statSync2 } from "fs";
 import { basename as basename2 } from "path";
 
+// src/utils/serial.ts
+function serialized(fn) {
+  let queue = Promise.resolve();
+  return (...args) => {
+    const run2 = queue.then(() => fn(...args));
+    queue = run2.catch(() => {
+    });
+    return run2;
+  };
+}
+
 // src/transcript/discovery.ts
 import { readFileSync, readdirSync, existsSync as existsSync2, statSync, openSync, readSync, closeSync } from "fs";
 import { join as join3, basename } from "path";
-function listTranscriptFiles(projectDir, options = {}) {
-  const dir = getProjectTranscriptDir(projectDir);
-  if (!existsSync2(dir)) return [];
-  const mainFiles = readdirSync(dir).filter((f) => f.endsWith(".jsonl")).map((f) => join3(dir, f));
-  if (!options.includeSubagents) return mainFiles;
-  const subagentFiles = [];
-  const entries = readdirSync(dir, { withFileTypes: true });
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
-    if (!entry.name.match(/^[0-9a-f]{8}-/)) continue;
-    if (options.sessionId && entry.name !== options.sessionId) continue;
-    const subagentDir = join3(dir, entry.name, "subagents");
-    if (!existsSync2(subagentDir)) continue;
-    try {
-      const agentFiles = readdirSync(subagentDir).filter((f) => {
-        if (!f.endsWith(".jsonl")) return false;
-        if (f.includes("aprompt_suggestion")) return false;
-        return true;
-      }).map((f) => join3(subagentDir, f));
-      subagentFiles.push(...agentFiles);
-    } catch (err) {
-      logger.debug(`Error reading subagents for ${entry.name}:`, err);
-    }
-  }
-  return [...mainFiles, ...subagentFiles];
-}
 
 // src/transcript/parser.ts
 import { createReadStream } from "fs";
 import { createInterface } from "readline";
-var SKIP_TYPE = '"file-history-snapshot"';
+var SKIPPED_LINE_MARKER = '"file-history-snapshot"';
+var DEFAULT_ENTRY_TYPES = ["user", "assistant", "summary"];
 async function* parseTranscript(filePath, options = {}) {
   const {
-    includeTypes = ["user", "assistant", "summary"],
+    includeTypes = DEFAULT_ENTRY_TYPES,
     fromLine = 1,
     maxEntries,
     containsText,
@@ -477,7 +464,7 @@ async function* parseTranscript(filePath, options = {}) {
       if (lineNumber < fromLine) continue;
       if (maxEntries && yielded >= maxEntries) break;
       if (!line.trim()) continue;
-      if (line.includes(SKIP_TYPE)) continue;
+      if (line.includes(SKIPPED_LINE_MARKER)) continue;
       if (searchText) {
         const haystack = caseInsensitive ? line.toLowerCase() : line;
         if (!haystack.includes(searchText)) continue;
@@ -527,6 +514,38 @@ function extractText(entry) {
     default:
       return "";
   }
+}
+
+// src/transcript/entry-count.ts
+var CHUNK_SIZE = 1024 * 1024;
+var COUNTED_TYPES = new Set(DEFAULT_ENTRY_TYPES);
+
+// src/transcript/discovery.ts
+function listTranscriptFiles(projectDir, options = {}) {
+  const dir = getProjectTranscriptDir(projectDir);
+  if (!existsSync2(dir)) return [];
+  const mainFiles = readdirSync(dir).filter((f) => f.endsWith(".jsonl")).map((f) => join3(dir, f));
+  if (!options.includeSubagents) return mainFiles;
+  const subagentFiles = [];
+  const entries = readdirSync(dir, { withFileTypes: true });
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    if (!entry.name.match(/^[0-9a-f]{8}-/)) continue;
+    if (options.sessionId && entry.name !== options.sessionId) continue;
+    const subagentDir = join3(dir, entry.name, "subagents");
+    if (!existsSync2(subagentDir)) continue;
+    try {
+      const agentFiles = readdirSync(subagentDir).filter((f) => {
+        if (!f.endsWith(".jsonl")) return false;
+        if (f.includes("aprompt_suggestion")) return false;
+        return true;
+      }).map((f) => join3(subagentDir, f));
+      subagentFiles.push(...agentFiles);
+    } catch (err) {
+      logger.warn(`Error reading subagents for ${entry.name}:`, err);
+    }
+  }
+  return [...mainFiles, ...subagentFiles];
 }
 
 // src/embedding/chunker.ts
@@ -967,7 +986,8 @@ function incrementalVacuum() {
 
 // src/db/indexer.ts
 var EMBED_BATCH_SIZE = 32;
-async function buildIndex(provider, projectDirs, options = {}) {
+var buildIndex = serialized(runBuildIndex);
+async function runBuildIndex(provider, projectDirs, options = {}) {
   const { sessionId, includeSubagents = true, rebuild = false, onProgress, signal } = options;
   if (!provider.isReady()) {
     onProgress?.({ phase: "Initializing embedding model", current: 0, total: 1 });
@@ -1759,7 +1779,8 @@ function resolveSourceFiles(projectRoot) {
   }
   return [...fileSet.values()];
 }
-async function buildDocsIndex(projectRoot, provider, options = {}) {
+var buildDocsIndex = serialized(runBuildDocsIndex);
+async function runBuildDocsIndex(projectRoot, provider, options = {}) {
   const { rebuild = false, onProgress, signal } = options;
   if (!provider.isReady()) {
     onProgress?.({ phase: "Initializing embedding model", current: 0, total: 1 });
@@ -1893,17 +1914,9 @@ function acquireLock() {
   }
   return false;
 }
-var cwd;
-try {
-  const data = JSON.parse(readFileSync4(0, "utf-8"));
-  cwd = data.cwd;
-} catch {
-  cwd = process.cwd();
-}
-if (!cwd || !acquireLock()) {
+if (!acquireLock()) {
   process.exit(0);
 }
-process.env.CWD = cwd;
 async function run() {
   const config = getConfig();
   if (!config.currentProject) {
@@ -1918,7 +1931,7 @@ async function run() {
 `);
     }
     const projectRoot = config.cwd;
-    if (projectRoot && docsDbExists(projectRoot)) {
+    if (docsDbExists(projectRoot)) {
       const sources = getDocSources(projectRoot);
       if (sources.length > 0) {
         const docsResult = await buildDocsIndex(projectRoot, provider, { rebuild: false });
@@ -1935,6 +1948,7 @@ async function run() {
 run().catch((err) => {
   process.stderr.write(`[souvenir] Background index error: ${err?.message || err}
 `);
+  process.exitCode = 1;
 }).finally(() => {
   writeFileSync(LAST_RUN_FILE, String(Date.now()));
   try {
