@@ -25,14 +25,48 @@ function resultCount(total: number, more: boolean): string {
 /**
  * Pagination footer. `more`: results may exist beyond the `total` fetched (semantic searches fetch
  * only what the page needs plus one), so the next page is offered even when this one ends the list.
+ * `nextScore`, the score of the first result of the next page, tells whether it is worth reading:
+ * close to this page's scores, keep going; far below, the rest is weaker matches.
  */
-function pageFooter(endIndex: number, maxResults: number, total: number, more: boolean): string {
+function pageFooter(endIndex: number, maxResults: number, total: number, more: boolean, nextScore?: number): string {
   if (endIndex >= total && !more) return `\n--- All ${total} results shown ---`;
   const page = more
     ? `Page ${Math.ceil(endIndex / maxResults)}`
     : `Page ${Math.ceil(endIndex / maxResults)}/${Math.ceil(total / maxResults)}`;
   const remaining = endIndex < total ? `${total - endIndex}${more ? '+' : ''} more results` : 'more results';
-  return `\n--- ${page} | ${remaining} | Next page: offset=${endIndex} ---`;
+  const best = nextScore !== undefined ? ` (best score: ${nextScore.toFixed(2)})` : '';
+  return `\n--- ${page} | ${remaining}${best} | Next page: offset=${endIndex} ---`;
+}
+
+/**
+ * Index new messages before a semantic search. Returns a note for the answer when the index may
+ * lack recent messages: the search still runs on what is indexed, but Claude must know the
+ * results can be incomplete instead of taking them as everything there is.
+ */
+async function indexBeforeSemanticSearch(
+  provider: ReturnType<typeof getOrCreateProvider>,
+  projectDirs: string[],
+  ctx: ToolContext | undefined,
+): Promise<string | null> {
+  if (projectDirs.length !== 1) {
+    // Several projects: indexing them all here could take minutes; the background index only covers the current one
+    return 'Note: across several projects, only messages already indexed are searched: recent sessions of other projects may be missing (souvenir_index action="build" project="all" indexes them; text mode reads the transcripts directly).';
+  }
+  try {
+    const result = await buildIndex(provider, projectDirs, { rebuild: false, onProgress: createProgressNotifier(ctx) });
+    if (result.errors.length === 0) return null;
+    const count = result.errors.length >= 5 ? '5 or more' : String(result.errors.length); // buildIndex keeps the first 5
+    return `Note: ${count} transcript(s) could not be indexed, so their newest messages may be missing from semantic results (first error: ${result.errors[0]}). Text mode reads the transcripts directly.`;
+  } catch (err) {
+    logger.warn('Indexing before search failed:', err);
+    return `Note: indexing new messages failed (${errorMessage(err)}), so the latest messages may be missing from semantic results. Text mode reads the transcripts directly.`;
+  }
+}
+
+/** Note for text matches when some transcripts could not be read (their matches are missing). */
+function unreadableNote(unreadable: string[]): string | null {
+  if (unreadable.length === 0) return null;
+  return `Note: ${unreadable.length} transcript(s) could not be read, their matches are missing (${unreadable.slice(0, 3).join('; ')}${unreadable.length > 3 ? '; …' : ''}).`;
 }
 
 /** Session metadata for result lists, read once per session and search. */
@@ -189,8 +223,11 @@ async function performTextSearch(
     regex: params.regex ?? false,
   });
 
+  const note = unreadableNote(result.unreadable);
+  const noteBlock = note ? `${note}\n\n` : '';
+
   if (result.results.length === 0) {
-    return `No results found for "${params.query}" (searched ${result.filesSearched} files).`;
+    return `${noteBlock}No results found for "${params.query}" (searched ${result.filesSearched} files).`;
   }
 
   // Apply session density boost before pagination
@@ -200,15 +237,15 @@ async function performTextSearch(
   const sliced = boostedResults.slice(offset, offset + maxResults);
   const total = boostedResults.length;
   const endIndex = offset + sliced.length;
-  if (sliced.length === 0) return `No results after offset ${offset} for "${params.query}" (${total} in all).`;
+  if (sliced.length === 0) return `${noteBlock}No results after offset ${offset} for "${params.query}" (${total} in all).`;
 
-  const header = `Found ${total} result(s) for "${params.query}" (showing ${offset + 1}-${endIndex}, searched ${result.filesSearched} files):\n`;
+  const header = `${noteBlock}Found ${total} result(s) for "${params.query}" (showing ${offset + 1}-${endIndex}, searched ${result.filesSearched} files):\n`;
 
   const formatted = sliced.map((r, i) =>
     formatSearchResult(r, offset + i, sessionHitCounts.get(r.sessionId)),
   );
 
-  let footer = pageFooter(endIndex, maxResults, total, false);
+  let footer = pageFooter(endIndex, maxResults, total, false, boostedResults[endIndex]?.score);
 
   // Add semantic hint if index is available
   const hint = await getSemanticHint(params.query, projectDirs);
@@ -243,18 +280,8 @@ async function performSemanticSearch(
       await provider.initialize();
     }
 
-    // Auto-index for single-project searches (the common case)
-    if (projectDirs.length === 1) {
-      try {
-        await buildIndex(provider, projectDirs, {
-          rebuild: false,
-          onProgress: createProgressNotifier(ctx),
-        });
-      } catch (err) {
-        logger.warn('Auto-index failed, continuing with existing index:', err);
-      }
-    }
-    // Multi-project: no auto-index to avoid long waits; searchSemantic reports a missing index
+    const indexNote = await indexBeforeSemanticSearch(provider, projectDirs, ctx);
+    const noteBlock = indexNote ? `${indexNote}\n\n` : '';
 
     const queryEmbedding = await provider.embedQuery(params.query);
 
@@ -275,7 +302,7 @@ async function performSemanticSearch(
     const more = vecResults.length === topK;
 
     if (vecResults.length === 0) {
-      return `No semantic results found for "${params.query}". The index may be empty for the specified project. Run souvenir_index with action="status" to check.`;
+      return `${noteBlock}No semantic results found for "${params.query}". The index may be empty for the specified project. Run souvenir_index with action="status" to check.`;
     }
 
     // Convert all results to SearchResult format (no pagination yet)
@@ -303,12 +330,12 @@ async function performSemanticSearch(
     const sliced = boostedResults.slice(offset, offset + maxResults);
     const total = boostedResults.length;
     const endIndex = offset + sliced.length;
-    if (sliced.length === 0) return `No semantic results after offset ${offset} for "${params.query}" (${total} in all).`;
+    if (sliced.length === 0) return `${noteBlock}No semantic results after offset ${offset} for "${params.query}" (${total} in all).`;
 
-    const header = `Found ${resultCount(total, more)} semantic result(s) for "${params.query}" (showing ${offset + 1}-${endIndex}):\n`;
+    const header = `${noteBlock}Found ${resultCount(total, more)} semantic result(s) for "${params.query}" (showing ${offset + 1}-${endIndex}):\n`;
     const formatted = sliced.map((r, i) => formatSearchResult(r, offset + i, sessionHitCounts.get(r.sessionId)));
 
-    return header + '\n' + formatted.join('\n\n') + pageFooter(endIndex, maxResults, total, more);
+    return header + '\n' + formatted.join('\n\n') + pageFooter(endIndex, maxResults, total, more, boostedResults[endIndex]?.score);
   } catch (err) {
     return `Semantic search error: ${err instanceof Error ? err.message : String(err)}`;
   }
@@ -354,7 +381,7 @@ async function performHybridSearch(
     (result) => ({ ...result, error: null as string | null }),
     (err) => {
       logger.warn('Text search failed in hybrid mode:', err);
-      return { results: [] as SearchResult[], totalMatches: 0, filesSearched: 0, error: errorMessage(err) };
+      return { results: [] as SearchResult[], totalMatches: 0, filesSearched: 0, unreadable: [] as string[], error: errorMessage(err) };
     },
   );
 
@@ -366,17 +393,7 @@ async function performHybridSearch(
         await provider.initialize();
       }
 
-      // Auto-index for single-project (same as performSemanticSearch)
-      if (projectDirs.length === 1) {
-        try {
-          await buildIndex(provider, projectDirs, {
-            rebuild: false,
-            onProgress: createProgressNotifier(ctx),
-          });
-        } catch (err) {
-          logger.warn('Auto-index failed in hybrid mode:', err);
-        }
-      }
+      const indexNote = await indexBeforeSemanticSearch(provider, projectDirs, ctx);
 
       const queryEmbedding = await provider.embedQuery(params.query);
       const projectDir = projectDirs.length === 1 ? projectDirs[0] : undefined;
@@ -390,19 +407,21 @@ async function performHybridSearch(
         dateTo: params.date_to,
       });
 
-      return { results, error: null as string | null };
+      return { results, error: null as string | null, indexNote };
     } catch (err) {
       logger.warn('Semantic search failed in hybrid mode:', err);
-      return { results: [] as VecSearchResult[], error: errorMessage(err) };
+      return { results: [] as VecSearchResult[], error: errorMessage(err), indexNote: null };
     }
   })();
 
   const [textResult, semantic] = await Promise.all([textPromise, semanticPromise]);
   const vecResults = semantic.results;
-  // Hybrid degrades to one side when the other fails: say so instead of hiding it
+  // Hybrid degrades to one side when the other fails, or searches an incomplete index: say so instead of hiding it
   const notices = [
     semantic.error && `Note: semantic search unavailable, showing text matches only (${semantic.error})`,
     textResult.error && `Note: text search failed, showing semantic matches only (${textResult.error})`,
+    unreadableNote(textResult.unreadable),
+    semantic.indexNote,
   ].filter(Boolean).join('\n');
   const noticeBlock = notices ? `${notices}\n\n` : '';
 
@@ -464,7 +483,7 @@ async function performHybridSearch(
   const header = `${noticeBlock}Found ${resultCount(total, more)} hybrid result(s) for "${params.query}" (showing ${offset + 1}-${endIndex}):\n`;
   const formatted = sliced.map((r, i) => formatSearchResult(r, offset + i, sessionHitCounts.get(r.sessionId)));
 
-  const footer = pageFooter(endIndex, maxResults, total, more);
+  const footer = pageFooter(endIndex, maxResults, total, more, boostedResults[endIndex]?.score);
 
   return header + '\n' + formatted.join('\n\n') + footer;
 }
@@ -611,7 +630,8 @@ async function performDocsSearch(
   const header = `Found ${resultCount(total, more)} result(s) in ${sourceLabel} files for "${params.query}" (showing ${offset + 1}-${endIndex}):\n`;
   const formatted = sliced.map((r, i) => formatDocResult(r, offset + i));
 
-  let footer = pageFooter(endIndex, maxResults, total, more);
+  const next = vecResults[endIndex];
+  let footer = pageFooter(endIndex, maxResults, total, more, next && 1 - next.distance);
 
   // Cross-reference: check transcripts for related content
   const xrefHint = await getTranscriptsXrefHint(params.query, config);

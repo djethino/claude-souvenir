@@ -35009,10 +35009,16 @@ function getSessions(projectDir, options = {}) {
   });
   return entries;
 }
+var UNKNOWN_COUNT = -1;
 function withEntryCount(entry, projectDir) {
   const filePath = entry.fullPath && existsSync(entry.fullPath) ? entry.fullPath : join2(getProjectTranscriptDir(projectDir), `${entry.sessionId}.jsonl`);
   if (!existsSync(filePath)) return entry;
-  return { ...entry, messageCount: countTranscriptEntries(filePath) };
+  try {
+    return { ...entry, messageCount: countTranscriptEntries(filePath) };
+  } catch (err) {
+    logger.warn(`Could not count the entries of ${filePath}:`, err);
+    return { ...entry, messageCount: UNKNOWN_COUNT };
+  }
 }
 function getSessionFilePath(sessionId, projectDir) {
   const projectDirs = projectDir ? [projectDir] : listProjectDirs();
@@ -35071,7 +35077,7 @@ function listTranscriptFiles(projectDir, options = {}) {
       }).map((f) => join2(subagentDir, f));
       subagentFiles.push(...agentFiles);
     } catch (err) {
-      logger.debug(`Error reading subagents for ${entry.name}:`, err);
+      logger.warn(`Error reading subagents for ${entry.name}:`, err);
     }
   }
   return [...mainFiles, ...subagentFiles];
@@ -35090,7 +35096,21 @@ function discoverOrphanSessions(projectDir) {
       const meta3 = extractMinimalMetadata(filePath, sessionId, projectDir);
       if (meta3) orphans.push(meta3);
     } catch (err) {
-      logger.debug(`Failed to read orphan session ${sessionId}:`, err);
+      logger.warn(`Failed to read session ${sessionId}:`, err);
+      const mtime = new Date(statSync2(filePath).mtimeMs).toISOString();
+      orphans.push({
+        sessionId,
+        fullPath: filePath,
+        fileMtime: Date.parse(mtime),
+        summary: "",
+        firstPrompt: `(unreadable: ${err instanceof Error ? err.message : String(err)})`,
+        messageCount: 0,
+        created: mtime,
+        modified: mtime,
+        gitBranch: "",
+        projectPath: "",
+        isSidechain: false
+      });
     }
   }
   return orphans;
@@ -35225,6 +35245,7 @@ async function textSearch(options) {
   } = options;
   const allResults = [];
   let filesSearched = 0;
+  const unreadable = [];
   const sessionMeta = /* @__PURE__ */ new Map();
   let regexPattern = null;
   if (regex) {
@@ -35305,6 +35326,7 @@ async function textSearch(options) {
         }
       } catch (err) {
         logger.warn(`Error searching ${filePath}:`, err);
+        unreadable.push(`${basename2(filePath, ".jsonl")}: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
   }
@@ -35315,7 +35337,8 @@ async function textSearch(options) {
   return {
     results: allResults.slice(offset, offset + maxResults),
     totalMatches: allResults.length,
-    filesSearched
+    filesSearched,
+    unreadable
   };
 }
 
@@ -35479,6 +35502,9 @@ function readablePrompt(text) {
   }
   return text;
 }
+function formatEntryCount(count) {
+  return count < 0 ? "unknown" : String(count);
+}
 function sessionTitle(meta3) {
   return readablePrompt(meta3.summary || meta3.firstPrompt || "No summary");
 }
@@ -35490,7 +35516,7 @@ function formatSessionHeader(meta3) {
     `ID: ${meta3.sessionId}`,
     `Project: ${meta3.projectPath || "Unknown"}`,
     `Date: ${created} - ${modified}`,
-    `Entries: ${meta3.messageCount}${meta3.gitBranch ? ` | Branch: ${meta3.gitBranch}` : ""}`
+    `Entries: ${formatEntryCount(meta3.messageCount)}${meta3.gitBranch ? ` | Branch: ${meta3.gitBranch}` : ""}`
   ];
   return lines.join("\n");
 }
@@ -35508,7 +35534,7 @@ function formatSessionListEntry(meta3, index) {
     lines.push(`   First: "${first.length > 80 ? first.slice(0, 80) + "..." : first}"`);
   }
   const details = [];
-  details.push(`Entries: ${meta3.messageCount}`);
+  details.push(`Entries: ${formatEntryCount(meta3.messageCount)}`);
   if (meta3.gitBranch) details.push(`Branch: ${meta3.gitBranch}`);
   lines.push(`   ${details.join(" | ")}`);
   return lines.join("\n");
@@ -37189,13 +37215,32 @@ function getDocsChunkCount(projectRoot, category) {
 function resultCount(total, more) {
   return more ? `${total}+` : `${total}`;
 }
-function pageFooter(endIndex, maxResults, total, more) {
+function pageFooter(endIndex, maxResults, total, more, nextScore) {
   if (endIndex >= total && !more) return `
 --- All ${total} results shown ---`;
   const page = more ? `Page ${Math.ceil(endIndex / maxResults)}` : `Page ${Math.ceil(endIndex / maxResults)}/${Math.ceil(total / maxResults)}`;
   const remaining = endIndex < total ? `${total - endIndex}${more ? "+" : ""} more results` : "more results";
+  const best = nextScore !== void 0 ? ` (best score: ${nextScore.toFixed(2)})` : "";
   return `
---- ${page} | ${remaining} | Next page: offset=${endIndex} ---`;
+--- ${page} | ${remaining}${best} | Next page: offset=${endIndex} ---`;
+}
+async function indexBeforeSemanticSearch(provider, projectDirs, ctx) {
+  if (projectDirs.length !== 1) {
+    return 'Note: across several projects, only messages already indexed are searched: recent sessions of other projects may be missing (souvenir_index action="build" project="all" indexes them; text mode reads the transcripts directly).';
+  }
+  try {
+    const result = await buildIndex(provider, projectDirs, { rebuild: false, onProgress: createProgressNotifier(ctx) });
+    if (result.errors.length === 0) return null;
+    const count = result.errors.length >= 5 ? "5 or more" : String(result.errors.length);
+    return `Note: ${count} transcript(s) could not be indexed, so their newest messages may be missing from semantic results (first error: ${result.errors[0]}). Text mode reads the transcripts directly.`;
+  } catch (err) {
+    logger.warn("Indexing before search failed:", err);
+    return `Note: indexing new messages failed (${errorMessage(err)}), so the latest messages may be missing from semantic results. Text mode reads the transcripts directly.`;
+  }
+}
+function unreadableNote(unreadable) {
+  if (unreadable.length === 0) return null;
+  return `Note: ${unreadable.length} transcript(s) could not be read, their matches are missing (${unreadable.slice(0, 3).join("; ")}${unreadable.length > 3 ? "; \u2026" : ""}).`;
 }
 function sessionMetadataLookup() {
   const cache = /* @__PURE__ */ new Map();
@@ -37288,21 +37333,25 @@ async function performTextSearch(params, projectDirs, maxResults) {
     caseSensitive: params.case_sensitive ?? false,
     regex: params.regex ?? false
   });
+  const note = unreadableNote(result.unreadable);
+  const noteBlock = note ? `${note}
+
+` : "";
   if (result.results.length === 0) {
-    return `No results found for "${params.query}" (searched ${result.filesSearched} files).`;
+    return `${noteBlock}No results found for "${params.query}" (searched ${result.filesSearched} files).`;
   }
   const { results: boostedResults, sessionHitCounts } = applySessionDensityBoost(result.results);
   const offset = params.offset || 0;
   const sliced = boostedResults.slice(offset, offset + maxResults);
   const total = boostedResults.length;
   const endIndex = offset + sliced.length;
-  if (sliced.length === 0) return `No results after offset ${offset} for "${params.query}" (${total} in all).`;
-  const header = `Found ${total} result(s) for "${params.query}" (showing ${offset + 1}-${endIndex}, searched ${result.filesSearched} files):
+  if (sliced.length === 0) return `${noteBlock}No results after offset ${offset} for "${params.query}" (${total} in all).`;
+  const header = `${noteBlock}Found ${total} result(s) for "${params.query}" (showing ${offset + 1}-${endIndex}, searched ${result.filesSearched} files):
 `;
   const formatted = sliced.map(
     (r, i) => formatSearchResult(r, offset + i, sessionHitCounts.get(r.sessionId))
   );
-  let footer = pageFooter(endIndex, maxResults, total, false);
+  let footer = pageFooter(endIndex, maxResults, total, false, boostedResults[endIndex]?.score);
   const hint = await getSemanticHint(params.query, projectDirs);
   if (hint) {
     footer += `
@@ -37317,16 +37366,10 @@ async function performSemanticSearch(params, projectDirs, maxResults, ctx) {
     if (!provider.isReady()) {
       await provider.initialize();
     }
-    if (projectDirs.length === 1) {
-      try {
-        await buildIndex(provider, projectDirs, {
-          rebuild: false,
-          onProgress: createProgressNotifier(ctx)
-        });
-      } catch (err) {
-        logger.warn("Auto-index failed, continuing with existing index:", err);
-      }
-    }
+    const indexNote = await indexBeforeSemanticSearch(provider, projectDirs, ctx);
+    const noteBlock = indexNote ? `${indexNote}
+
+` : "";
     const queryEmbedding = await provider.embedQuery(params.query);
     const projectDir = projectDirs.length === 1 ? projectDirs[0] : void 0;
     const offset = params.offset || 0;
@@ -37341,7 +37384,7 @@ async function performSemanticSearch(params, projectDirs, maxResults, ctx) {
     });
     const more = vecResults.length === topK;
     if (vecResults.length === 0) {
-      return `No semantic results found for "${params.query}". The index may be empty for the specified project. Run souvenir_index with action="status" to check.`;
+      return `${noteBlock}No semantic results found for "${params.query}". The index may be empty for the specified project. Run souvenir_index with action="status" to check.`;
     }
     const metadataOf = sessionMetadataLookup();
     const allResults = vecResults.map((vr) => {
@@ -37365,11 +37408,11 @@ async function performSemanticSearch(params, projectDirs, maxResults, ctx) {
     const sliced = boostedResults.slice(offset, offset + maxResults);
     const total = boostedResults.length;
     const endIndex = offset + sliced.length;
-    if (sliced.length === 0) return `No semantic results after offset ${offset} for "${params.query}" (${total} in all).`;
-    const header = `Found ${resultCount(total, more)} semantic result(s) for "${params.query}" (showing ${offset + 1}-${endIndex}):
+    if (sliced.length === 0) return `${noteBlock}No semantic results after offset ${offset} for "${params.query}" (${total} in all).`;
+    const header = `${noteBlock}Found ${resultCount(total, more)} semantic result(s) for "${params.query}" (showing ${offset + 1}-${endIndex}):
 `;
     const formatted = sliced.map((r, i) => formatSearchResult(r, offset + i, sessionHitCounts.get(r.sessionId)));
-    return header + "\n" + formatted.join("\n\n") + pageFooter(endIndex, maxResults, total, more);
+    return header + "\n" + formatted.join("\n\n") + pageFooter(endIndex, maxResults, total, more, boostedResults[endIndex]?.score);
   } catch (err) {
     return `Semantic search error: ${err instanceof Error ? err.message : String(err)}`;
   }
@@ -37393,7 +37436,7 @@ async function performHybridSearch(params, projectDirs, maxResults, ctx) {
     (result) => ({ ...result, error: null }),
     (err) => {
       logger.warn("Text search failed in hybrid mode:", err);
-      return { results: [], totalMatches: 0, filesSearched: 0, error: errorMessage(err) };
+      return { results: [], totalMatches: 0, filesSearched: 0, unreadable: [], error: errorMessage(err) };
     }
   );
   const semanticPromise = (async () => {
@@ -37403,16 +37446,7 @@ async function performHybridSearch(params, projectDirs, maxResults, ctx) {
       if (!provider.isReady()) {
         await provider.initialize();
       }
-      if (projectDirs.length === 1) {
-        try {
-          await buildIndex(provider, projectDirs, {
-            rebuild: false,
-            onProgress: createProgressNotifier(ctx)
-          });
-        } catch (err) {
-          logger.warn("Auto-index failed in hybrid mode:", err);
-        }
-      }
+      const indexNote = await indexBeforeSemanticSearch(provider, projectDirs, ctx);
       const queryEmbedding = await provider.embedQuery(params.query);
       const projectDir = projectDirs.length === 1 ? projectDirs[0] : void 0;
       const results = searchSemantic(provider.identity, queryEmbedding, {
@@ -37423,17 +37457,19 @@ async function performHybridSearch(params, projectDirs, maxResults, ctx) {
         dateFrom: params.date_from,
         dateTo: params.date_to
       });
-      return { results, error: null };
+      return { results, error: null, indexNote };
     } catch (err) {
       logger.warn("Semantic search failed in hybrid mode:", err);
-      return { results: [], error: errorMessage(err) };
+      return { results: [], error: errorMessage(err), indexNote: null };
     }
   })();
   const [textResult, semantic] = await Promise.all([textPromise, semanticPromise]);
   const vecResults = semantic.results;
   const notices = [
     semantic.error && `Note: semantic search unavailable, showing text matches only (${semantic.error})`,
-    textResult.error && `Note: text search failed, showing semantic matches only (${textResult.error})`
+    textResult.error && `Note: text search failed, showing semantic matches only (${textResult.error})`,
+    unreadableNote(textResult.unreadable),
+    semantic.indexNote
   ].filter(Boolean).join("\n");
   const noticeBlock = notices ? `${notices}
 
@@ -37480,7 +37516,7 @@ async function performHybridSearch(params, projectDirs, maxResults, ctx) {
   const header = `${noticeBlock}Found ${resultCount(total, more)} hybrid result(s) for "${params.query}" (showing ${offset + 1}-${endIndex}):
 `;
   const formatted = sliced.map((r, i) => formatSearchResult(r, offset + i, sessionHitCounts.get(r.sessionId)));
-  const footer = pageFooter(endIndex, maxResults, total, more);
+  const footer = pageFooter(endIndex, maxResults, total, more, boostedResults[endIndex]?.score);
   return header + "\n" + formatted.join("\n\n") + footer;
 }
 async function getSemanticHint(query, projectDirs) {
@@ -37570,7 +37606,8 @@ async function performDocsSearch(params, config2, source, mode) {
   const header = `Found ${resultCount(total, more)} result(s) in ${sourceLabel} files for "${params.query}" (showing ${offset + 1}-${endIndex}):
 `;
   const formatted = sliced.map((r, i) => formatDocResult(r, offset + i));
-  let footer = pageFooter(endIndex, maxResults, total, more);
+  const next = vecResults[endIndex];
+  let footer = pageFooter(endIndex, maxResults, total, more, next && 1 - next.distance);
   const xrefHint = await getTranscriptsXrefHint(params.query, config2);
   if (xrefHint) {
     footer += `
@@ -39800,7 +39837,7 @@ function sessionDescription(session) {
     const first = readablePrompt(session.firstPrompt).replace(/\s+/g, " ").trim();
     parts.push(`First prompt: "${first.length > 100 ? first.slice(0, 100) + "\u2026" : first}"`);
   }
-  parts.push(`${session.messageCount} entries`);
+  parts.push(`${formatEntryCount(session.messageCount)} entries`);
   if (session.gitBranch) parts.push(`branch ${session.gitBranch}`);
   parts.push(`session_id ${session.sessionId}`);
   return parts.join(" \xB7 ");
@@ -39932,7 +39969,8 @@ var INSTRUCTIONS = `souvenir searches this user's past Claude Code conversations
 - For an overview of a directory, use souvenir_tree rather than chains of ls/find/Glob: one call, noise hidden, with line counts (show_lines), recent changes (show_modified) and an extension filter (pattern).
 - When a file was damaged or lost (bad edit, wrong checkout, deletion), look at souvenir_docs "history" before any other attempt. Only the files added to souvenir_docs are kept (set up per project, on request: "list" shows them; nothing added means no snapshots); while Claude Code works, they are snapshotted at most every ~30 s, kept 3 days. Before "restore", "diff" the chosen snapshot against the current file to see what restoring would erase. Restore saves the current state as a snapshot first (it can be undone), unlike a git checkout, which discards uncommitted work for good.
 - For work done in another project, search with project "all" (souvenir_projects lists them).
-- To learn why some code or a commit changed, search the commit hash or the file name in the conversations: the session that made the change holds the reason.`;
+- To learn why some code or a commit changed, search the commit hash or the file name in the conversations: the session that made the change holds the reason.
+- Past sessions are also resources (souvenir://session/<session_id>) that the user can cite with @; the @ list holds the 50 most recent of the project, souvenir_sessions lists them all, page by page.`;
 var server = new McpServer({ name: "souvenir", version: "0.5.0" }, { instructions: INSTRUCTIONS });
 var READ_ONLY = { readOnlyHint: true };
 var LARGE_RESULT_META = { "anthropic/maxResultSizeChars": 1e5 };

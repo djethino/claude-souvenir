@@ -120,12 +120,21 @@ export function getSessions(
  * written by Claude Code) holds a count frozen when it was written, and the metadata of sessions
  * missing from it comes from the file's first 64 KB only.
  */
+/** messageCount of a session whose transcript could not be counted. */
+export const UNKNOWN_COUNT = -1;
+
 export function withEntryCount(entry: SessionIndexEntry, projectDir: string): SessionIndexEntry {
   const filePath = entry.fullPath && existsSync(entry.fullPath)
     ? entry.fullPath
     : join(getProjectTranscriptDir(projectDir), `${entry.sessionId}.jsonl`);
   if (!existsSync(filePath)) return entry; // transcript deleted: keep what the index recorded
-  return { ...entry, messageCount: countTranscriptEntries(filePath) };
+  try {
+    return { ...entry, messageCount: countTranscriptEntries(filePath) };
+  } catch (err) {
+    // One unreadable transcript must not fail the whole list: its count shows as unknown
+    logger.warn(`Could not count the entries of ${filePath}:`, err);
+    return { ...entry, messageCount: UNKNOWN_COUNT };
+  }
 }
 
 /**
@@ -235,7 +244,7 @@ export function listTranscriptFiles(
 
       subagentFiles.push(...agentFiles);
     } catch (err) {
-      logger.debug(`Error reading subagents for ${entry.name}:`, err);
+      logger.warn(`Error reading subagents for ${entry.name}:`, err);
     }
   }
 
@@ -270,7 +279,14 @@ export function discoverOrphanSessions(projectDir: string): SessionIndexEntry[] 
       const meta = extractMinimalMetadata(filePath, sessionId, projectDir);
       if (meta) orphans.push(meta);
     } catch (err) {
-      logger.debug(`Failed to read orphan session ${sessionId}:`, err);
+      // Listed anyway, with the reason as its title: a session that vanished from lists would go unnoticed
+      logger.warn(`Failed to read session ${sessionId}:`, err);
+      const mtime = new Date(statSync(filePath).mtimeMs).toISOString();
+      orphans.push({
+        sessionId, fullPath: filePath, fileMtime: Date.parse(mtime), summary: '',
+        firstPrompt: `(unreadable: ${err instanceof Error ? err.message : String(err)})`,
+        messageCount: 0, created: mtime, modified: mtime, gitBranch: '', projectPath: '', isSidechain: false,
+      });
     }
   }
 

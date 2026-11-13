@@ -2,7 +2,7 @@ import { ResourceNotFoundError, ResourceTemplate, type McpServer } from '@modelc
 import { getConfig } from './config.js';
 import { getSessions } from './transcript/discovery.js';
 import type { SessionIndexEntry } from './transcript/types.js';
-import { readablePrompt, sessionTitle } from './transcript/formatter.js';
+import { formatEntryCount, readablePrompt, sessionTitle } from './transcript/formatter.js';
 import { readSessionDigest } from './tools/read.js';
 
 /** Sessions listed for @ mentions; older ones stay readable by URI and through souvenir_sessions. */
@@ -26,7 +26,7 @@ function sessionDescription(session: SessionIndexEntry): string {
     const first = readablePrompt(session.firstPrompt).replace(/\s+/g, ' ').trim();
     parts.push(`First prompt: "${first.length > 100 ? first.slice(0, 100) + '…' : first}"`);
   }
-  parts.push(`${session.messageCount} entries`);
+  parts.push(`${formatEntryCount(session.messageCount)} entries`);
   if (session.gitBranch) parts.push(`branch ${session.gitBranch}`);
   parts.push(`session_id ${session.sessionId}`);
   return parts.join(' · ');

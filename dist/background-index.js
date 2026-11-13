@@ -542,7 +542,7 @@ function listTranscriptFiles(projectDir, options = {}) {
       }).map((f) => join3(subagentDir, f));
       subagentFiles.push(...agentFiles);
     } catch (err) {
-      logger.debug(`Error reading subagents for ${entry.name}:`, err);
+      logger.warn(`Error reading subagents for ${entry.name}:`, err);
     }
   }
   return [...mainFiles, ...subagentFiles];

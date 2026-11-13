@@ -236,6 +236,11 @@ export function readablePrompt(text: string): string {
   return text;
 }
 
+/** A session's entry count for display (negative = its transcript could not be counted). */
+export function formatEntryCount(count: number): string {
+  return count < 0 ? 'unknown' : String(count);
+}
+
 /** Title of a session: its summary, else its first prompt as typed. */
 export function sessionTitle(meta: SessionIndexEntry): string {
   return readablePrompt(meta.summary || meta.firstPrompt || 'No summary');
@@ -249,7 +254,7 @@ export function formatSessionHeader(meta: SessionIndexEntry): string {
     `ID: ${meta.sessionId}`,
     `Project: ${meta.projectPath || 'Unknown'}`,
     `Date: ${created} - ${modified}`,
-    `Entries: ${meta.messageCount}${meta.gitBranch ? ` | Branch: ${meta.gitBranch}` : ''}`,
+    `Entries: ${formatEntryCount(meta.messageCount)}${meta.gitBranch ? ` | Branch: ${meta.gitBranch}` : ''}`,
   ];
   return lines.join('\n');
 }
@@ -274,7 +279,7 @@ export function formatSessionListEntry(meta: SessionIndexEntry, index: number): 
   }
 
   const details: string[] = [];
-  details.push(`Entries: ${meta.messageCount}`);
+  details.push(`Entries: ${formatEntryCount(meta.messageCount)}`);
   if (meta.gitBranch) details.push(`Branch: ${meta.gitBranch}`);
   lines.push(`   ${details.join(' | ')}`);
 
