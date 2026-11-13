@@ -241,9 +241,14 @@ export function formatEntryCount(count: number): string {
   return count < 0 ? 'unknown' : String(count);
 }
 
+/** A session's first prompt as typed, or '' when it has none (sessions-index.json records "No prompt"). */
+export function firstPromptOf(meta: Pick<SessionIndexEntry, 'firstPrompt'>): string {
+  return meta.firstPrompt && meta.firstPrompt !== 'No prompt' ? readablePrompt(meta.firstPrompt) : '';
+}
+
 /** Title of a session: its summary, else its first prompt as typed. */
 export function sessionTitle(meta: SessionIndexEntry): string {
-  return readablePrompt(meta.summary || meta.firstPrompt || 'No summary');
+  return meta.summary ? readablePrompt(meta.summary) : firstPromptOf(meta) || 'No summary';
 }
 
 export function formatSessionHeader(meta: SessionIndexEntry): string {
@@ -273,7 +278,7 @@ export function formatSessionListEntry(meta: SessionIndexEntry, index: number): 
     `   session_id: ${meta.sessionId}`,
   ];
 
-  const first = meta.firstPrompt ? readablePrompt(meta.firstPrompt) : '';
+  const first = firstPromptOf(meta);
   if (first && first !== title) {
     lines.push(`   First: "${first.length > 80 ? first.slice(0, 80) + '...' : first}"`);
   }
@@ -299,15 +304,18 @@ export function formatSearchResult(
     sessionId: string;
     entryUuid?: string;
     sessionSummary?: string;
+    sessionFirstPrompt?: string;
     lineNumber: number;
   },
   index: number,
   sessionHitCount?: number,
 ): string {
   const ts = result.timestamp ? formatTimestampCompact(result.timestamp) : '???';
-  const session = result.sessionSummary
-    ? result.sessionSummary.slice(0, 80)
-    : 'No summary';
+  // Claude Code no longer writes session summaries: the first prompt is what says which session this is
+  const title = (result.sessionSummary
+    ? readablePrompt(result.sessionSummary)
+    : firstPromptOf({ firstPrompt: result.sessionFirstPrompt ?? '' }) || 'No summary').replace(/\s+/g, ' ').trim();
+  const session = title.length > 80 ? title.slice(0, 80) + '...' : title;
   const scoreStr = result.score.toFixed(2);
 
   const lines = [
