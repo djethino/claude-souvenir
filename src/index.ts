@@ -151,7 +151,7 @@ server.registerTool(
 
 Typical workflow: souvenir_projects → souvenir_sessions (pick a session) → souvenir_read or souvenir_search with session_id.
 
-Pagination: Shows "Showing X/Y sessions" footer. Increase max_results to see more.`,
+Pagination: the footer shows "Showing A-B of N sessions" and the offset of the next page.`,
     annotations: READ_ONLY,
     inputSchema: z.object({
       project: z.string().optional().describe('Project directory name or path. Default: current project.'),
@@ -160,6 +160,7 @@ Pagination: Shows "Showing X/Y sessions" footer. Increase max_results to see mor
       date_to: z.string().optional().describe('Only sessions created before this ISO date.'),
       sort: z.enum(['newest', 'oldest', 'messages']).optional().describe('Sort order. Default: "newest". "messages": most entries first.'),
       max_results: z.number().int().min(1).max(50).optional().describe('Maximum sessions to return. Default: 20.'),
+      offset: z.number().int().min(0).optional().describe('Skip the first N sessions, for the next page (given in the footer). Default: 0.'),
       include_sidechains: z.boolean().optional().describe('Include sidechain/subagent sessions. Default: false.'),
     }),
   },

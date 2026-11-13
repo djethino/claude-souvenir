@@ -35040,12 +35040,12 @@ function getSessionMetadata(sessionId, projectDir) {
     const index = loadSessionIndex(dir);
     if (index) {
       const entry = index.entries.find((e) => e.sessionId === sessionId);
-      if (entry) return { entry: withEntryCount(entry, dir), projectDir: dir };
+      if (entry) return { entry, projectDir: dir };
     }
     const filePath = join2(getProjectTranscriptDir(dir), `${sessionId}.jsonl`);
     if (existsSync(filePath)) {
       const meta3 = extractMinimalMetadata(filePath, sessionId, dir);
-      if (meta3) return { entry: withEntryCount(meta3, dir), projectDir: dir };
+      if (meta3) return { entry: meta3, projectDir: dir };
     }
   }
   return null;
@@ -35225,6 +35225,7 @@ async function textSearch(options) {
   } = options;
   const allResults = [];
   let filesSearched = 0;
+  const sessionMeta = /* @__PURE__ */ new Map();
   let regexPattern = null;
   if (regex) {
     try {
@@ -35282,7 +35283,11 @@ async function textSearch(options) {
           }
           if (matched) {
             const entrySessionId = entry.sessionId || basename2(filePath, ".jsonl");
-            const meta3 = getSessionMetadata(entrySessionId, projectDir);
+            let meta3 = sessionMeta.get(entrySessionId);
+            if (meta3 === void 0) {
+              meta3 = getSessionMetadata(entrySessionId, projectDir);
+              sessionMeta.set(entrySessionId, meta3);
+            }
             allResults.push({
               sessionId: entrySessionId,
               projectDir,
@@ -37181,6 +37186,24 @@ function getDocsChunkCount(projectRoot, category) {
 }
 
 // src/tools/search.ts
+function resultCount(total, more) {
+  return more ? `${total}+` : `${total}`;
+}
+function pageFooter(endIndex, maxResults, total, more) {
+  if (endIndex >= total && !more) return `
+--- All ${total} results shown ---`;
+  const page = more ? `Page ${Math.ceil(endIndex / maxResults)}` : `Page ${Math.ceil(endIndex / maxResults)}/${Math.ceil(total / maxResults)}`;
+  const remaining = endIndex < total ? `${total - endIndex}${more ? "+" : ""} more results` : "more results";
+  return `
+--- ${page} | ${remaining} | Next page: offset=${endIndex} ---`;
+}
+function sessionMetadataLookup() {
+  const cache = /* @__PURE__ */ new Map();
+  return (sessionId, projectDir) => {
+    if (!cache.has(sessionId)) cache.set(sessionId, getSessionMetadata(sessionId, projectDir));
+    return cache.get(sessionId) ?? null;
+  };
+}
 function extractSmartSnippet(content, query, maxLen = 250) {
   const contentLower = content.toLowerCase();
   const words = query.toLowerCase().split(/\s+/).filter((w) => w.length > 2);
@@ -37260,7 +37283,7 @@ async function performTextSearch(params, projectDirs, maxResults) {
     dateFrom: params.date_from,
     dateTo: params.date_to,
     includeSubagents: params.include_subagents ?? false,
-    maxResults: 1e4,
+    maxResults: Infinity,
     offset: 0,
     caseSensitive: params.case_sensitive ?? false,
     regex: params.regex ?? false
@@ -37273,15 +37296,13 @@ async function performTextSearch(params, projectDirs, maxResults) {
   const sliced = boostedResults.slice(offset, offset + maxResults);
   const total = boostedResults.length;
   const endIndex = offset + sliced.length;
-  const hasMore = endIndex < total;
+  if (sliced.length === 0) return `No results after offset ${offset} for "${params.query}" (${total} in all).`;
   const header = `Found ${total} result(s) for "${params.query}" (showing ${offset + 1}-${endIndex}, searched ${result.filesSearched} files):
 `;
   const formatted = sliced.map(
     (r, i) => formatSearchResult(r, offset + i, sessionHitCounts.get(r.sessionId))
   );
-  let footer = hasMore ? `
---- Page ${Math.ceil(endIndex / maxResults)}/${Math.ceil(total / maxResults)} | ${total - endIndex} more results | Next page: offset=${endIndex} ---` : `
---- All ${total} results shown ---`;
+  let footer = pageFooter(endIndex, maxResults, total, false);
   const hint = await getSemanticHint(params.query, projectDirs);
   if (hint) {
     footer += `
@@ -37308,19 +37329,23 @@ async function performSemanticSearch(params, projectDirs, maxResults, ctx) {
     }
     const queryEmbedding = await provider.embedQuery(params.query);
     const projectDir = projectDirs.length === 1 ? projectDirs[0] : void 0;
+    const offset = params.offset || 0;
+    const topK = offset + maxResults + 1;
     const vecResults = searchSemantic(provider.identity, queryEmbedding, {
-      topK: maxResults + (params.offset || 0),
+      topK,
       projectDir,
       sessionId: params.session_id,
       speaker: params.role === "both" ? void 0 : params.role,
       dateFrom: params.date_from,
       dateTo: params.date_to
     });
+    const more = vecResults.length === topK;
     if (vecResults.length === 0) {
       return `No semantic results found for "${params.query}". The index may be empty for the specified project. Run souvenir_index with action="status" to check.`;
     }
+    const metadataOf = sessionMetadataLookup();
     const allResults = vecResults.map((vr) => {
-      const meta3 = getSessionMetadata(vr.session_id);
+      const meta3 = metadataOf(vr.session_id, vr.project_dir);
       return {
         sessionId: vr.session_id,
         projectDir: vr.project_dir,
@@ -37337,23 +37362,21 @@ async function performSemanticSearch(params, projectDirs, maxResults, ctx) {
       };
     });
     const { results: boostedResults, sessionHitCounts } = applySessionDensityBoost(allResults);
-    const offset = params.offset || 0;
     const sliced = boostedResults.slice(offset, offset + maxResults);
     const total = boostedResults.length;
     const endIndex = offset + sliced.length;
-    const hasMore = endIndex < total;
-    const header = `Found ${total} semantic result(s) for "${params.query}" (showing ${offset + 1}-${endIndex}):
+    if (sliced.length === 0) return `No semantic results after offset ${offset} for "${params.query}" (${total} in all).`;
+    const header = `Found ${resultCount(total, more)} semantic result(s) for "${params.query}" (showing ${offset + 1}-${endIndex}):
 `;
     const formatted = sliced.map((r, i) => formatSearchResult(r, offset + i, sessionHitCounts.get(r.sessionId)));
-    const footer = hasMore ? `
---- Page ${Math.ceil(endIndex / maxResults)}/${Math.ceil(total / maxResults)} | ${total - endIndex} more results | Next page: offset=${endIndex} ---` : `
---- All ${total} results shown ---`;
-    return header + "\n" + formatted.join("\n\n") + footer;
+    return header + "\n" + formatted.join("\n\n") + pageFooter(endIndex, maxResults, total, more);
   } catch (err) {
     return `Semantic search error: ${err instanceof Error ? err.message : String(err)}`;
   }
 }
 async function performHybridSearch(params, projectDirs, maxResults, ctx) {
+  const offset = params.offset || 0;
+  const depth = (offset + maxResults) * 2;
   const textPromise = textSearch({
     query: params.query,
     projectDirs,
@@ -37362,7 +37385,7 @@ async function performHybridSearch(params, projectDirs, maxResults, ctx) {
     dateFrom: params.date_from,
     dateTo: params.date_to,
     includeSubagents: params.include_subagents ?? false,
-    maxResults: maxResults * 2,
+    maxResults: depth,
     offset: 0,
     caseSensitive: params.case_sensitive ?? false,
     regex: params.regex ?? false
@@ -37393,7 +37416,7 @@ async function performHybridSearch(params, projectDirs, maxResults, ctx) {
       const queryEmbedding = await provider.embedQuery(params.query);
       const projectDir = projectDirs.length === 1 ? projectDirs[0] : void 0;
       const results = searchSemantic(provider.identity, queryEmbedding, {
-        topK: maxResults * 2,
+        topK: depth,
         projectDir,
         sessionId: params.session_id,
         speaker: params.role === "both" ? void 0 : params.role,
@@ -37420,8 +37443,9 @@ async function performHybridSearch(params, projectDirs, maxResults, ctx) {
     const key = `${r.sessionId}:${r.lineNumber}`;
     merged.set(key, { ...r, score: r.score * 0.4 });
   }
+  const metadataOf = sessionMetadataLookup();
   for (const vr of vecResults) {
-    const meta3 = getSessionMetadata(vr.session_id);
+    const meta3 = metadataOf(vr.session_id, vr.project_dir);
     const key = `${vr.session_id}:${vr.line_number}`;
     const similarity = 1 - vr.distance;
     const semanticScore = similarity * 0.6;
@@ -37446,20 +37470,17 @@ async function performHybridSearch(params, projectDirs, maxResults, ctx) {
   }
   const allResults = [...merged.values()].sort((a, b) => b.score - a.score);
   const { results: boostedResults, sessionHitCounts } = applySessionDensityBoost(allResults);
-  const offset = params.offset || 0;
   const sliced = boostedResults.slice(offset, offset + maxResults);
-  if (sliced.length === 0) {
-    return `${noticeBlock}No results found for "${params.query}".`;
-  }
   const total = boostedResults.length;
+  if (sliced.length === 0) {
+    return total === 0 ? `${noticeBlock}No results found for "${params.query}".` : `${noticeBlock}No hybrid results after offset ${offset} for "${params.query}" (${total} in all).`;
+  }
+  const more = textResult.totalMatches > textResult.results.length || vecResults.length === depth;
   const endIndex = offset + sliced.length;
-  const hasMore = endIndex < total;
-  const header = `${noticeBlock}Found ${total} hybrid result(s) for "${params.query}" (showing ${offset + 1}-${endIndex}):
+  const header = `${noticeBlock}Found ${resultCount(total, more)} hybrid result(s) for "${params.query}" (showing ${offset + 1}-${endIndex}):
 `;
   const formatted = sliced.map((r, i) => formatSearchResult(r, offset + i, sessionHitCounts.get(r.sessionId)));
-  const footer = hasMore ? `
---- Page ${Math.ceil(endIndex / maxResults)}/${Math.ceil(total / maxResults)} | ${total - endIndex} more results | Next page: offset=${endIndex} ---` : `
---- All ${total} results shown ---`;
+  const footer = pageFooter(endIndex, maxResults, total, more);
   return header + "\n" + formatted.join("\n\n") + footer;
 }
 async function getSemanticHint(query, projectDirs) {
@@ -37531,10 +37552,12 @@ async function performDocsSearch(params, config2, source, mode) {
   const queryEmbedding = await provider.embedQuery(params.query);
   const maxResults = Math.min(params.max_results || 10, 50);
   const offset = params.offset || 0;
+  const topK = offset + maxResults + 1;
   const vecResults = searchDocsSemantic(projectRoot, provider.identity, queryEmbedding, {
-    topK: maxResults + offset,
+    topK,
     category: categoryFilter
   });
+  const more = vecResults.length === topK;
   if (vecResults.length === 0) {
     const label = categoryFilter ? `${categoryFilter} files` : "project files";
     return `No results found for "${params.query}" in ${label}. Check that files are indexed with souvenir_docs action="status".`;
@@ -37542,14 +37565,12 @@ async function performDocsSearch(params, config2, source, mode) {
   const sliced = vecResults.slice(offset, offset + maxResults);
   const total = vecResults.length;
   const endIndex = offset + sliced.length;
-  const hasMore = endIndex < total;
+  if (sliced.length === 0) return `No results after offset ${offset} for "${params.query}" (${total} in all).`;
   const sourceLabel = categoryFilter || "project";
-  const header = `Found ${total} result(s) in ${sourceLabel} files for "${params.query}" (showing ${offset + 1}-${endIndex}):
+  const header = `Found ${resultCount(total, more)} result(s) in ${sourceLabel} files for "${params.query}" (showing ${offset + 1}-${endIndex}):
 `;
   const formatted = sliced.map((r, i) => formatDocResult(r, offset + i));
-  let footer = hasMore ? `
---- Page ${Math.ceil(endIndex / maxResults)}/${Math.ceil(total / maxResults)} | ${total - endIndex} more results | Next page: offset=${endIndex} ---` : `
---- All ${total} results shown ---`;
+  let footer = pageFooter(endIndex, maxResults, total, more);
   const xrefHint = await getTranscriptsXrefHint(params.query, config2);
   if (xrefHint) {
     footer += `
@@ -37604,12 +37625,16 @@ async function getTranscriptsXrefHint(query, config2) {
 }
 
 // src/tools/read.ts
+function headerMetadata(sessionId, projectDir) {
+  const meta3 = getSessionMetadata(sessionId, projectDir);
+  return meta3 && { ...meta3, entry: withEntryCount(meta3.entry, meta3.projectDir) };
+}
 var DIGEST_ENTRIES = 20;
 async function readSessionDigest(sessionId) {
   const config2 = getConfig();
   const location = (config2.currentProject ? getSessionFilePath(sessionId, config2.currentProject) : null) ?? getSessionFilePath(sessionId);
   if (!location) return null;
-  const meta3 = getSessionMetadata(sessionId, location.projectDir);
+  const meta3 = headerMetadata(sessionId, location.projectDir);
   const files = await readAggregate(location.filePath, "files", null);
   const lastEntries = await readPage(location.filePath, void 0, DIGEST_ENTRIES, DEFAULT_ENTRY_TYPES, "conversation", null);
   return [
@@ -37637,7 +37662,7 @@ async function handleSouvenirRead(params) {
   if (!location) {
     return `Error: Session "${sessionId}" not found in ${searchAllProjects ? "any project" : projectDir ? `project "${params.project}"` : "current project"}. Use souvenir_sessions to list valid session IDs, or specify the project parameter to search in a different project.`;
   }
-  const meta3 = getSessionMetadata(sessionId, location.projectDir);
+  const meta3 = headerMetadata(sessionId, location.projectDir);
   const entryTypes = params.entry_types ? params.entry_types.split(",").map((t) => t.trim()) : DEFAULT_ENTRY_TYPES;
   const maxEntries = Math.min(params.max_entries || 20, 200);
   const detailLevel = params.detail_level || "conversation";
@@ -37848,19 +37873,22 @@ async function handleSouvenirSessions(params) {
     includeSidechains: params.include_sidechains ?? false
   });
   const maxResults = Math.min(params.max_results || 20, 50);
-  const displayed = sessions.slice(0, maxResults);
+  const offset = params.offset ?? 0;
+  const displayed = sessions.slice(offset, offset + maxResults);
   if (displayed.length === 0) {
+    if (sessions.length > 0) return `No sessions after offset ${offset} (${sessions.length} in all).`;
     return params.search ? `No sessions found matching "${params.search}" in project "${projectDir}".` : `No sessions found for project "${projectDir}".`;
   }
   const index = loadSessionIndex(projectDir);
   const originalPath = index?.originalPath || projectDir;
   const total = sessions.length;
-  const hasMore = total > maxResults;
+  const endIndex = offset + displayed.length;
   const header = `Project: ${originalPath} (${total} session${total > 1 ? "s" : ""})
 `;
-  const entries = displayed.map((s, i) => formatSessionListEntry(s, i));
-  const footer = hasMore ? `
---- Showing ${maxResults}/${total} sessions | ${total - maxResults} more | Increase max_results to see more ---` : "";
+  const entries = displayed.map((s, i) => formatSessionListEntry(s, offset + i));
+  const footer = endIndex < total ? `
+--- Showing ${offset + 1}-${endIndex} of ${total} sessions | ${total - endIndex} more | Next page: offset=${endIndex} ---` : offset > 0 ? `
+--- Showing ${offset + 1}-${endIndex} of ${total} sessions (end) ---` : "";
   return header + "\n" + entries.join("\n\n") + footer;
 }
 
@@ -39596,7 +39624,7 @@ function formatTree(entries, rootPath, opts) {
     footer += ` (filtered by ${opts.pattern})`;
   }
   if (opts.truncatedCount > 0) {
-    footer += ` \u2014 truncated, ${opts.truncatedCount} more files not shown`;
+    footer += ` \u2014 truncated, ${opts.truncatedCount} more files not shown (raise max_files, or show a subdirectory with path)`;
   }
   lines.push(footer);
   if (opts.showStats) {
@@ -39858,7 +39886,7 @@ function registerPrompts(server2) {
             `The most recent sessions of this project, newest first:
 ${list}
 
-The newest one can be this very conversation: if its first prompt is what started the current conversation, take the next one. Read the chosen session with souvenir_read (start from the end, then earlier pages as needed).
+The newest one can be this very conversation: if its first prompt is what started the current conversation, take the next one (souvenir_sessions lists older sessions). Read the chosen session with souvenir_read (start from the end, then earlier pages as needed).
 
 ` + RECAP_INSTRUCTIONS
           )
@@ -39883,7 +39911,7 @@ The newest one can be this very conversation: if its first prompt is what starte
             `Explain to the user, in their language, why "${file2}" changed: what each change was for and what decided it.
 
 1. If the project is a git repository, read the file's history (\`git log --follow -- <path>\`) and search the commit hashes in the conversations with souvenir_search.
-2. Read the moments that matter with souvenir_read around_uuid (the matches below are a start; search again with other terms if they are not enough).
+2. Read the moments that matter with souvenir_read around_uuid. The matches below are the first page: their footer gives the offset of the next one; search again with other terms if they are not enough.
 3. Answer chronologically: each change, its reason, the decision behind it, with the session date. Say what you could not find.
 
 Conversation matches for "${file2}":
@@ -40000,7 +40028,7 @@ server.registerTool(
 
 Typical workflow: souvenir_projects \u2192 souvenir_sessions (pick a session) \u2192 souvenir_read or souvenir_search with session_id.
 
-Pagination: Shows "Showing X/Y sessions" footer. Increase max_results to see more.`,
+Pagination: the footer shows "Showing A-B of N sessions" and the offset of the next page.`,
     annotations: READ_ONLY,
     inputSchema: external_exports.object({
       project: external_exports.string().optional().describe("Project directory name or path. Default: current project."),
@@ -40009,6 +40037,7 @@ Pagination: Shows "Showing X/Y sessions" footer. Increase max_results to see mor
       date_to: external_exports.string().optional().describe("Only sessions created before this ISO date."),
       sort: external_exports.enum(["newest", "oldest", "messages"]).optional().describe('Sort order. Default: "newest". "messages": most entries first.'),
       max_results: external_exports.number().int().min(1).max(50).optional().describe("Maximum sessions to return. Default: 20."),
+      offset: external_exports.number().int().min(0).optional().describe("Skip the first N sessions, for the next page (given in the footer). Default: 0."),
       include_sidechains: external_exports.boolean().optional().describe("Include sidechain/subagent sessions. Default: false.")
     })
   },

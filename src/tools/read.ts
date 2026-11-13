@@ -1,4 +1,4 @@
-import { getSessionFilePath, getSessionMetadata, resolveCurrentSession } from '../transcript/discovery.js';
+import { getSessionFilePath, getSessionMetadata, resolveCurrentSession, withEntryCount } from '../transcript/discovery.js';
 import { DEFAULT_ENTRY_TYPES, parseTranscript } from '../transcript/parser.js';
 import {
   formatEntry,
@@ -11,6 +11,12 @@ import {
 import { getConfig } from '../config.js';
 import { resolveProjectDir } from '../utils/paths.js';
 import type { DetailLevel } from '../transcript/types.js';
+
+/** Metadata for a session header, with the real entry count. */
+function headerMetadata(sessionId: string, projectDir: string): ReturnType<typeof getSessionMetadata> {
+  const meta = getSessionMetadata(sessionId, projectDir);
+  return meta && { ...meta, entry: withEntryCount(meta.entry, meta.projectDir) };
+}
 
 /** Last entries a session digest shows (souvenir_read's default page size). */
 const DIGEST_ENTRIES = 20;
@@ -26,7 +32,7 @@ export async function readSessionDigest(sessionId: string): Promise<string | nul
     ?? getSessionFilePath(sessionId);
   if (!location) return null;
 
-  const meta = getSessionMetadata(sessionId, location.projectDir);
+  const meta = headerMetadata(sessionId, location.projectDir);
   const files = await readAggregate(location.filePath, 'files', null);
   const lastEntries = await readPage(location.filePath, undefined, DIGEST_ENTRIES, DEFAULT_ENTRY_TYPES, 'conversation', null);
 
@@ -76,8 +82,7 @@ export async function handleSouvenirRead(params: {
     return `Error: Session "${sessionId}" not found in ${searchAllProjects ? 'any project' : projectDir ? `project "${params.project}"` : 'current project'}. Use souvenir_sessions to list valid session IDs, or specify the project parameter to search in a different project.`;
   }
 
-  // Get session metadata
-  const meta = getSessionMetadata(sessionId, location.projectDir);
+  const meta = headerMetadata(sessionId, location.projectDir);
 
   // Parse entry types
   const entryTypes = params.entry_types

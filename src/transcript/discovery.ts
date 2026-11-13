@@ -120,7 +120,7 @@ export function getSessions(
  * written by Claude Code) holds a count frozen when it was written, and the metadata of sessions
  * missing from it comes from the file's first 64 KB only.
  */
-function withEntryCount(entry: SessionIndexEntry, projectDir: string): SessionIndexEntry {
+export function withEntryCount(entry: SessionIndexEntry, projectDir: string): SessionIndexEntry {
   const filePath = entry.fullPath && existsSync(entry.fullPath)
     ? entry.fullPath
     : join(getProjectTranscriptDir(projectDir), `${entry.sessionId}.jsonl`);
@@ -162,7 +162,8 @@ export function getSessionFilePath(
 }
 
 /**
- * Get session metadata from the index.
+ * Get session metadata from the index (summary, first prompt, dates). Cheap: messageCount is not
+ * computed (it reads the whole transcript); pass the result to withEntryCount where it is shown.
  */
 export function getSessionMetadata(
   sessionId: string,
@@ -175,14 +176,14 @@ export function getSessionMetadata(
     const index = loadSessionIndex(dir);
     if (index) {
       const entry = index.entries.find((e) => e.sessionId === sessionId);
-      if (entry) return { entry: withEntryCount(entry, dir), projectDir: dir };
+      if (entry) return { entry, projectDir: dir };
     }
 
     // Check orphan files
     const filePath = join(getProjectTranscriptDir(dir), `${sessionId}.jsonl`);
     if (existsSync(filePath)) {
       const meta = extractMinimalMetadata(filePath, sessionId, dir);
-      if (meta) return { entry: withEntryCount(meta, dir), projectDir: dir };
+      if (meta) return { entry: meta, projectDir: dir };
     }
   }
 
@@ -280,7 +281,7 @@ export function discoverOrphanSessions(projectDir: string): SessionIndexEntry[] 
  * Read the beginning of a .jsonl file to extract minimal session metadata.
  * Uses sync read of first 64KB to avoid async complexity while keeping it fast.
  * messageCount is left at 0: it needs the whole file (see withEntryCount, applied by getSessions
- * and getSessionMetadata; listing projects does not need it).
+ * and by souvenir_read's headers; listing projects and search results do not need it).
  */
 function extractMinimalMetadata(
   filePath: string,

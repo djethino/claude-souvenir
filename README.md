@@ -153,7 +153,7 @@ Search through transcripts and/or project files.
 | `case_sensitive` | For text mode |
 | `regex` | For text mode: treat query as regex |
 
-Filters are applied inside the vector search, so a filtered search still returns up to `max_results` matches. When hybrid search cannot run one of its halves (embedding server down, incompatible index), the answer says so and shows the other half. Results include hints about matches in the other source (transcripts ↔ project files).
+Filters are applied inside the vector search, so a filtered search still returns up to `max_results` matches. Every page ends with the offset of the next one; semantic and hybrid searches have no fixed total (the nearest matches keep coming), so they show "N+" while more exist. When hybrid search cannot run one of its halves (embedding server down, incompatible index), the answer says so and shows the other half. Results include hints about matches in the other source (transcripts ↔ project files).
 
 ### souvenir_read
 
@@ -182,9 +182,12 @@ List all sessions for a project.
 | `project` | Project filter |
 | `search` | Filter by summary or first prompt text |
 | `date_from` / `date_to` | Date range |
-| `sort` | `newest` (default), `oldest`, or `messages` |
+| `sort` | `newest` (default), `oldest`, or `messages` (most entries first) |
 | `max_results` | 1-50, default 20 |
+| `offset` | Skip the first N sessions; the footer gives the next page's offset |
 | `include_sidechains` | Include subagent sessions |
+
+Each session shows its entry count, the same count `souvenir_read` pages through.
 
 ### souvenir_projects
 

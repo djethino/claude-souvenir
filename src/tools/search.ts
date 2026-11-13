@@ -16,6 +16,35 @@ import type { ToolContext } from './helpers.js';
 import { createProgressNotifier } from './helpers.js';
 
 /**
+ * Number of results for a header: "N", or "N+" when more may exist beyond those fetched.
+ */
+function resultCount(total: number, more: boolean): string {
+  return more ? `${total}+` : `${total}`;
+}
+
+/**
+ * Pagination footer. `more`: results may exist beyond the `total` fetched (semantic searches fetch
+ * only what the page needs plus one), so the next page is offered even when this one ends the list.
+ */
+function pageFooter(endIndex: number, maxResults: number, total: number, more: boolean): string {
+  if (endIndex >= total && !more) return `\n--- All ${total} results shown ---`;
+  const page = more
+    ? `Page ${Math.ceil(endIndex / maxResults)}`
+    : `Page ${Math.ceil(endIndex / maxResults)}/${Math.ceil(total / maxResults)}`;
+  const remaining = endIndex < total ? `${total - endIndex}${more ? '+' : ''} more results` : 'more results';
+  return `\n--- ${page} | ${remaining} | Next page: offset=${endIndex} ---`;
+}
+
+/** Session metadata for result lists, read once per session and search. */
+function sessionMetadataLookup(): (sessionId: string, projectDir: string) => ReturnType<typeof getSessionMetadata> {
+  const cache = new Map<string, ReturnType<typeof getSessionMetadata>>();
+  return (sessionId, projectDir) => {
+    if (!cache.has(sessionId)) cache.set(sessionId, getSessionMetadata(sessionId, projectDir));
+    return cache.get(sessionId) ?? null;
+  };
+}
+
+/**
  * Extract a smart snippet from content, trying to center on query words.
  * For semantic search where we don't have exact match positions.
  */
@@ -154,7 +183,7 @@ async function performTextSearch(
     dateFrom: params.date_from,
     dateTo: params.date_to,
     includeSubagents: params.include_subagents ?? false,
-    maxResults: 10000,
+    maxResults: Infinity,
     offset: 0,
     caseSensitive: params.case_sensitive ?? false,
     regex: params.regex ?? false,
@@ -171,7 +200,7 @@ async function performTextSearch(
   const sliced = boostedResults.slice(offset, offset + maxResults);
   const total = boostedResults.length;
   const endIndex = offset + sliced.length;
-  const hasMore = endIndex < total;
+  if (sliced.length === 0) return `No results after offset ${offset} for "${params.query}" (${total} in all).`;
 
   const header = `Found ${total} result(s) for "${params.query}" (showing ${offset + 1}-${endIndex}, searched ${result.filesSearched} files):\n`;
 
@@ -179,9 +208,7 @@ async function performTextSearch(
     formatSearchResult(r, offset + i, sessionHitCounts.get(r.sessionId)),
   );
 
-  let footer = hasMore
-    ? `\n--- Page ${Math.ceil(endIndex / maxResults)}/${Math.ceil(total / maxResults)} | ${total - endIndex} more results | Next page: offset=${endIndex} ---`
-    : `\n--- All ${total} results shown ---`;
+  let footer = pageFooter(endIndex, maxResults, total, false);
 
   // Add semantic hint if index is available
   const hint = await getSemanticHint(params.query, projectDirs);
@@ -234,22 +261,27 @@ async function performSemanticSearch(
     // Search each project dir (use first one for single project filter)
     const projectDir = projectDirs.length === 1 ? projectDirs[0] : undefined;
 
+    // One more than the page needs: if it comes back, a next page exists
+    const offset = params.offset || 0;
+    const topK = offset + maxResults + 1;
     const vecResults = searchSemantic(provider.identity, queryEmbedding, {
-      topK: maxResults + (params.offset || 0),
+      topK,
       projectDir,
       sessionId: params.session_id,
       speaker: params.role === 'both' ? undefined : params.role,
       dateFrom: params.date_from,
       dateTo: params.date_to,
     });
+    const more = vecResults.length === topK;
 
     if (vecResults.length === 0) {
       return `No semantic results found for "${params.query}". The index may be empty for the specified project. Run souvenir_index with action="status" to check.`;
     }
 
     // Convert all results to SearchResult format (no pagination yet)
+    const metadataOf = sessionMetadataLookup();
     const allResults: SearchResult[] = vecResults.map((vr) => {
-      const meta = getSessionMetadata(vr.session_id);
+      const meta = metadataOf(vr.session_id, vr.project_dir);
       return {
         sessionId: vr.session_id,
         projectDir: vr.project_dir,
@@ -268,20 +300,15 @@ async function performSemanticSearch(
     // Apply session density boost before pagination
     const { results: boostedResults, sessionHitCounts } = applySessionDensityBoost(allResults);
 
-    const offset = params.offset || 0;
     const sliced = boostedResults.slice(offset, offset + maxResults);
     const total = boostedResults.length;
     const endIndex = offset + sliced.length;
-    const hasMore = endIndex < total;
+    if (sliced.length === 0) return `No semantic results after offset ${offset} for "${params.query}" (${total} in all).`;
 
-    const header = `Found ${total} semantic result(s) for "${params.query}" (showing ${offset + 1}-${endIndex}):\n`;
+    const header = `Found ${resultCount(total, more)} semantic result(s) for "${params.query}" (showing ${offset + 1}-${endIndex}):\n`;
     const formatted = sliced.map((r, i) => formatSearchResult(r, offset + i, sessionHitCounts.get(r.sessionId)));
 
-    const footer = hasMore
-      ? `\n--- Page ${Math.ceil(endIndex / maxResults)}/${Math.ceil(total / maxResults)} | ${total - endIndex} more results | Next page: offset=${endIndex} ---`
-      : `\n--- All ${total} results shown ---`;
-
-    return header + '\n' + formatted.join('\n\n') + footer;
+    return header + '\n' + formatted.join('\n\n') + pageFooter(endIndex, maxResults, total, more);
   } catch (err) {
     return `Semantic search error: ${err instanceof Error ? err.message : String(err)}`;
   }
@@ -305,6 +332,11 @@ async function performHybridSearch(
   maxResults: number,
   ctx?: ToolContext,
 ): Promise<string> {
+  // Each half fetches enough candidates for the requested page (twice its depth, as the merge
+  // re-ranks them): fetching from the top for page 1 only made every later page empty
+  const offset = params.offset || 0;
+  const depth = (offset + maxResults) * 2;
+
   // Run text and semantic search in parallel
   const textPromise = textSearch({
     query: params.query,
@@ -314,7 +346,7 @@ async function performHybridSearch(
     dateFrom: params.date_from,
     dateTo: params.date_to,
     includeSubagents: params.include_subagents ?? false,
-    maxResults: maxResults * 2,
+    maxResults: depth,
     offset: 0,
     caseSensitive: params.case_sensitive ?? false,
     regex: params.regex ?? false,
@@ -350,7 +382,7 @@ async function performHybridSearch(
       const projectDir = projectDirs.length === 1 ? projectDirs[0] : undefined;
 
       const results = searchSemantic(provider.identity, queryEmbedding, {
-        topK: maxResults * 2,
+        topK: depth,
         projectDir,
         sessionId: params.session_id,
         speaker: params.role === 'both' ? undefined : params.role,
@@ -384,8 +416,9 @@ async function performHybridSearch(
   }
 
   // Add/merge semantic results
+  const metadataOf = sessionMetadataLookup();
   for (const vr of vecResults) {
-    const meta = getSessionMetadata(vr.session_id);
+    const meta = metadataOf(vr.session_id, vr.project_dir);
     const key = `${vr.session_id}:${vr.line_number}`;
     const similarity = 1 - vr.distance;
     const semanticScore = similarity * 0.6; // Semantic weight: 0.6
@@ -415,23 +448,23 @@ async function performHybridSearch(
   const allResults = [...merged.values()].sort((a, b) => b.score - a.score);
   const { results: boostedResults, sessionHitCounts } = applySessionDensityBoost(allResults);
 
-  const offset = params.offset || 0;
   const sliced = boostedResults.slice(offset, offset + maxResults);
+  const total = boostedResults.length;
 
   if (sliced.length === 0) {
-    return `${noticeBlock}No results found for "${params.query}".`;
+    return total === 0
+      ? `${noticeBlock}No results found for "${params.query}".`
+      : `${noticeBlock}No hybrid results after offset ${offset} for "${params.query}" (${total} in all).`;
   }
 
-  const total = boostedResults.length;
+  // Either half may hold candidates beyond the depth fetched
+  const more = textResult.totalMatches > textResult.results.length || vecResults.length === depth;
   const endIndex = offset + sliced.length;
-  const hasMore = endIndex < total;
 
-  const header = `${noticeBlock}Found ${total} hybrid result(s) for "${params.query}" (showing ${offset + 1}-${endIndex}):\n`;
+  const header = `${noticeBlock}Found ${resultCount(total, more)} hybrid result(s) for "${params.query}" (showing ${offset + 1}-${endIndex}):\n`;
   const formatted = sliced.map((r, i) => formatSearchResult(r, offset + i, sessionHitCounts.get(r.sessionId)));
 
-  const footer = hasMore
-    ? `\n--- Page ${Math.ceil(endIndex / maxResults)}/${Math.ceil(total / maxResults)} | ${total - endIndex} more results | Next page: offset=${endIndex} ---`
-    : `\n--- All ${total} results shown ---`;
+  const footer = pageFooter(endIndex, maxResults, total, more);
 
   return header + '\n' + formatted.join('\n\n') + footer;
 }
@@ -556,10 +589,13 @@ async function performDocsSearch(
   const maxResults = Math.min(params.max_results || 10, 50);
   const offset = params.offset || 0;
 
+  // One more than the page needs: if it comes back, a next page exists
+  const topK = offset + maxResults + 1;
   const vecResults = searchDocsSemantic(projectRoot, provider.identity, queryEmbedding, {
-    topK: maxResults + offset,
+    topK,
     category: categoryFilter,
   });
+  const more = vecResults.length === topK;
 
   if (vecResults.length === 0) {
     const label = categoryFilter ? `${categoryFilter} files` : 'project files';
@@ -569,15 +605,13 @@ async function performDocsSearch(
   const sliced = vecResults.slice(offset, offset + maxResults);
   const total = vecResults.length;
   const endIndex = offset + sliced.length;
-  const hasMore = endIndex < total;
+  if (sliced.length === 0) return `No results after offset ${offset} for "${params.query}" (${total} in all).`;
 
   const sourceLabel = categoryFilter || 'project';
-  const header = `Found ${total} result(s) in ${sourceLabel} files for "${params.query}" (showing ${offset + 1}-${endIndex}):\n`;
+  const header = `Found ${resultCount(total, more)} result(s) in ${sourceLabel} files for "${params.query}" (showing ${offset + 1}-${endIndex}):\n`;
   const formatted = sliced.map((r, i) => formatDocResult(r, offset + i));
 
-  let footer = hasMore
-    ? `\n--- Page ${Math.ceil(endIndex / maxResults)}/${Math.ceil(total / maxResults)} | ${total - endIndex} more results | Next page: offset=${endIndex} ---`
-    : `\n--- All ${total} results shown ---`;
+  let footer = pageFooter(endIndex, maxResults, total, more);
 
   // Cross-reference: check transcripts for related content
   const xrefHint = await getTranscriptsXrefHint(params.query, config);

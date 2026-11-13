@@ -403,7 +403,7 @@ function formatTree(
     footer += ` (filtered by ${opts.pattern})`;
   }
   if (opts.truncatedCount > 0) {
-    footer += ` — truncated, ${opts.truncatedCount} more files not shown`;
+    footer += ` — truncated, ${opts.truncatedCount} more files not shown (raise max_files, or show a subdirectory with path)`;
   }
   lines.push(footer);
 

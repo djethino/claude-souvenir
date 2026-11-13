@@ -90,6 +90,8 @@ export async function textSearch(options: TextSearchOptions): Promise<{
 
   const allResults: SearchResult[] = [];
   let filesSearched = 0;
+  // Metadata of each matched session, read once per search (a session can match thousands of times)
+  const sessionMeta = new Map<string, ReturnType<typeof getSessionMetadata>>();
 
   // Compile regex if needed
   let regexPattern: RegExp | null = null;
@@ -165,7 +167,11 @@ export async function textSearch(options: TextSearchOptions): Promise<{
 
           if (matched) {
             const entrySessionId = entry.sessionId || basename(filePath, '.jsonl');
-            const meta = getSessionMetadata(entrySessionId, projectDir);
+            let meta = sessionMeta.get(entrySessionId);
+            if (meta === undefined) {
+              meta = getSessionMetadata(entrySessionId, projectDir);
+              sessionMeta.set(entrySessionId, meta);
+            }
 
             allResults.push({
               sessionId: entrySessionId,

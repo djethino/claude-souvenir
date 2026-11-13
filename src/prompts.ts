@@ -64,7 +64,8 @@ export function registerPrompts(server: McpServer): void {
         messages: [
           userText(
             `The most recent sessions of this project, newest first:\n${list}\n\n` +
-            'The newest one can be this very conversation: if its first prompt is what started the current conversation, take the next one. ' +
+            'The newest one can be this very conversation: if its first prompt is what started the current conversation, take the next one ' +
+            '(souvenir_sessions lists older sessions). ' +
             'Read the chosen session with souvenir_read (start from the end, then earlier pages as needed).\n\n' +
             RECAP_INSTRUCTIONS,
           ),
@@ -89,7 +90,7 @@ export function registerPrompts(server: McpServer): void {
           userText(
             `Explain to the user, in their language, why "${file}" changed: what each change was for and what decided it.\n\n` +
             '1. If the project is a git repository, read the file\'s history (`git log --follow -- <path>`) and search the commit hashes in the conversations with souvenir_search.\n' +
-            '2. Read the moments that matter with souvenir_read around_uuid (the matches below are a start; search again with other terms if they are not enough).\n' +
+            '2. Read the moments that matter with souvenir_read around_uuid. The matches below are the first page: their footer gives the offset of the next one; search again with other terms if they are not enough.\n' +
             '3. Answer chronologically: each change, its reason, the decision behind it, with the session date. Say what you could not find.\n\n' +
             `Conversation matches for "${file}":\n\n${matches}`,
           ),
