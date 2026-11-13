@@ -3,15 +3,14 @@ import type { EmbeddingProvider } from '../embedding/provider.js';
 import { OllamaEmbeddingProvider } from '../embedding/ollama.js';
 import { OpenAIEmbeddingProvider } from '../embedding/openai.js';
 import type { IndexProgress } from '../db/indexer.js';
-import type { RequestHandlerExtra } from '@modelcontextprotocol/sdk/shared/protocol.js';
-import type { ServerRequest, ServerNotification } from '@modelcontextprotocol/sdk/types.js';
+import type { ServerContext } from '@modelcontextprotocol/server';
 
 // ---------------------------------------------------------------------------
 // MCP progress notifications for long-running operations
 // ---------------------------------------------------------------------------
 
-/** MCP tool handler extra parameter (re-exported from SDK for convenience). */
-export type ToolExtra = RequestHandlerExtra<ServerRequest, ServerNotification>;
+/** Context the MCP SDK passes to a tool handler (request metadata, notifications, abort signal). */
+export type ToolContext = ServerContext;
 
 /**
  * Create an onProgress callback that sends MCP progress notifications.
@@ -19,11 +18,11 @@ export type ToolExtra = RequestHandlerExtra<ServerRequest, ServerNotification>;
  * Includes a user-facing hint about Esc on the first notification.
  */
 export function createProgressNotifier(
-  extra: ToolExtra | undefined,
+  ctx: ToolContext | undefined,
 ): ((progress: IndexProgress) => void) | undefined {
-  if (!extra?._meta?.progressToken) return undefined;
+  const token = ctx?.mcpReq._meta?.progressToken;
+  if (!ctx || token === undefined) return undefined;
 
-  const token = extra._meta.progressToken;
   let firstSent = false;
 
   return (p: IndexProgress) => {
@@ -32,7 +31,7 @@ export function createProgressNotifier(
       : '';
     firstSent = true;
 
-    extra.sendNotification({
+    ctx.mcpReq.notify({
       method: 'notifications/progress' as const,
       params: {
         progressToken: token,

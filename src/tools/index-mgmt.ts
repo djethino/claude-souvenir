@@ -8,13 +8,13 @@ import { docsDbExists, getDocsIndexIdentity, getDocsChunkCount } from '../docs/s
 import { describeIdentity, sameIdentity } from '../embedding/provider.js';
 import { findModelPrompts } from '../embedding/models.js';
 import { getOrCreateProvider, createProgressNotifier, errorMessage } from './helpers.js';
-import type { ToolExtra } from './helpers.js';
+import type { ToolContext } from './helpers.js';
 
 export async function handleSouvenirIndex(params: {
   action: 'status' | 'build' | 'rebuild' | 'vacuum' | 'check';
   project?: string;
   session_id?: string;
-}, extra?: ToolExtra): Promise<string> {
+}, ctx?: ToolContext): Promise<string> {
   let config: ReturnType<typeof getConfig>;
   try {
     config = getConfig();
@@ -31,7 +31,7 @@ export async function handleSouvenirIndex(params: {
 
     case 'build':
     case 'rebuild':
-      return await runBuild(config, { ...params, action: params.action as 'build' | 'rebuild' }, extra);
+      return await runBuild(config, { ...params, action: params.action as 'build' | 'rebuild' }, ctx);
 
     case 'vacuum':
       return runVacuum();
@@ -135,7 +135,7 @@ async function runCheck(config: ReturnType<typeof getConfig>): Promise<string> {
 async function runBuild(
   config: ReturnType<typeof getConfig>,
   params: { action: 'build' | 'rebuild'; project?: string; session_id?: string },
-  extra?: ToolExtra,
+  ctx?: ToolContext,
 ): Promise<string> {
   // Resolve project dirs
   let projectDirs: string[];
@@ -158,7 +158,7 @@ async function runBuild(
     const result = await buildIndex(provider, projectDirs, {
       sessionId: params.session_id,
       rebuild: isRebuild,
-      onProgress: createProgressNotifier(extra),
+      onProgress: createProgressNotifier(ctx),
     });
 
     const lines = [
