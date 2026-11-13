@@ -2,6 +2,7 @@ import { readFileSync, readdirSync, existsSync, statSync, openSync, readSync, cl
 import { join, basename } from 'path';
 import { logger } from '../utils/logger.js';
 import { getProjectsDir, getProjectTranscriptDir, isProjectPath } from '../utils/paths.js';
+import { countTranscriptEntries } from './entry-count.js';
 import type { SessionIndex, SessionIndexEntry } from './types.js';
 
 // Cache session indexes in memory (small data, read frequently)
@@ -94,6 +95,8 @@ export function getSessions(
     entries = entries.filter((e) => new Date(e.created).getTime() <= to);
   }
 
+  entries = entries.map((e) => withEntryCount(e, projectDir));
+
   // Sort
   const sort = options.sort || 'newest';
   entries.sort((a, b) => {
@@ -110,6 +113,19 @@ export function getSessions(
   });
 
   return entries;
+}
+
+/**
+ * The session with its real entry count. Neither source has it: sessions-index.json (no longer
+ * written by Claude Code) holds a count frozen when it was written, and the metadata of sessions
+ * missing from it comes from the file's first 64 KB only.
+ */
+function withEntryCount(entry: SessionIndexEntry, projectDir: string): SessionIndexEntry {
+  const filePath = entry.fullPath && existsSync(entry.fullPath)
+    ? entry.fullPath
+    : join(getProjectTranscriptDir(projectDir), `${entry.sessionId}.jsonl`);
+  if (!existsSync(filePath)) return entry; // transcript deleted: keep what the index recorded
+  return { ...entry, messageCount: countTranscriptEntries(filePath) };
 }
 
 /**
@@ -159,14 +175,14 @@ export function getSessionMetadata(
     const index = loadSessionIndex(dir);
     if (index) {
       const entry = index.entries.find((e) => e.sessionId === sessionId);
-      if (entry) return { entry, projectDir: dir };
+      if (entry) return { entry: withEntryCount(entry, dir), projectDir: dir };
     }
 
     // Check orphan files
     const filePath = join(getProjectTranscriptDir(dir), `${sessionId}.jsonl`);
     if (existsSync(filePath)) {
       const meta = extractMinimalMetadata(filePath, sessionId, dir);
-      if (meta) return { entry: meta, projectDir: dir };
+      if (meta) return { entry: withEntryCount(meta, dir), projectDir: dir };
     }
   }
 
@@ -263,6 +279,8 @@ export function discoverOrphanSessions(projectDir: string): SessionIndexEntry[] 
 /**
  * Read the beginning of a .jsonl file to extract minimal session metadata.
  * Uses sync read of first 64KB to avoid async complexity while keeping it fast.
+ * messageCount is left at 0: it needs the whole file (see withEntryCount, applied by getSessions
+ * and getSessionMetadata; listing projects does not need it).
  */
 function extractMinimalMetadata(
   filePath: string,
@@ -287,7 +305,7 @@ function extractMinimalMetadata(
 
   let firstPrompt = '';
   let firstTimestamp = '';
-  let messageCount = 0;
+  let hasMessage = false;
   let gitBranch = '';
   let projectPath = '';
 
@@ -303,7 +321,7 @@ function extractMinimalMetadata(
       }
 
       if (entry.type === 'user' || entry.type === 'assistant') {
-        messageCount++;
+        hasMessage = true;
       }
 
       if (entry.gitBranch && !gitBranch) {
@@ -333,7 +351,7 @@ function extractMinimalMetadata(
   }
 
   // Skip completely empty files
-  if (messageCount === 0 && !firstPrompt) return null;
+  if (!hasMessage && !firstPrompt) return null;
 
   return {
     sessionId,
@@ -341,7 +359,7 @@ function extractMinimalMetadata(
     fileMtime: stat.mtimeMs,
     firstPrompt,
     summary: '', // No summary available for orphans
-    messageCount,
+    messageCount: 0,
     created: firstTimestamp || new Date(stat.birthtimeMs).toISOString(),
     modified: new Date(stat.mtimeMs).toISOString(),
     gitBranch,

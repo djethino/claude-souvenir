@@ -439,40 +439,15 @@ function serialized(fn) {
 // src/transcript/discovery.ts
 import { readFileSync, readdirSync, existsSync as existsSync2, statSync, openSync, readSync, closeSync } from "fs";
 import { join as join3, basename } from "path";
-function listTranscriptFiles(projectDir, options = {}) {
-  const dir = getProjectTranscriptDir(projectDir);
-  if (!existsSync2(dir)) return [];
-  const mainFiles = readdirSync(dir).filter((f) => f.endsWith(".jsonl")).map((f) => join3(dir, f));
-  if (!options.includeSubagents) return mainFiles;
-  const subagentFiles = [];
-  const entries = readdirSync(dir, { withFileTypes: true });
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
-    if (!entry.name.match(/^[0-9a-f]{8}-/)) continue;
-    if (options.sessionId && entry.name !== options.sessionId) continue;
-    const subagentDir = join3(dir, entry.name, "subagents");
-    if (!existsSync2(subagentDir)) continue;
-    try {
-      const agentFiles = readdirSync(subagentDir).filter((f) => {
-        if (!f.endsWith(".jsonl")) return false;
-        if (f.includes("aprompt_suggestion")) return false;
-        return true;
-      }).map((f) => join3(subagentDir, f));
-      subagentFiles.push(...agentFiles);
-    } catch (err) {
-      logger.debug(`Error reading subagents for ${entry.name}:`, err);
-    }
-  }
-  return [...mainFiles, ...subagentFiles];
-}
 
 // src/transcript/parser.ts
 import { createReadStream } from "fs";
 import { createInterface } from "readline";
-var SKIP_TYPE = '"file-history-snapshot"';
+var SKIPPED_LINE_MARKER = '"file-history-snapshot"';
+var DEFAULT_ENTRY_TYPES = ["user", "assistant", "summary"];
 async function* parseTranscript(filePath, options = {}) {
   const {
-    includeTypes = ["user", "assistant", "summary"],
+    includeTypes = DEFAULT_ENTRY_TYPES,
     fromLine = 1,
     maxEntries,
     containsText,
@@ -489,7 +464,7 @@ async function* parseTranscript(filePath, options = {}) {
       if (lineNumber < fromLine) continue;
       if (maxEntries && yielded >= maxEntries) break;
       if (!line.trim()) continue;
-      if (line.includes(SKIP_TYPE)) continue;
+      if (line.includes(SKIPPED_LINE_MARKER)) continue;
       if (searchText) {
         const haystack = caseInsensitive ? line.toLowerCase() : line;
         if (!haystack.includes(searchText)) continue;
@@ -539,6 +514,38 @@ function extractText(entry) {
     default:
       return "";
   }
+}
+
+// src/transcript/entry-count.ts
+var CHUNK_SIZE = 1024 * 1024;
+var COUNTED_TYPES = new Set(DEFAULT_ENTRY_TYPES);
+
+// src/transcript/discovery.ts
+function listTranscriptFiles(projectDir, options = {}) {
+  const dir = getProjectTranscriptDir(projectDir);
+  if (!existsSync2(dir)) return [];
+  const mainFiles = readdirSync(dir).filter((f) => f.endsWith(".jsonl")).map((f) => join3(dir, f));
+  if (!options.includeSubagents) return mainFiles;
+  const subagentFiles = [];
+  const entries = readdirSync(dir, { withFileTypes: true });
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    if (!entry.name.match(/^[0-9a-f]{8}-/)) continue;
+    if (options.sessionId && entry.name !== options.sessionId) continue;
+    const subagentDir = join3(dir, entry.name, "subagents");
+    if (!existsSync2(subagentDir)) continue;
+    try {
+      const agentFiles = readdirSync(subagentDir).filter((f) => {
+        if (!f.endsWith(".jsonl")) return false;
+        if (f.includes("aprompt_suggestion")) return false;
+        return true;
+      }).map((f) => join3(subagentDir, f));
+      subagentFiles.push(...agentFiles);
+    } catch (err) {
+      logger.debug(`Error reading subagents for ${entry.name}:`, err);
+    }
+  }
+  return [...mainFiles, ...subagentFiles];
 }
 
 // src/embedding/chunker.ts

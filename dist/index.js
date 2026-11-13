@@ -34757,10 +34757,11 @@ var logger = {
 // src/transcript/parser.ts
 import { createReadStream } from "fs";
 import { createInterface } from "readline";
-var SKIP_TYPE = '"file-history-snapshot"';
+var SKIPPED_LINE_MARKER = '"file-history-snapshot"';
+var DEFAULT_ENTRY_TYPES = ["user", "assistant", "summary"];
 async function* parseTranscript(filePath, options = {}) {
   const {
-    includeTypes = ["user", "assistant", "summary"],
+    includeTypes = DEFAULT_ENTRY_TYPES,
     fromLine = 1,
     maxEntries,
     containsText,
@@ -34777,7 +34778,7 @@ async function* parseTranscript(filePath, options = {}) {
       if (lineNumber < fromLine) continue;
       if (maxEntries && yielded >= maxEntries) break;
       if (!line.trim()) continue;
-      if (line.includes(SKIP_TYPE)) continue;
+      if (line.includes(SKIPPED_LINE_MARKER)) continue;
       if (searchText) {
         const haystack = caseInsensitive ? line.toLowerCase() : line;
         if (!haystack.includes(searchText)) continue;
@@ -34830,7 +34831,7 @@ function extractText(entry) {
 }
 
 // src/transcript/discovery.ts
-import { readFileSync, readdirSync, existsSync, statSync, openSync, readSync, closeSync } from "fs";
+import { readFileSync, readdirSync, existsSync, statSync as statSync2, openSync as openSync2, readSync as readSync2, closeSync as closeSync2 } from "fs";
 import { join as join2, basename } from "path";
 
 // src/utils/paths.ts
@@ -34897,6 +34898,51 @@ function getProjectTranscriptDir(projectDir) {
   return join(getProjectsDir(), projectDir);
 }
 
+// src/transcript/entry-count.ts
+import { closeSync, openSync, readSync, statSync } from "fs";
+function countTranscriptEntries(filePath) {
+  const size = statSync(filePath).size;
+  let state = counts.get(filePath);
+  if (!state || size < state.offset) {
+    state = { offset: 0, complete: 0, pending: Buffer.alloc(0) };
+    counts.set(filePath, state);
+  }
+  if (size > state.offset) {
+    const fd = openSync(filePath, "r");
+    try {
+      const chunk = Buffer.alloc(CHUNK_SIZE);
+      while (state.offset < size) {
+        const read = readSync(fd, chunk, 0, Math.min(CHUNK_SIZE, size - state.offset), state.offset);
+        if (read === 0) break;
+        state.offset += read;
+        let data = state.pending.length ? Buffer.concat([state.pending, chunk.subarray(0, read)]) : chunk.subarray(0, read);
+        let start = 0;
+        for (let nl = data.indexOf(NEWLINE, start); nl !== -1; nl = data.indexOf(NEWLINE, start)) {
+          if (isEntry(data.toString("utf8", start, nl))) state.complete++;
+          start = nl + 1;
+        }
+        data = data.subarray(start);
+        state.pending = Buffer.from(data);
+      }
+    } finally {
+      closeSync(fd);
+    }
+  }
+  return state.complete + (state.pending.length && isEntry(state.pending.toString("utf8")) ? 1 : 0);
+}
+var CHUNK_SIZE = 1024 * 1024;
+var NEWLINE = 10;
+var COUNTED_TYPES = new Set(DEFAULT_ENTRY_TYPES);
+var counts = /* @__PURE__ */ new Map();
+function isEntry(line) {
+  if (!line.trim() || line.includes(SKIPPED_LINE_MARKER)) return false;
+  try {
+    return COUNTED_TYPES.has(JSON.parse(line).type ?? "");
+  } catch {
+    return false;
+  }
+}
+
 // src/transcript/discovery.ts
 var indexCache = /* @__PURE__ */ new Map();
 function listProjectDirs() {
@@ -34911,7 +34957,7 @@ function loadSessionIndex(projectDir) {
     return null;
   }
   try {
-    const stat = statSync(indexPath);
+    const stat = statSync2(indexPath);
     const cached2 = indexCache.get(projectDir);
     if (cached2 && cached2.mtime === stat.mtimeMs) {
       return cached2.data;
@@ -34947,6 +34993,7 @@ function getSessions(projectDir, options = {}) {
     const to = new Date(options.dateTo).getTime();
     entries = entries.filter((e) => new Date(e.created).getTime() <= to);
   }
+  entries = entries.map((e) => withEntryCount(e, projectDir));
   const sort = options.sort || "newest";
   entries.sort((a, b) => {
     switch (sort) {
@@ -34961,6 +35008,11 @@ function getSessions(projectDir, options = {}) {
     }
   });
   return entries;
+}
+function withEntryCount(entry, projectDir) {
+  const filePath = entry.fullPath && existsSync(entry.fullPath) ? entry.fullPath : join2(getProjectTranscriptDir(projectDir), `${entry.sessionId}.jsonl`);
+  if (!existsSync(filePath)) return entry;
+  return { ...entry, messageCount: countTranscriptEntries(filePath) };
 }
 function getSessionFilePath(sessionId, projectDir) {
   const projectDirs = projectDir ? [projectDir] : listProjectDirs();
@@ -34988,12 +35040,12 @@ function getSessionMetadata(sessionId, projectDir) {
     const index = loadSessionIndex(dir);
     if (index) {
       const entry = index.entries.find((e) => e.sessionId === sessionId);
-      if (entry) return { entry, projectDir: dir };
+      if (entry) return { entry: withEntryCount(entry, dir), projectDir: dir };
     }
     const filePath = join2(getProjectTranscriptDir(dir), `${sessionId}.jsonl`);
     if (existsSync(filePath)) {
       const meta3 = extractMinimalMetadata(filePath, sessionId, dir);
-      if (meta3) return { entry: meta3, projectDir: dir };
+      if (meta3) return { entry: withEntryCount(meta3, dir), projectDir: dir };
     }
   }
   return null;
@@ -35044,21 +35096,21 @@ function discoverOrphanSessions(projectDir) {
   return orphans;
 }
 function extractMinimalMetadata(filePath, sessionId, projectDir) {
-  const stat = statSync(filePath);
+  const stat = statSync2(filePath);
   if (stat.size === 0) return null;
-  const CHUNK_SIZE = 64 * 1024;
-  const buf = Buffer.alloc(Math.min(CHUNK_SIZE, stat.size));
-  const fd = openSync(filePath, "r");
+  const CHUNK_SIZE2 = 64 * 1024;
+  const buf = Buffer.alloc(Math.min(CHUNK_SIZE2, stat.size));
+  const fd = openSync2(filePath, "r");
   try {
-    readSync(fd, buf, 0, buf.length, 0);
+    readSync2(fd, buf, 0, buf.length, 0);
   } finally {
-    closeSync(fd);
+    closeSync2(fd);
   }
   const text = buf.toString("utf-8");
   const lines = text.split("\n");
   let firstPrompt = "";
   let firstTimestamp = "";
-  let messageCount = 0;
+  let hasMessage = false;
   let gitBranch = "";
   let projectPath = "";
   for (const line of lines) {
@@ -35070,7 +35122,7 @@ function extractMinimalMetadata(filePath, sessionId, projectDir) {
         firstTimestamp = entry.timestamp;
       }
       if (entry.type === "user" || entry.type === "assistant") {
-        messageCount++;
+        hasMessage = true;
       }
       if (entry.gitBranch && !gitBranch) {
         gitBranch = entry.gitBranch;
@@ -35091,7 +35143,7 @@ function extractMinimalMetadata(filePath, sessionId, projectDir) {
     } catch {
     }
   }
-  if (messageCount === 0 && !firstPrompt) return null;
+  if (!hasMessage && !firstPrompt) return null;
   return {
     sessionId,
     fullPath: filePath,
@@ -35099,7 +35151,7 @@ function extractMinimalMetadata(filePath, sessionId, projectDir) {
     firstPrompt,
     summary: "",
     // No summary available for orphans
-    messageCount,
+    messageCount: 0,
     created: firstTimestamp || new Date(stat.birthtimeMs).toISOString(),
     modified: new Date(stat.mtimeMs).toISOString(),
     gitBranch,
@@ -35414,33 +35466,44 @@ ${sum.summary}`;
       return "";
   }
 }
+function readablePrompt(text) {
+  const command = /<command-name>([^<]*)<\/command-name>/.exec(text);
+  if (command) {
+    const args = /<command-args>([^<]*)<\/command-args>/.exec(text)?.[1] ?? "";
+    return `${command[1]} ${args}`.trim();
+  }
+  return text;
+}
+function sessionTitle(meta3) {
+  return readablePrompt(meta3.summary || meta3.firstPrompt || "No summary");
+}
 function formatSessionHeader(meta3) {
   const created = formatTimestamp(meta3.created);
   const modified = formatTimestamp(meta3.modified);
   const lines = [
-    `Session: ${meta3.summary || meta3.firstPrompt || "No summary"}`,
+    `Session: ${sessionTitle(meta3)}`,
     `ID: ${meta3.sessionId}`,
     `Project: ${meta3.projectPath || "Unknown"}`,
     `Date: ${created} - ${modified}`,
-    `Messages: ${meta3.messageCount}${meta3.gitBranch ? ` | Branch: ${meta3.gitBranch}` : ""}`
+    `Entries: ${meta3.messageCount}${meta3.gitBranch ? ` | Branch: ${meta3.gitBranch}` : ""}`
   ];
   return lines.join("\n");
 }
 function formatSessionListEntry(meta3, index) {
   const date5 = meta3.created ? meta3.created.slice(0, 10) : "???";
   const relative3 = meta3.modified ? formatTimestampCompact(meta3.modified) : "";
-  const title = meta3.summary || meta3.firstPrompt || "No summary";
+  const title = sessionTitle(meta3);
   const truncTitle = title.length > 100 ? title.slice(0, 100) + "..." : title;
   const lines = [
     `${index + 1}. [${date5}${relative3 ? ` - ${relative3}` : ""}] ${truncTitle}`,
     `   session_id: ${meta3.sessionId}`
   ];
-  if (meta3.firstPrompt && meta3.firstPrompt !== title) {
-    const firstPrompt = meta3.firstPrompt.length > 80 ? meta3.firstPrompt.slice(0, 80) + "..." : meta3.firstPrompt;
-    lines.push(`   First: "${firstPrompt}"`);
+  const first = meta3.firstPrompt ? readablePrompt(meta3.firstPrompt) : "";
+  if (first && first !== title) {
+    lines.push(`   First: "${first.length > 80 ? first.slice(0, 80) + "..." : first}"`);
   }
   const details = [];
-  details.push(`Messages: ${meta3.messageCount}`);
+  details.push(`Entries: ${meta3.messageCount}`);
   if (meta3.gitBranch) details.push(`Branch: ${meta3.gitBranch}`);
   lines.push(`   ${details.join(" | ")}`);
   return lines.join("\n");
@@ -36432,7 +36495,7 @@ async function disposeSingletonProvider() {
 }
 
 // src/db/indexer.ts
-import { statSync as statSync2 } from "fs";
+import { statSync as statSync3 } from "fs";
 import { basename as basename3 } from "path";
 
 // src/utils/serial.ts
@@ -36584,7 +36647,7 @@ async function runBuildIndex(provider, projectDirs, options = {}) {
         detail: `Session ${fileSessionId.slice(0, 8)}...`
       });
       try {
-        const stat = statSync2(filePath);
+        const stat = statSync3(filePath);
         const indexState = getIndexState(filePath);
         if (indexState && !rebuild) {
           if (indexState.file_size === stat.size) {
@@ -37541,7 +37604,6 @@ async function getTranscriptsXrefHint(query, config2) {
 }
 
 // src/tools/read.ts
-var DEFAULT_ENTRY_TYPES = ["user", "assistant", "summary"];
 var DIGEST_ENTRIES = 20;
 async function readSessionDigest(sessionId) {
   const config2 = getConfig();
@@ -37960,7 +38022,7 @@ async function handleClean(confirm2) {
 }
 
 // src/tools/index-mgmt.ts
-import { existsSync as existsSync7, statSync as statSync3 } from "fs";
+import { existsSync as existsSync7, statSync as statSync4 } from "fs";
 async function handleSouvenirIndex(params, ctx, confirm2) {
   let config2;
   try {
@@ -38112,7 +38174,7 @@ async function runBuild(config2, params, ctx, confirm2) {
   }
 }
 function databaseSize(dbPath) {
-  const size = (path) => existsSync7(path) ? statSync3(path).size : 0;
+  const size = (path) => existsSync7(path) ? statSync4(path).size : 0;
   return size(dbPath) + size(`${dbPath}-wal`);
 }
 function formatSize2(bytes) {
@@ -38132,12 +38194,12 @@ function runVacuum() {
 }
 
 // src/tools/docs.ts
-import { existsSync as existsSync8, statSync as statSync5, readFileSync as readFileSync4, writeFileSync } from "fs";
+import { existsSync as existsSync8, statSync as statSync6, readFileSync as readFileSync4, writeFileSync } from "fs";
 import { resolve as resolve2, relative as relative2 } from "path";
 import { createHash as createHash2 } from "crypto";
 
 // src/docs/indexer.ts
-import { statSync as statSync4, readdirSync as readdirSync2, readFileSync as readFileSync3 } from "fs";
+import { statSync as statSync5, readdirSync as readdirSync2, readFileSync as readFileSync3 } from "fs";
 import { join as join5, relative, resolve } from "path";
 import { createHash } from "crypto";
 
@@ -38591,7 +38653,7 @@ async function runBuildDocsIndex(projectRoot, provider, options = {}) {
       detail: relativePath
     });
     try {
-      const stat = statSync4(absolutePath);
+      const stat = statSync5(absolutePath);
       if (stat.size > MAX_FILE_SIZE) {
         skipped++;
         continue;
@@ -38833,7 +38895,7 @@ async function handleAdd(projectRoot, params) {
   if (!existsSync8(absolutePath)) {
     return `Error: Path "${params.path}" does not exist (resolved to ${absolutePath}).`;
   }
-  const stat = statSync5(absolutePath);
+  const stat = statSync6(absolutePath);
   const type = stat.isDirectory() ? "directory" : "file";
   if (type === "file" && !params.category) {
     const detected = detectCategory(absolutePath);
@@ -38972,7 +39034,7 @@ async function handleStatus(projectRoot) {
   let pendingCount = 0;
   for (const f of files) {
     try {
-      const stat = statSync5(f.absolutePath);
+      const stat = statSync6(f.absolutePath);
       const indexState = getDocIndexState(projectRoot, f.relativePath);
       if (!indexState || indexState.file_size !== stat.size || indexState.file_mtime !== stat.mtime.toISOString()) {
         pendingCount++;
@@ -39173,7 +39235,7 @@ async function handleRestore(projectRoot, params, confirm2) {
     try {
       const currentContent = readFileSync4(absolutePath, "utf-8");
       const currentHash = createHash2("sha256").update(currentContent).digest("hex");
-      const currentStat = statSync5(absolutePath);
+      const currentStat = statSync6(absolutePath);
       backupSnapshotCreated = insertSnapshot(
         projectRoot,
         relativePath,
@@ -39219,7 +39281,7 @@ async function handleVacuum(projectRoot) {
 }
 
 // src/tools/tree.ts
-import { readdirSync as readdirSync3, statSync as statSync6 } from "fs";
+import { readdirSync as readdirSync3, statSync as statSync7 } from "fs";
 import { join as join6, resolve as resolve3, extname as extname2 } from "path";
 import { createReadStream as createReadStream2 } from "fs";
 import { createInterface as createInterface2 } from "readline";
@@ -39438,7 +39500,7 @@ function walkTree(dir, currentDepth, opts, parentPrefixes) {
       entry.ext = extname2(item.name).toLowerCase() || "(no ext)";
       if (opts.showModified) {
         try {
-          entry.mtimeMs = statSync6(fullPath).mtimeMs;
+          entry.mtimeMs = statSync7(fullPath).mtimeMs;
         } catch {
         }
       }
@@ -39464,9 +39526,9 @@ async function populateLineCounts(entries) {
   const BATCH = 50;
   for (let i = 0; i < fileEntries.length; i += BATCH) {
     const batch = fileEntries.slice(i, i + BATCH);
-    const counts = await Promise.all(batch.map((e) => countLines(e.fullPath)));
+    const counts2 = await Promise.all(batch.map((e) => countLines(e.fullPath)));
     for (let j = 0; j < batch.length; j++) {
-      batch[j].lineCount = counts[j];
+      batch[j].lineCount = counts2[j];
     }
   }
 }
@@ -39699,17 +39761,9 @@ var LISTED_SESSIONS = 50;
 function sessionUri(sessionId) {
   return `souvenir://session/${sessionId}`;
 }
-function readablePrompt(text) {
-  const command = /<command-name>([^<]*)<\/command-name>/.exec(text);
-  if (command) {
-    const args = /<command-args>([^<]*)<\/command-args>/.exec(text)?.[1] ?? "";
-    return `${command[1]} ${args}`.trim();
-  }
-  return text;
-}
 function sessionLabel(session) {
   const date5 = session.created ? session.created.slice(0, 10) : "????-??-??";
-  const title = readablePrompt(session.summary || session.firstPrompt || "No summary").replace(/\s+/g, " ").trim();
+  const title = sessionTitle(session).replace(/\s+/g, " ").trim();
   return `${date5} ${title.length > 70 ? title.slice(0, 70) + "\u2026" : title}`;
 }
 function sessionDescription(session) {
@@ -39718,6 +39772,7 @@ function sessionDescription(session) {
     const first = readablePrompt(session.firstPrompt).replace(/\s+/g, " ").trim();
     parts.push(`First prompt: "${first.length > 100 ? first.slice(0, 100) + "\u2026" : first}"`);
   }
+  parts.push(`${session.messageCount} entries`);
   if (session.gitBranch) parts.push(`branch ${session.gitBranch}`);
   parts.push(`session_id ${session.sessionId}`);
   return parts.join(" \xB7 ");
@@ -39941,7 +39996,7 @@ Pagination: footer shows page position and navigation hints. Use max_entries=1 w
 server.registerTool(
   "souvenir_sessions",
   {
-    description: `List all conversation sessions for a project with their metadata (first prompt, summary, dates, message count). Use this to find which session to search or read. Results are sorted by most recent first by default. Includes orphan sessions (transcript files not in the index).
+    description: `List all conversation sessions for a project with their metadata (first prompt, summary, dates, entry count as souvenir_read pages them). Use this to find which session to search or read. Results are sorted by most recent first by default. Includes orphan sessions (transcript files not in the index).
 
 Typical workflow: souvenir_projects \u2192 souvenir_sessions (pick a session) \u2192 souvenir_read or souvenir_search with session_id.
 
@@ -39952,7 +40007,7 @@ Pagination: Shows "Showing X/Y sessions" footer. Increase max_results to see mor
       search: external_exports.string().optional().describe("Filter sessions where summary or firstPrompt contains this text (case-insensitive)."),
       date_from: external_exports.string().optional().describe("Only sessions created after this ISO date."),
       date_to: external_exports.string().optional().describe("Only sessions created before this ISO date."),
-      sort: external_exports.enum(["newest", "oldest", "messages"]).optional().describe('Sort order. Default: "newest".'),
+      sort: external_exports.enum(["newest", "oldest", "messages"]).optional().describe('Sort order. Default: "newest". "messages": most entries first.'),
       max_results: external_exports.number().int().min(1).max(50).optional().describe("Maximum sessions to return. Default: 20."),
       include_sidechains: external_exports.boolean().optional().describe("Include sidechain/subagent sessions. Default: false.")
     })

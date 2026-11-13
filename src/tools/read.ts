@@ -1,5 +1,5 @@
 import { getSessionFilePath, getSessionMetadata, resolveCurrentSession } from '../transcript/discovery.js';
-import { parseTranscript } from '../transcript/parser.js';
+import { DEFAULT_ENTRY_TYPES, parseTranscript } from '../transcript/parser.js';
 import {
   formatEntry,
   formatSessionHeader,
@@ -11,9 +11,6 @@ import {
 import { getConfig } from '../config.js';
 import { resolveProjectDir } from '../utils/paths.js';
 import type { DetailLevel } from '../transcript/types.js';
-
-/** Entry types read when the caller names none. */
-const DEFAULT_ENTRY_TYPES = ['user', 'assistant', 'summary'];
 
 /** Last entries a session digest shows (souvenir_read's default page size). */
 const DIGEST_ENTRIES = 20;

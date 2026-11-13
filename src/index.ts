@@ -147,7 +147,7 @@ Pagination: footer shows page position and navigation hints. Use max_entries=1 w
 server.registerTool(
   'souvenir_sessions',
   {
-    description: `List all conversation sessions for a project with their metadata (first prompt, summary, dates, message count). Use this to find which session to search or read. Results are sorted by most recent first by default. Includes orphan sessions (transcript files not in the index).
+    description: `List all conversation sessions for a project with their metadata (first prompt, summary, dates, entry count as souvenir_read pages them). Use this to find which session to search or read. Results are sorted by most recent first by default. Includes orphan sessions (transcript files not in the index).
 
 Typical workflow: souvenir_projects → souvenir_sessions (pick a session) → souvenir_read or souvenir_search with session_id.
 
@@ -158,7 +158,7 @@ Pagination: Shows "Showing X/Y sessions" footer. Increase max_results to see mor
       search: z.string().optional().describe('Filter sessions where summary or firstPrompt contains this text (case-insensitive).'),
       date_from: z.string().optional().describe('Only sessions created after this ISO date.'),
       date_to: z.string().optional().describe('Only sessions created before this ISO date.'),
-      sort: z.enum(['newest', 'oldest', 'messages']).optional().describe('Sort order. Default: "newest".'),
+      sort: z.enum(['newest', 'oldest', 'messages']).optional().describe('Sort order. Default: "newest". "messages": most entries first.'),
       max_results: z.number().int().min(1).max(50).optional().describe('Maximum sessions to return. Default: 20.'),
       include_sidechains: z.boolean().optional().describe('Include sidechain/subagent sessions. Default: false.'),
     }),
