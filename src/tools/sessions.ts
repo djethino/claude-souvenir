@@ -1,7 +1,8 @@
-import { getSessions, loadSessionIndex } from '../transcript/discovery.js';
+import { archiveErrorNote, ensureArchived, getProjectInfo, getSessions } from '../archive/catalog.js';
 import { formatSessionListEntry } from '../transcript/formatter.js';
 import { getConfig } from '../config.js';
 import { resolveProjectDir } from '../utils/paths.js';
+import { createProgressNotifier, type ToolContext } from './helpers.js';
 
 export async function handleSouvenirSessions(params: {
   project?: string;
@@ -12,7 +13,7 @@ export async function handleSouvenirSessions(params: {
   max_results?: number;
   offset?: number;
   include_sidechains?: boolean;
-}): Promise<string> {
+}, ctx?: ToolContext): Promise<string> {
   const config = getConfig();
   const projectDir = params.project
     ? resolveProjectDir(params.project)
@@ -21,6 +22,9 @@ export async function handleSouvenirSessions(params: {
   if (!projectDir) {
     return 'Error: No project specified and could not detect current project. Use the "project" parameter.';
   }
+
+  const note = archiveErrorNote(await ensureArchived([projectDir], createProgressNotifier(ctx)));
+  const noteBlock = note ? `${note}\n\n` : '';
 
   const sessions = getSessions(projectDir, {
     search: params.search,
@@ -35,19 +39,22 @@ export async function handleSouvenirSessions(params: {
   const displayed = sessions.slice(offset, offset + maxResults);
 
   if (displayed.length === 0) {
-    if (sessions.length > 0) return `No sessions after offset ${offset} (${sessions.length} in all).`;
-    return params.search
+    if (sessions.length > 0) return `${noteBlock}No sessions after offset ${offset} (${sessions.length} in all).`;
+    return noteBlock + (params.search
       ? `No sessions found matching "${params.search}" in project "${projectDir}".`
-      : `No sessions found for project "${projectDir}".`;
+      : `No sessions found for project "${projectDir}".`);
   }
 
-  // Try to get original path from index, fallback to projectDir
-  const index = loadSessionIndex(projectDir);
-  const originalPath = index?.originalPath || projectDir;
   const total = sessions.length;
   const endIndex = offset + displayed.length;
+  const partial = sessions.filter((s) => s.availability === 'partial').length;
+  const lost = sessions.filter((s) => s.availability === 'lost').length;
 
-  const header = `Project: ${originalPath} (${total} session${total > 1 ? 's' : ''})\n`;
+  const header = [
+    `Project: ${getProjectInfo(projectDir)?.originalPath ?? projectDir} (${total} session${total > 1 ? 's' : ''})`,
+    partial > 0 ? `${partial} PARTIAL: Claude Code deleted their transcripts before souvenir archived whole transcripts; only search excerpts remain.` : null,
+    lost > 0 ? `${lost} LOST: deleted before souvenir kept anything; only listed in Claude Code's old sessions-index.json.` : null,
+  ].filter(Boolean).join('\n') + '\n';
 
   const entries = displayed.map((s, i) => formatSessionListEntry(s, offset + i));
 
@@ -55,5 +62,5 @@ export async function handleSouvenirSessions(params: {
     ? `\n--- Showing ${offset + 1}-${endIndex} of ${total} sessions | ${total - endIndex} more | Next page: offset=${endIndex} ---`
     : offset > 0 ? `\n--- Showing ${offset + 1}-${endIndex} of ${total} sessions (end) ---` : '';
 
-  return header + '\n' + entries.join('\n\n') + footer;
+  return noteBlock + header + '\n' + entries.join('\n\n') + footer;
 }

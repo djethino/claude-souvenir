@@ -1,6 +1,6 @@
 import { textSearch } from '../search/text-search.js';
 import { formatSearchResult } from '../transcript/formatter.js';
-import { listProjectDirs, getSessionMetadata, resolveCurrentSession } from '../transcript/discovery.js';
+import { archiveErrorNote, ensureArchived, findSession, listProjectDirs, resolveCurrentSession } from '../archive/catalog.js';
 import { getConfig } from '../config.js';
 import { resolveProjectDir } from '../utils/paths.js';
 import { searchSemantic, getProjectChunkCount } from '../db/store.js';
@@ -50,16 +50,16 @@ async function indexBeforeSemanticSearch(
 ): Promise<string | null> {
   if (projectDirs.length !== 1) {
     // Several projects: indexing them all here could take minutes; the background index only covers the current one
-    return 'Note: across several projects, only messages already indexed are searched: recent sessions of other projects may be missing (souvenir_index action="build" project="all" indexes them; text mode reads the transcripts directly).';
+    return 'Note: across several projects, only messages already indexed are searched: recent sessions of other projects may be missing (souvenir_index action="build" project="all" indexes them; text mode searches the whole archive).';
   }
   try {
     const result = await buildIndex(provider, projectDirs, { rebuild: false, onProgress: createProgressNotifier(ctx) });
     if (result.errors.length === 0) return null;
     const count = result.errors.length >= 5 ? '5 or more' : String(result.errors.length); // buildIndex keeps the first 5
-    return `Note: ${count} transcript(s) could not be indexed, so their newest messages may be missing from semantic results (first error: ${result.errors[0]}). Text mode reads the transcripts directly.`;
+    return `Note: ${count} transcript(s) could not be indexed, so their newest messages may be missing from semantic results (first error: ${result.errors[0]}). Text mode searches the whole archive.`;
   } catch (err) {
     logger.warn('Indexing before search failed:', err);
-    return `Note: indexing new messages failed (${errorMessage(err)}), so the latest messages may be missing from semantic results. Text mode reads the transcripts directly.`;
+    return `Note: indexing new messages failed (${errorMessage(err)}), so the latest messages may be missing from semantic results. Text mode searches the whole archive.`;
   }
 }
 
@@ -70,10 +70,10 @@ function unreadableNote(unreadable: string[]): string | null {
 }
 
 /** Session metadata for result lists, read once per session and search. */
-function sessionMetadataLookup(): (sessionId: string, projectDir: string) => ReturnType<typeof getSessionMetadata> {
-  const cache = new Map<string, ReturnType<typeof getSessionMetadata>>();
+function sessionMetadataLookup(): (sessionId: string, projectDir: string) => ReturnType<typeof findSession> {
+  const cache = new Map<string, ReturnType<typeof findSession>>();
   return (sessionId, projectDir) => {
-    if (!cache.has(sessionId)) cache.set(sessionId, getSessionMetadata(sessionId, projectDir));
+    if (!cache.has(sessionId)) cache.set(sessionId, findSession(sessionId, projectDir));
     return cache.get(sessionId) ?? null;
   };
 }
@@ -145,16 +145,6 @@ export async function handleSouvenirSearch(params: {
     return await performDocsSearch(params, config, source, mode);
   }
 
-  // Resolve "current" session_id
-  if (params.session_id === 'current') {
-    const projectDir = config.currentProject || undefined;
-    const resolved = resolveCurrentSession(projectDir);
-    if (!resolved) {
-      return 'Error: Could not determine current session.';
-    }
-    params = { ...params, session_id: resolved };
-  }
-
   // Resolve project dirs
   let projectDirs: string[];
   if (params.project === 'all') {
@@ -165,6 +155,18 @@ export async function handleSouvenirSearch(params: {
     projectDirs = [config.currentProject];
   } else {
     return 'Error: No project specified and could not detect current project. Use the "project" parameter or set "all" to search all projects.';
+  }
+
+  // Searches read the archive: copy what Claude Code wrote since the last copy first
+  const archiveNote = archiveErrorNote(await ensureArchived(projectDirs, createProgressNotifier(ctx)));
+
+  // Resolve "current" session_id
+  if (params.session_id === 'current') {
+    const resolved = resolveCurrentSession(config.currentProject || undefined);
+    if (!resolved) {
+      return 'Error: Could not determine current session.';
+    }
+    params = { ...params, session_id: resolved };
   }
 
   const maxResults = Math.min(params.max_results || 10, 50);
@@ -189,7 +191,7 @@ export async function handleSouvenirSearch(params: {
     }
   }
 
-  return result;
+  return archiveNote ? `${archiveNote}\n\n${result}` : result;
 }
 
 async function performTextSearch(
@@ -307,7 +309,15 @@ async function performSemanticSearch(
 
     // Convert all results to SearchResult format (no pagination yet)
     const metadataOf = sessionMetadataLookup();
-    const allResults: SearchResult[] = vecResults.map((vr) => {
+    // Parts of one long exchange share its line: the closest part (results are sorted by distance) stands for it
+    const seen = new Set<string>();
+    const distinct = vecResults.filter((vr) => {
+      const key = `${vr.session_id}:${vr.line_number}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    const allResults: SearchResult[] = distinct.map((vr) => {
       const meta = metadataOf(vr.session_id, vr.project_dir);
       return {
         sessionId: vr.session_id,
@@ -319,8 +329,8 @@ async function performSemanticSearch(
         timestamp: vr.timestamp || undefined,
         lineNumber: vr.line_number || 0,
         score: 1 - vr.distance, // Convert cosine distance to similarity
-        sessionSummary: meta?.entry.summary,
-        sessionFirstPrompt: meta?.entry.firstPrompt,
+        sessionSummary: meta?.summary,
+        sessionFirstPrompt: meta?.firstPrompt,
       };
     });
 
@@ -436,9 +446,13 @@ async function performHybridSearch(
 
   // Add/merge semantic results
   const metadataOf = sessionMetadataLookup();
+  // Parts of one long exchange share its line: the closest part (vecResults are sorted by distance) stands for it
+  const semanticKeys = new Set<string>();
   for (const vr of vecResults) {
-    const meta = metadataOf(vr.session_id, vr.project_dir);
     const key = `${vr.session_id}:${vr.line_number}`;
+    if (semanticKeys.has(key)) continue;
+    semanticKeys.add(key);
+    const meta = metadataOf(vr.session_id, vr.project_dir);
     const similarity = 1 - vr.distance;
     const semanticScore = similarity * 0.6; // Semantic weight: 0.6
 
@@ -457,8 +471,8 @@ async function performHybridSearch(
         timestamp: vr.timestamp || undefined,
         lineNumber: vr.line_number || 0,
         score: semanticScore,
-        sessionSummary: meta?.entry.summary,
-        sessionFirstPrompt: meta?.entry.firstPrompt,
+        sessionSummary: meta?.summary,
+        sessionFirstPrompt: meta?.firstPrompt,
       });
     }
   }

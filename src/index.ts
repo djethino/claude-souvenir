@@ -24,7 +24,7 @@ import { closeDocsDb } from './docs/store.js';
 declare const __SOUVENIR_VERSION__: string;
 
 /** Read by Claude at the start of every session (MCP server instructions): when to reach for souvenir. */
-const INSTRUCTIONS = `souvenir searches this user's past Claude Code conversations and the project's indexed files.
+const INSTRUCTIONS = `souvenir searches this user's past Claude Code conversations and the project's indexed files. It archives every session in full, so sessions stay searchable and readable after Claude Code deletes its own transcripts (after 30 days by default).
 
 - When the user refers to earlier work ("like we did for X", "as decided last time", "the previous version"), search with souvenir_search before asking them or looking elsewhere, then souvenir_read around_uuid for the full context.
 - After a context compaction, when the summary lacks a detail (a decision, an error message, a value), find it in the current session (souvenir_search with session_id "current") instead of asking the user to repeat it.
@@ -52,11 +52,11 @@ const LARGE_RESULT_META = { 'anthropic/maxResultSizeChars': 100_000 };
  * a pending confirmation becomes the question to the user (see tools/confirm.ts), and every call
  * schedules a background index of the current project.
  */
-function toolHandler<T>(name: string, handler: (params: T, ctx: ToolContext) => Promise<string>) {
+function toolHandler<T>(name: string, handler: (params: T, ctx: ToolContext) => Promise<string | CallToolResult['content']>) {
   return async (params: T, ctx: ToolContext): Promise<CallToolResult | InputRequiredResult> => {
     try {
-      const text = await handler(params, ctx);
-      return { content: [{ type: 'text', text }] };
+      const result = await handler(params, ctx);
+      return { content: typeof result === 'string' ? [{ type: 'text', text: result }] : result };
     } catch (err) {
       if (err instanceof ConfirmationNeeded) return err.toInputRequired();
       const msg = errorMessage(err);
@@ -114,7 +114,7 @@ Workflow: souvenir_search → souvenir_read around_uuid for full context.`,
 server.registerTool(
   'souvenir_read',
   {
-    description: `Read a Claude Code session transcript. Returns clean, formatted messages — internal noise (file snapshots, thinking blocks) is automatically filtered out, and tool calls are condensed into readable summaries.
+    description: `Read a Claude Code session from souvenir's archive (every line kept, even after Claude Code deleted the transcript). Returns clean, formatted messages — internal noise (file snapshots, thinking blocks) is automatically filtered out, and tool calls are condensed into readable summaries. Sessions Claude Code deleted before souvenir archived whole transcripts (souvenir 0.6.0) are PARTIAL: only their search excerpts remain, shown as such.
 
 IMPORTANT: session_id must be "current" (this session) or come from souvenir_search or souvenir_sessions. Do NOT guess session IDs.
 
@@ -124,12 +124,14 @@ Reading modes:
 - around_uuid=<uuid>: centers on a search result. Use before_turns/after_turns to control how much context to include (e.g. before_turns=0, after_turns=5 to read only what follows).
 - detail_level="files": extracts all unique file paths accessed during the session, grouped by action (modified/read/searched). One-call answer to "what files did this session touch?"
 - detail_level="tools": tool usage summary with call counts and error indicators.
+- saved_file=<path>: a file Claude Code saved with a session (a large tool output, an image) that a tool result names, read from the archive (the original may be deleted). No session_id needed.
 
 Pagination: footer shows page position and navigation hints. Use max_entries=1 with around_uuid to read a single full entry without truncation.`,
     annotations: READ_ONLY,
     _meta: LARGE_RESULT_META,
     inputSchema: z.object({
-      session_id: z.string().describe('Session UUID to read from. Use "current" for the most recent session.'),
+      session_id: z.string().optional().describe('Session UUID to read from. Use "current" for the most recent session. Required unless saved_file is given.'),
+      saved_file: z.string().optional().describe('Path of a file Claude Code saved with a session (tool-results/…), as a tool result wrote it. Returns its content (images as images).'),
       project: z.string().optional().describe('Project directory name. Default: current project (also searches other projects if not found).'),
       around_uuid: z.string().optional().describe('Center output around this entry UUID (from a search result). Use max_entries=1 to read the full entry without truncation.'),
       from_line: z.number().int().min(1).optional().describe('Start reading from this JSONL line number (1-based). When omitted, reads from the END of the session (most recent entries). Use values from pagination hints (Earlier/Later) to navigate.'),
@@ -148,7 +150,7 @@ Pagination: footer shows page position and navigation hints. Use max_entries=1 w
 server.registerTool(
   'souvenir_sessions',
   {
-    description: `List all conversation sessions for a project with their metadata (first prompt, summary, dates, entry count as souvenir_read pages them). Use this to find which session to search or read. Results are sorted by most recent first by default. Includes orphan sessions (transcript files not in the index).
+    description: `List all conversation sessions for a project with their metadata (title, first prompt, dates, entry count as souvenir_read pages them). Use this to find which session to search or read. Results are sorted by most recent first by default. Lists every archived session, including those whose transcript Claude Code deleted; older ones marked PARTIAL (only search excerpts were kept) or LOST (nothing kept).
 
 Typical workflow: souvenir_projects → souvenir_sessions (pick a session) → souvenir_read or souvenir_search with session_id.
 
@@ -165,26 +167,26 @@ Pagination: the footer shows "Showing A-B of N sessions" and the offset of the n
       include_sidechains: z.boolean().optional().describe('Include sidechain/subagent sessions. Default: false.'),
     }),
   },
-  toolHandler('souvenir_sessions', (params, _ctx) => handleSouvenirSessions(params)),
+  toolHandler('souvenir_sessions', (params, ctx) => handleSouvenirSessions(params, ctx)),
 );
 
 // --- souvenir_projects ---
 server.registerTool(
   'souvenir_projects',
   {
-    description: `List all Claude Code projects that have conversation history. Shows project path, directory name (used as identifier in other tools), number of sessions, and date range. The current project is marked with [current]. Projects whose original path no longer exists are marked [orphan].
+    description: `List all Claude Code projects that have conversation history, including those whose transcripts Claude Code deleted (read from souvenir's archive). Shows project path, directory name (used as identifier in other tools), number of sessions, and date range. The current project is marked with [current]; projects whose folder no longer exists with [folder deleted].
 
 Actions:
-- "list" (default): Show all projects with status. Also detects orphaned index data (projects in the semantic index but no longer on disk).
-- "clean": Remove index data for orphaned projects. Frees space in the semantic search database. Transcript files in ~/.claude/projects/ are preserved, but for a project whose transcripts Claude Code already deleted, the index is the last copy of its conversations. Asks the user to confirm when the client supports it.
+- "list" (default): Show all projects with status.
+- "clean": Delete everything souvenir kept of projects whose folder no longer exists: their archived conversations, not only the search index. When Claude Code already deleted their transcripts, the archive is the only copy left. Only on the user's explicit request; asks the user to confirm when the client supports it.
 
 Typical workflow: souvenir_projects → souvenir_sessions project="<dir_name>" → souvenir_read or souvenir_search.`,
     inputSchema: z.object({
-      action: z.enum(['list', 'clean']).optional().describe('Default: "list". Use "clean" to remove orphaned project data from the semantic index.'),
+      action: z.enum(['list', 'clean']).optional().describe('Default: "list". "clean" deletes the archived conversations of projects whose folder no longer exists (user request only).'),
       search: z.string().optional().describe('Filter projects whose path contains this text.'),
     }),
   },
-  toolHandler('souvenir_projects', (params, ctx) => handleSouvenirProjects(params, confirm(ctx))),
+  toolHandler('souvenir_projects', (params, ctx) => handleSouvenirProjects(params, confirm(ctx), ctx)),
 );
 
 // --- souvenir_index ---
@@ -193,12 +195,12 @@ server.registerTool(
   {
     description: `Manage the semantic search index that powers hybrid and semantic search modes. Without this index, only text mode works.
 
-Indexing runs automatically in the background after each interaction. Use this tool to check status, force immediate indexing, or rebuild from scratch.
+The index is built from souvenir's archive of every transcript, which is kept up to date automatically (archiving needs no embedding server). Indexing runs automatically in the background after each interaction. Use this tool to check status, force immediate indexing, or rebuild.
 
-- "status": show what's indexed and which embedding model built it.
+- "status": show the archive (sessions, lines, size, transcripts Claude Code deleted) and what's indexed with which embedding model.
 - "check": verify the configuration end to end (settings, embedding server, a test embedding, index compatibility). Use it when semantic search fails or after changing settings.
 - "build": index new/updated sessions now (incremental).
-- "rebuild": drop and re-index from scratch. After an embedding model change it resets the whole index (use project="all" to re-index every project now). First-time indexing may take several minutes. Asks the user to confirm when the client supports it.
+- "rebuild": re-create the index from the archive (archived conversations and the excerpts of partial sessions are never deleted). After an embedding model change it resets the vectors of every project (use project="all" to re-index every project now). Can take a long time on a large history. Asks the user to confirm when the client supports it.
 - "vacuum": compact the database file to reclaim disk space from deleted data.`,
     inputSchema: z.object({
       action: z.enum(['status', 'check', 'build', 'rebuild', 'vacuum']).describe('"status": show indexing state. "check": verify configuration and embedding server. "build": incrementally index new content. "rebuild": drop and re-index everything. "vacuum": compact database file.'),
@@ -280,6 +282,8 @@ async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
   logger.info('souvenir MCP server running on stdio');
+  // Archive what Claude Code wrote while no server ran (and the first full copy after an upgrade)
+  scheduleBackgroundIndex();
 }
 
 // --- Graceful shutdown ---

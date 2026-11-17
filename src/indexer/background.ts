@@ -4,6 +4,8 @@ import { getOrCreateProvider } from '../tools/helpers.js';
 import { buildIndex } from '../db/indexer.js';
 import { buildDocsIndex } from '../docs/indexer.js';
 import { docsDbExists, getDocSources } from '../docs/store.js';
+import { archiveProjects } from '../archive/archiver.js';
+import { listProjectDirsOnDisk } from '../transcript/discovery.js';
 
 // Debounce state
 let _indexing = false;
@@ -48,11 +50,25 @@ export function isIndexing(): boolean {
 }
 
 /**
- * Schedule a background index of the current project.
- * Indexes both transcripts (global DB) and project docs (local DB) if configured.
+ * Archive every project's transcripts (all of them: a project not opened for a month would
+ * otherwise lose its sessions to Claude Code's cleanup). Needs no embedding server. Errors are
+ * logged: the next run retries, and tools report the transcripts that could not be archived.
+ */
+async function archiveAll(signal: AbortSignal): Promise<void> {
+  try {
+    const report = await archiveProjects(listProjectDirsOnDisk(), { signal });
+    for (const err of report.errors) logger.error(`Archive: ${err}`);
+  } catch (err) {
+    if (!signal.aborted) logger.error('Archiving failed:', err);
+  }
+}
+
+/**
+ * Schedule a background run: archive every project, then index the current project's
+ * transcripts (global DB) and project docs (local DB) if configured.
  * Debounced: skips if already running or if last run was < 30s ago.
  * Uses the singleton provider (already loaded in memory → fast).
- * Fire-and-forget: errors are logged, not thrown.
+ * Fire-and-forget: errors are logged, not thrown. Also run once at server startup.
  */
 export function scheduleBackgroundIndex(): void {
   const now = Date.now();
@@ -62,17 +78,6 @@ export function scheduleBackgroundIndex(): void {
     return;
   }
 
-  let config: ReturnType<typeof getConfig>;
-  try {
-    config = getConfig();
-  } catch (err) {
-    // Invalid plugin options: tools report them (souvenir_index action="check"), the background index just skips
-    logger.warn('Background index skipped:', err);
-    return;
-  }
-  const projectDir = config.currentProject;
-  if (!projectDir) return;
-
   _indexing = true;
   _lastIndexTime = now;
   const signal = _abortController.signal;
@@ -80,7 +85,20 @@ export function scheduleBackgroundIndex(): void {
   // Fire and forget — but keep the promise for shutdown coordination
   _indexingPromise = (async () => {
     try {
+      // 1. Archive (no embedding needed: done even when the embedding server is down)
+      await archiveAll(signal);
       if (signal.aborted) return;
+
+      let config: ReturnType<typeof getConfig>;
+      try {
+        config = getConfig();
+      } catch (err) {
+        // Invalid plugin options: tools report them (souvenir_index action="check"), the background index just skips
+        logger.warn('Background index skipped:', err);
+        return;
+      }
+      const projectDir = config.currentProject;
+      if (!projectDir) return;
 
       const provider = getOrCreateProvider(config);
       if (!provider.isReady()) {
@@ -89,7 +107,7 @@ export function scheduleBackgroundIndex(): void {
 
       if (signal.aborted) return;
 
-      // 1. Index transcripts (global DB)
+      // 2. Index transcripts (global DB)
       const result = await buildIndex(provider, [projectDir], {
         rebuild: false,
         signal,
@@ -100,7 +118,7 @@ export function scheduleBackgroundIndex(): void {
 
       if (signal.aborted) return;
 
-      // 2. Index docs (local DB) if sources are configured
+      // 3. Index docs (local DB) if sources are configured
       const projectRoot = config.cwd;
       if (docsDbExists(projectRoot)) {
         const sources = getDocSources(projectRoot);

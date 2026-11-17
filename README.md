@@ -12,34 +12,38 @@ After context compaction, it gets worse: the summary captures *what* was done bu
 |---------|---------------|
 | "We discussed this yesterday" → "I don't have access to previous conversations" | `souvenir_search` → answer in seconds |
 | After compaction: lost decisions, re-does work | Full transcript searchable, recovers exact context |
+| Claude Code deletes transcripts after 30 days | Every session archived in full, readable and searchable for good |
 | Indexed file overwritten by mistake → gone | Automatic snapshots, diff and restore for tracked files |
 | New session on existing project → starts blind | Indexed project files, searchable by meaning not just keywords |
 
 ## What it does
 
+- **Keep every conversation** — every line of every session (and the large tool outputs and images Claude Code saves beside them) is archived in souvenir's database; Claude Code deletes its own transcripts after 30 days (`cleanupPeriodDays`), souvenir keeps them
 - **Search past conversations** — what was discussed, decided or built, in this project or across all of them
 - **Search project files** — index docs, code and config of the current project for search by meaning
 - **File versioning** — automatic snapshots of the files you add to the project index, with history, diff and restore (3-day retention)
 - **Read transcripts** — browse a past session or jump to the exact moment a search found
 - **Cite a past session with `@`** — the recent sessions of the project appear in Claude Code's `@` menu; citing one gives Claude its summary, the files it touched and its last exchanges
 - **Recap a session, explain a file** — the `recap` and `why` commands (MCP prompts)
-- **Ask before destroying** — restoring a file, clearing or rebuilding an index, cleaning orphaned projects: Claude Code asks you to confirm first
-- **Stay up to date by itself** — new messages are indexed in the background as you work
+- **Ask before destroying** — restoring a file, clearing or rebuilding an index, deleting a deleted project's history: Claude Code asks you to confirm first
+- **Stay up to date by itself** — new messages are archived and indexed in the background as you work
 - **Tell Claude when to use it** — at the start of every session, Claude receives short instructions: search past work before asking you to repeat it, find a detail lost in a compaction, check a damaged file's history before anything else, prefer `souvenir_tree` for an overview
 
 ## How it works
 
-1. Claude Code already writes every conversation to `~/.claude/projects/` as transcript files.
-2. After each interaction, a background hook reads what is new, splits it into chunks (one user message with its reply, or one standalone reply) and turns each chunk into a vector with an **embedding model**.
-3. Vectors are stored in a local SQLite database with [sqlite-vec](https://github.com/asg017/sqlite-vec).
-4. When Claude searches, the query is turned into a vector too, and the closest chunks are returned. The default **hybrid** mode combines this meaning-based search with exact text matching.
+1. Claude Code writes every conversation to `~/.claude/projects/` as transcript files, and deletes them after 30 days by default.
+2. souvenir copies them into its own database as they are written: every line, compressed, for every project (at server start and after each interaction; no embedding server needed). Reading, listing and searching sessions use this archive, so a session stays complete after Claude Code deletes its file.
+3. A background hook then splits what is new into chunks (what the user wrote with the whole reply that follows; a long exchange in several overlapping parts, never cut) and turns each chunk into a vector with an **embedding model**. Vectors are stored in the same SQLite database with [sqlite-vec](https://github.com/asg017/sqlite-vec).
+4. When Claude searches, the query is turned into a vector too, and the closest chunks are returned. The default **hybrid** mode combines this meaning-based search with exact text matching over the whole archive.
+
+**Sessions older than the archive.** Before 0.6.0, souvenir kept only search excerpts (the first 2,000 characters of each exchange, without tool calls) and read Claude Code's files directly. Sessions whose transcript Claude Code deleted before 0.6.0 cannot be recovered in full: souvenir lists them as **partial**, shows and searches their excerpts, and never deletes them. Sessions still listed in Claude Code's old `sessions-index.json` with nothing kept are listed as **lost**.
 
 The embedding model runs on a server of your choice:
 
 - **Ollama (default)** — a local [Ollama](https://ollama.com) server with the `embeddinggemma` model. Everything stays on your machine.
 - **Any OpenAI-compatible API** — OpenAI, LM Studio, vLLM, a llama.cpp server, Ollama's `/v1` endpoint... Text chunks are then sent to that server.
 
-Text search (`mode="text"`) never needs the embedding server.
+Text search (`mode="text"`) and the archive never need the embedding server.
 
 ## Requirements
 
@@ -96,7 +100,7 @@ Souvenir works without configuration if Ollama runs locally. Settings are plugin
 | `embedding_model` | `embeddinggemma` · `text-embedding-3-small` | Model name as the server knows it |
 | `embedding_dimensions` | native size | Shorter vectors, only for models that support it (OpenAI text-embedding-3, Matryoshka models) |
 | `embedding_api_key` | none | Only if the server requires one. Stored in your system's secure storage |
-| `db_path` | `~/.claude/ASymptOmatik/souvenir/souvenir.db` | Absolute path of the transcript index |
+| `db_path` | `~/.claude/ASymptOmatik/souvenir/souvenir.db` | Absolute path of the database: the archive of every session and the search index |
 
 Examples:
 
@@ -109,7 +113,7 @@ Examples:
 
 **Models.** Many embedding models expect a prefix on documents and queries; souvenir adds the right one for known models: embeddinggemma, nomic-embed-text, mxbai-embed-large, snowflake-arctic-embed (v1, v2), bge-large, bge-m3, multilingual-e5 / e5, qwen3-embedding, all-minilm, granite-embedding, paraphrase-multilingual, OpenAI text-embedding-3. Other models work too, without prefix.
 
-**Changing the model.** Vectors from different models (or sizes) cannot be compared. After changing the provider, model or dimensions, searches report that the index is incompatible until you either restore the previous settings or re-embed everything: `/asymptomatik-souvenir:souvenir-init` guides you, or ask Claude to run `souvenir_index action="rebuild" project="all"`.
+**Changing the model.** Vectors from different models (or sizes) cannot be compared. After changing the provider, model or dimensions, searches report that the index is incompatible until you either restore the previous settings or re-embed everything: `/asymptomatik-souvenir:souvenir-init` guides you, or ask Claude to run `souvenir_index action="rebuild" project="all"`. Re-embedding re-creates the chunks from the archive and embeds the excerpts of partial sessions again: nothing of your history is deleted.
 
 ## Usage
 
@@ -157,11 +161,12 @@ Filters are applied inside the vector search, so a filtered search still returns
 
 ### souvenir_read
 
-Read conversation entries from a session transcript.
+Read conversation entries from a session, from the archive (complete even when Claude Code deleted the transcript). A partial session shows its excerpts, marked as such.
 
 | Parameter | Description |
 |-----------|-------------|
 | `session_id` | Session UUID (from search results or `souvenir_sessions`) or `"current"` |
+| `saved_file` | A file Claude Code saved with a session (a large tool output or an image in `tool-results/`), by the path a tool result gives: returned from the archive, images as images. No `session_id` needed |
 | `project` | Project of the session. Default: current (other projects are searched if the session is not found) |
 | `around_uuid` | Center output around a specific entry UUID from search results (`max_entries=1` shows that entry in full) |
 | `from_line` | Start from JSONL line number. Omit to read from the end (most recent) |
@@ -187,7 +192,7 @@ List all sessions for a project.
 | `offset` | Skip the first N sessions; the footer gives the next page's offset |
 | `include_sidechains` | Include subagent sessions |
 
-Each session shows its entry count, the same count `souvenir_read` pages through.
+Each session shows its entry count, the same count `souvenir_read` pages through. Sessions whose transcript Claude Code deleted are listed from the archive; those deleted before 0.6.0 are marked **PARTIAL** (excerpts only) or **LOST** (nothing kept).
 
 ### souvenir_projects
 
@@ -195,18 +200,18 @@ List all projects with conversation history.
 
 | Parameter | Description |
 |-----------|-------------|
-| `action` | `list` (default) or `clean` (remove orphaned index data, after your confirmation) |
+| `action` | `list` (default) or `clean` (delete what souvenir kept of projects whose folder no longer exists, after your confirmation) |
 | `search` | Filter by path |
 
-Detects orphaned projects (folder deleted, transcripts kept) and orphaned index data (transcripts deleted by Claude Code: the index is then the last copy of those conversations). A project's path comes from Claude Code's session index or from its transcripts; a project whose path cannot be found is shown `[path unknown]` and never treated as orphaned.
+Lists the projects Claude Code still has and those it deleted whose sessions are in the archive. A project whose folder no longer exists is marked `[folder deleted]`; `clean` deletes its archived conversations, which can be the only copy left, so it only runs when you ask and confirm. A project's path comes from Claude Code's session index or from its transcripts; a project whose path cannot be found is shown `[path unknown]` and never cleaned.
 
 ### souvenir_index
 
-Manage the transcript index (`status` and `check` also report whether this project's file index matches the current model).
+Manage the transcript index (`status` and `check` also report whether this project's file index matches the current model). `status` also reports the archive: sessions, lines, size, saved files, transcripts Claude Code deleted.
 
 | Parameter | Description |
 |-----------|-------------|
-| `action` | `status`, `check` (settings, server, test embedding, index compatibility), `build` (incremental), `rebuild` (from scratch; after a model change it resets the whole index), `vacuum` (compact the database) |
+| `action` | `status`, `check` (settings, server, test embedding, index compatibility), `build` (incremental), `rebuild` (re-create the index from the archive; after a model change it resets the vectors of every project; the archive and partial sessions' excerpts are never deleted), `vacuum` (compact the database) |
 | `project` | Project filter. Use `"all"` for all projects |
 | `session_id` | Index a specific session only |
 
@@ -254,10 +259,10 @@ Manage project file indexing (docs, code, config) and file versioning.
 ## Privacy and data
 
 - Everything souvenir stores is local:
-  - **Transcript index**: `~/.claude/ASymptOmatik/souvenir/souvenir.db` (or `db_path`), shared by all projects
+  - **Archive and transcript index**: `~/.claude/ASymptOmatik/souvenir/souvenir.db` (or `db_path`), shared by all projects. It holds a full copy of your conversations (everything you and Claude wrote, tool calls and their results): protect it like the transcripts themselves
   - **Project file index and snapshots**: `<project>/.claude/ASymptOmatik/souvenir/docs.db`, one per project
 - With the default Ollama setup, no text leaves your machine. With the `openai` provider, the text of indexed chunks and of your search queries is sent to the configured server.
-- Deleting the transcript index is harmless: it is rebuilt from the transcripts on the next search. Deleting a project's `docs.db` also removes its list of added files and their snapshots: add the files again with `souvenir_docs`, the snapshots are lost.
+- **Do not delete `souvenir.db`**: it is the only copy of every session whose transcript Claude Code already deleted. Only the transcripts Claude Code still has would be archived again. Deleting a project's `docs.db` removes its list of added files and their snapshots: add the files again with `souvenir_docs`, the snapshots are lost.
 
 ## Troubleshooting
 
@@ -268,7 +273,7 @@ Manage project file indexing (docs, code, config) and file versioning.
 | "requires Node.js >= 22.13" | Update Node.js; Claude Code runs the plugin with the `node` on your `PATH` |
 | "no sqlite-vec binary for linux-arm64" | Platform not supported yet; text search still works |
 | Settings change has no effect | Run `/reload-plugins` (or restart Claude Code) after `/plugin configure` |
-| First start after upgrading is slow | One-time migration of the index (about a minute for ~500k chunks) |
+| First start after upgrading is slow | One-time migration of the index (about a minute for ~500k chunks), then the first archive of every transcript (about 2 minutes for 4 GB of transcripts) |
 
 Set `SOUVENIR_LOG_LEVEL=info` (or `debug`) in your environment to get detailed logs on stderr (`claude --debug` writes them to `~/.claude/debug/`).
 
@@ -276,10 +281,17 @@ Set `SOUVENIR_LOG_LEVEL=info` (or `debug`) in your environment to get detailed l
 
 ### Two databases
 
-- **Global DB** (`~/.claude/ASymptOmatik/souvenir/souvenir.db`) — transcript index, shared across all projects
+- **Global DB** (`~/.claude/ASymptOmatik/souvenir/souvenir.db`) — archive of every transcript and the transcript index, shared across all projects
 - **Local DB** (`<project>/.claude/ASymptOmatik/souvenir/docs.db`) — project file index and snapshots, per project
 
-All plugin data lives under `.claude/ASymptOmatik/`, the shared namespace for ASymptOmatik plugins. Transcripts live in the user profile (`~/.claude/`), so the transcript index stays alongside them; project file indexes stay in the project's `.claude/` directory. No project data leaks into the global store, no cross-project data leaks into a project folder.
+All plugin data lives under `.claude/ASymptOmatik/`, the shared namespace for ASymptOmatik plugins. Transcripts live in the user profile (`~/.claude/`), so their archive and index stay alongside them; project file indexes stay in the project's `.claude/` directory. No project data leaks into the global store, no cross-project data leaks into a project folder.
+
+### Archive
+
+- `transcript_files`: one row per transcript (`<session>.jsonl`, `<session>/subagents/*.jsonl`), with what was copied (bytes, lines) and the session's metadata gathered while copying (title, first prompt, dates, branch, entry count, whether Claude Code deleted the file).
+- `transcript_lines`: every line as Claude Code wrote it, compressed (deflate), numbered like the file's lines, so line numbers in results stay valid after the file is gone.
+- `transcript_attachments`: the other files of the session folders (large tool outputs and images in `tool-results/`, subagent metadata).
+- Copying is incremental (from the last copied byte, complete lines only) and safe across processes (each batch checks that no other process copied it first). Nothing in the archive is changed or deleted by copying: a transcript that got smaller than what was copied is reported and left alone.
 
 ### Vector index
 
@@ -293,7 +305,7 @@ The current project is `CLAUDE_PROJECT_DIR`, which Claude Code gives the MCP ser
 
 ### Background indexing
 
-Hooks on Stop, UserPromptSubmit, PostToolUse and PreCompact start an asynchronous indexing run: at most one at a time across all sessions (PID lock), at least 30 s apart. It never blocks Claude; a failed run exits with an error on stderr. Inside the MCP server, index builds run one after the other (parallel searches would otherwise embed the same new messages twice).
+Hooks on Stop, UserPromptSubmit, PostToolUse and PreCompact start an asynchronous run: at most one at a time across all sessions (PID lock), at least 30 s apart. It archives every project's transcripts, then indexes the current project. It never blocks Claude; a failed run exits with an error on stderr. The MCP server does the same at startup and after its tool calls; inside it, archiving and index builds run one after the other (parallel searches would otherwise embed the same new messages twice).
 
 ### Multi-agent and multi-project
 
@@ -309,17 +321,21 @@ src/
 ├── index.ts               # MCP server + tool definitions
 ├── resources.ts           # Past sessions as MCP resources (@ mentions)
 ├── prompts.ts             # MCP prompts: recap, why
-├── background-index.ts    # Hook entry point: debounced background indexing
+├── background-index.ts    # Hook entry point: debounced background archiving and indexing
 ├── config.ts              # Project detection + effective configuration
 ├── options.ts             # Plugin options (userConfig) parsing
+├── archive/
+│   ├── archiver.ts        # Copies Claude Code's transcripts and saved files into the archive
+│   ├── store.ts           # Archive tables: lines, transcripts, saved files
+│   └── catalog.ts         # Sessions and projects (archived, partial, lost)
 ├── tools/                 # One handler per MCP tool (+ helpers.ts, confirm.ts for confirmations)
-├── transcript/            # Project/session discovery, JSONL parser, formatting
+├── transcript/            # Claude Code's files, parser of archived transcripts, formatting
 ├── indexer/background.ts  # In-server background indexing scheduler
 ├── db/
 │   ├── sqlite.ts          # node:sqlite connection, sqlite-vec loading, transactions
 │   ├── identity.ts        # Embedding identity of an index, vector table helpers
-│   ├── schema.ts          # Transcript DB schema
-│   ├── store.ts           # Transcript DB: migration, vectors, search
+│   ├── schema.ts          # Global DB schema (archive + index)
+│   ├── store.ts           # Global DB: migrations, chunks, vectors, search
 │   └── indexer.ts         # Transcript indexer
 ├── docs/                  # Project file index: schema, store, chunker, indexer, diff
 ├── embedding/
@@ -327,7 +343,7 @@ src/
 │   ├── models.ts          # Known models and their input prefixes
 │   ├── ollama.ts          # Ollama provider (default)
 │   ├── openai.ts          # OpenAI-compatible provider
-│   └── chunker.ts         # Transcript → chunks
+│   └── chunker.ts         # Archived transcript → chunks (long exchanges in overlapping parts)
 ├── search/                # Text and semantic search, density boost
 └── utils/                 # Logger, paths, one-at-a-time runs (serial.ts)
 ```

@@ -1,9 +1,10 @@
 import type { SQLInputValue } from 'node:sqlite';
 import { existsSync, statSync as fsStatSync } from 'fs';
-import { getDbPath } from '../utils/paths.js';
+import { isAbsolute, relative, sep } from 'path';
+import { getDbPath, getProjectsDir } from '../utils/paths.js';
 import { logger } from '../utils/logger.js';
-import { CREATE_TABLES, SCHEMA_VERSION, CHUNK_VECTORS, LEGACY_VEC_TABLE, createChunkVectorsTable } from './schema.js';
-import { type Db, openDatabase, inTransaction, vectorBlob, getRow } from './sqlite.js';
+import { CREATE_TABLES, CREATE_INDEXES, SCHEMA_VERSION, CHUNK_VECTORS, LEGACY_VEC_TABLE, createChunkVectorsTable } from './schema.js';
+import { type Db, openDatabase, inTransaction, vectorBlob, getRow, allRows, iterateRows } from './sqlite.js';
 import {
   IndexMismatchError, assertSameIdentity, deleteOrphanVectors, getStoredIdentity, migrateLegacyIdentity,
   setStoredIdentity, tableExists, vectorTableDimensions,
@@ -16,10 +17,11 @@ export interface ChunkRow {
   project_dir: string;
   entry_uuid: string | null;
   role: string | null;
+  /** The text embedded for this chunk (one part of a long exchange, see embedding/chunker.ts) */
   content_text: string;
-  embed_text: string;
   timestamp: string | null;
   line_number: number | null;
+  part: number;
 }
 
 export interface VecSearchResult extends ChunkRow {
@@ -27,6 +29,7 @@ export interface VecSearchResult extends ChunkRow {
 }
 
 export interface IndexStateRow {
+  /** Archived transcript (transcript_files.file_key) */
   file_path: string;
   file_size: number;
   last_line: number;
@@ -37,6 +40,9 @@ let _db: Db | null = null;
 
 /** Hint appended to index mismatch errors: a model change requires re-embedding everything. */
 const REBUILD_HINT = 'rebuild it with souvenir_index action="rebuild" project="all" (re-embeds every indexed chunk)';
+
+/** Metadata key marking a project whose chunks lack vectors (kept through an embedding model change). */
+const PENDING_VECTORS_KEY = 'pending_vectors:';
 
 /**
  * Get or create the SQLite database connection. The vector table is created by
@@ -50,6 +56,9 @@ export function getDb(): Db {
     db.exec(CREATE_TABLES);
     migrateLegacyIdentity(db);
     migrateLegacyVectors(db);
+    migrateChunksTable(db);
+    migrateIndexStateKeys(db);
+    db.exec(CREATE_INDEXES);
 
     // Store schema version
     db.prepare('INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)').run(
@@ -68,10 +77,10 @@ export function getDb(): Db {
 }
 
 /**
- * Which speakers a chunk contains (a "turn" is a user message plus the reply that follows it).
- * BigInt because sqlite-vec INTEGER columns reject JS numbers (bound as REAL).
+ * Which speakers a chunk of schema 2 contains (a "turn" is a user message plus the reply that
+ * follows it). BigInt because sqlite-vec INTEGER columns reject JS numbers (bound as REAL).
  */
-function chunkSpeakers(role: string | null, contentText: string): { hasUser: bigint; hasAssistant: bigint } {
+function legacyChunkSpeakers(role: string | null, contentText: string): { hasUser: bigint; hasAssistant: bigint } {
   if (role === 'turn') return { hasUser: 1n, hasAssistant: contentText.includes('\nASSISTANT: ') ? 1n : 0n };
   if (role === 'assistant') return { hasUser: 0n, hasAssistant: 1n };
   return { hasUser: 0n, hasAssistant: 0n };
@@ -107,7 +116,7 @@ function migrateLegacyVectors(db: Db): void {
           const id = BigInt(r.chunk_id);
           const vector = legacyVector.get(id) as { embedding: Uint8Array } | undefined;
           if (!vector || alreadyMoved.get(id)) continue;
-          const { hasUser, hasAssistant } = chunkSpeakers(r.role, r.content_text);
+          const { hasUser, hasAssistant } = legacyChunkSpeakers(r.role, r.content_text);
           insert.run(id, r.project_dir, r.session_id, r.role ?? '', hasUser, hasAssistant, r.timestamp ?? '', vector.embedding);
           moved++;
         }
@@ -126,11 +135,70 @@ function migrateLegacyVectors(db: Db): void {
 }
 
 /**
+ * Schema 2 chunks kept a second, shorter copy of their text (embed_text) and one chunk per entry.
+ * Re-create the table without embed_text and with a part number (a long exchange is embedded in
+ * several parts), keeping every chunk_id so that the vectors stay attached to their chunks.
+ */
+function migrateChunksTable(db: Db): void {
+  const columns = allRows<{ name: string }>(db, 'PRAGMA table_info(chunks)').map((c) => c.name);
+  if (!columns.includes('embed_text')) return;
+
+  const started = Date.now();
+  inTransaction(db, () => {
+    db.exec(`
+      CREATE TABLE chunks_v3 (
+        chunk_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT NOT NULL,
+        project_dir TEXT NOT NULL,
+        entry_uuid TEXT,
+        role TEXT,
+        content_text TEXT NOT NULL,
+        timestamp TEXT,
+        line_number INTEGER,
+        part INTEGER NOT NULL DEFAULT 0,
+        UNIQUE(session_id, line_number, part)
+      );
+      INSERT INTO chunks_v3 (chunk_id, session_id, project_dir, entry_uuid, role, content_text, timestamp, line_number, part)
+        SELECT chunk_id, session_id, project_dir, entry_uuid, role, content_text, timestamp, line_number, 0 FROM chunks;
+      DROP TABLE chunks;
+      ALTER TABLE chunks_v3 RENAME TO chunks;
+    `);
+    // Ids above the highest kept one may be reused: no vector may remain for them
+    if (tableExists(db, CHUNK_VECTORS)) {
+      const orphans = deleteOrphanVectors(db, CHUNK_VECTORS, 'chunks');
+      if (orphans > 0) logger.info(`Deleted ${orphans} vectors of chunks that no longer exist`);
+    }
+  });
+  db.exec('PRAGMA incremental_vacuum');
+  db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
+  logger.info(`Chunks table migrated to schema 3 in ${Date.now() - started} ms`);
+}
+
+/**
+ * Schema 2 keyed the index progress by the transcript's absolute path; it is now keyed by the
+ * archived transcript (path relative to the projects folder), whose line numbers are the same.
+ */
+function migrateIndexStateKeys(db: Db): void {
+  const rows = allRows<{ file_path: string }>(db, 'SELECT file_path FROM index_state').filter((r) => isAbsolute(r.file_path));
+  if (rows.length === 0) return;
+  const projectsDir = getProjectsDir();
+  const rename = db.prepare('UPDATE OR REPLACE index_state SET file_path = ? WHERE file_path = ?');
+  inTransaction(db, () => {
+    for (const { file_path } of rows) {
+      rename.run(relative(projectsDir, file_path).split(sep).join('/'), file_path);
+    }
+  });
+  logger.info(`Index progress of ${rows.length} transcripts keyed by archive path`);
+}
+
+/**
  * Make the vector table usable for the given embedding identity before indexing.
  * - No index yet: create the vector table with the identity's size.
  * - Same identity: nothing to do.
- * - Different identity: throw IndexMismatchError, unless resetAll, which drops every vector and
- *   chunk (they all need re-embedding with the new model) and recreates the table.
+ * - Different identity: throw IndexMismatchError, unless resetAll, which drops every vector (they
+ *   all need re-embedding with the new model) and recreates the table. Chunks of archived
+ *   transcripts are deleted (re-created from the archive); the chunks of partial sessions are the
+ *   only trace of them and are kept, marked to be embedded again (see getChunksWithoutVectors).
  */
 export function prepareVectorIndex(identity: EmbeddingIdentity, options: { resetAll?: boolean } = {}): void {
   const db = getDb();
@@ -142,8 +210,12 @@ export function prepareVectorIndex(identity: EmbeddingIdentity, options: { reset
   inTransaction(db, () => {
     if (options.resetAll) {
       if (tableExists(db, CHUNK_VECTORS)) db.exec(`DROP TABLE ${CHUNK_VECTORS}`);
-      db.prepare('DELETE FROM chunks').run();
-      db.prepare('DELETE FROM index_state').run();
+      db.exec('DELETE FROM chunks WHERE session_id IN (SELECT session_id FROM transcript_files)');
+      db.exec('DELETE FROM index_state');
+      const markPending = db.prepare('INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)');
+      for (const { project_dir } of allRows<{ project_dir: string }>(db, 'SELECT DISTINCT project_dir FROM chunks')) {
+        markPending.run(PENDING_VECTORS_KEY + project_dir, new Date().toISOString());
+      }
     }
     if (!tableExists(db, CHUNK_VECTORS)) db.exec(createChunkVectorsTable(identity.dimensions));
     setStoredIdentity(db, identity);
@@ -178,22 +250,23 @@ export function closeDb(): void {
   }
 }
 
+export interface NewChunk {
+  session_id: string;
+  project_dir: string;
+  entry_uuid?: string;
+  role: string;
+  content_text: string;
+  timestamp?: string;
+  line_number: number;
+  part: number;
+  hasUser: boolean;
+  hasAssistant: boolean;
+}
+
 /**
  * Insert chunks with their embeddings in a single transaction.
  */
-export function insertChunks(
-  chunks: Array<{
-    session_id: string;
-    project_dir: string;
-    entry_uuid?: string;
-    role?: string;
-    content_text: string;
-    embed_text: string;
-    timestamp?: string;
-    line_number?: number;
-  }>,
-  embeddings: Float32Array[],
-): number {
+export function insertChunks(chunks: NewChunk[], embeddings: Float32Array[]): number {
   const db = getDb();
 
   if (chunks.length !== embeddings.length) {
@@ -201,12 +274,7 @@ export function insertChunks(
   }
 
   const insertChunk = db.prepare(`
-    INSERT OR IGNORE INTO chunks (session_id, project_dir, entry_uuid, role, content_text, embed_text, timestamp, line_number)
-    VALUES (@session_id, @project_dir, @entry_uuid, @role, @content_text, @embed_text, @timestamp, @line_number)
-  `);
-
-  const insertVec = db.prepare(`
-    INSERT INTO ${CHUNK_VECTORS} (chunk_id, project_dir, session_id, role, has_user, has_assistant, timestamp, embedding)
+    INSERT OR IGNORE INTO chunks (session_id, project_dir, entry_uuid, role, content_text, timestamp, line_number, part)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
@@ -215,30 +283,70 @@ export function insertChunks(
   inTransaction(db, () => {
     for (let i = 0; i < chunks.length; i++) {
       const chunk = chunks[i];
-      const result = insertChunk.run({
-        session_id: chunk.session_id,
-        project_dir: chunk.project_dir,
-        entry_uuid: chunk.entry_uuid || null,
-        role: chunk.role || null,
-        content_text: chunk.content_text,
-        embed_text: chunk.embed_text,
-        timestamp: chunk.timestamp || null,
-        line_number: chunk.line_number ?? null,
-      });
+      const result = insertChunk.run(
+        chunk.session_id, chunk.project_dir, chunk.entry_uuid || null, chunk.role, chunk.content_text,
+        chunk.timestamp || null, chunk.line_number, chunk.part,
+      );
 
       if (result.changes > 0) {
-        const { hasUser, hasAssistant } = chunkSpeakers(chunk.role ?? null, chunk.content_text);
-        // sqlite-vec only accepts integer primary keys: a JS number binds as REAL, BigInt as INTEGER
-        insertVec.run(
-          BigInt(result.lastInsertRowid), chunk.project_dir, chunk.session_id, chunk.role ?? '',
-          hasUser, hasAssistant, chunk.timestamp ?? '', vectorBlob(embeddings[i]),
-        );
+        insertVector(db, BigInt(result.lastInsertRowid), chunk, chunk.hasUser, chunk.hasAssistant, embeddings[i]);
         inserted++;
       }
     }
   });
 
   return inserted;
+}
+
+/** sqlite-vec only accepts integer primary keys: a JS number binds as REAL, BigInt as INTEGER. */
+function insertVector(
+  db: Db,
+  chunkId: bigint,
+  chunk: { project_dir: string; session_id: string; role: string | null; timestamp?: string | null },
+  hasUser: boolean,
+  hasAssistant: boolean,
+  embedding: Float32Array,
+): void {
+  db.prepare(`
+    INSERT INTO ${CHUNK_VECTORS} (chunk_id, project_dir, session_id, role, has_user, has_assistant, timestamp, embedding)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    chunkId, chunk.project_dir, chunk.session_id, chunk.role ?? '',
+    hasUser ? 1n : 0n, hasAssistant ? 1n : 0n, chunk.timestamp ?? '', vectorBlob(embedding),
+  );
+}
+
+/** Whether an embedding model change left chunks of this project without vectors (see prepareVectorIndex). */
+export function hasPendingVectors(projectDir: string): boolean {
+  return getRow(getDb(), 'SELECT 1 AS pending FROM metadata WHERE key = ?', PENDING_VECTORS_KEY + projectDir) !== null;
+}
+
+/**
+ * One page of a project's chunks, in chunk id order after afterChunkId: those without a vector,
+ * and the last chunk id of the page (null when the pages are done).
+ */
+export function getChunksWithoutVectors(projectDir: string, afterChunkId: number, limit: number): { missing: ChunkRow[]; lastChunkId: number | null } {
+  const db = getDb();
+  const page = allRows<ChunkRow>(db, 'SELECT * FROM chunks WHERE project_dir = ? AND chunk_id > ? ORDER BY chunk_id LIMIT ?', projectDir, afterChunkId, limit);
+  if (page.length === 0) return { missing: [], lastChunkId: null };
+  const hasVector = db.prepare(`SELECT 1 FROM ${CHUNK_VECTORS} WHERE chunk_id = ?`);
+  return { missing: page.filter((c) => !hasVector.get(BigInt(c.chunk_id))), lastChunkId: page[page.length - 1].chunk_id };
+}
+
+/** Give vectors to existing chunks (re-embedded after a model change). */
+export function insertVectors(chunks: ChunkRow[], embeddings: Float32Array[]): void {
+  const db = getDb();
+  inTransaction(db, () => {
+    chunks.forEach((c, i) => {
+      const { hasUser, hasAssistant } = legacyChunkSpeakers(c.role, c.content_text);
+      insertVector(db, BigInt(c.chunk_id), c, hasUser === 1n, hasAssistant === 1n, embeddings[i]);
+    });
+  });
+}
+
+/** The project's chunks all have vectors again. */
+export function clearPendingVectors(projectDir: string): void {
+  getDb().prepare('DELETE FROM metadata WHERE key = ?').run(PENDING_VECTORS_KEY + projectDir);
 }
 
 /**
@@ -284,23 +392,40 @@ export function searchSemantic(
   `).all(...params) as unknown as VecSearchResult[];
 }
 
-/**
- * Get index state for a file.
- */
-export function getIndexState(filePath: string): IndexStateRow | null {
-  const db = getDb();
-  return getRow<IndexStateRow>(db, 'SELECT * FROM index_state WHERE file_path = ?', filePath);
+/** Every chunk of a session, in transcript order (the only content left of a partial session). */
+export function getSessionChunks(projectDir: string, sessionId: string): ChunkRow[] {
+  return allRows<ChunkRow>(getDb(), 'SELECT * FROM chunks WHERE project_dir = ? AND session_id = ? ORDER BY line_number, part', projectDir, sessionId);
 }
 
 /**
- * Update index state for a file.
+ * Chunks of the partial sessions of a project (sessions with no archived transcript) whose text
+ * matches, one at a time: LIKE for plain text (case-insensitive for ASCII), every chunk when the
+ * caller filters them itself (regex, case-insensitive text beyond ASCII).
  */
-export function setIndexState(filePath: string, fileSize: number, lastLine: number): void {
+export function iteratePartialSessionChunks(projectDir: string, likePattern: string | null): Generator<ChunkRow> {
+  const archived = 'session_id NOT IN (SELECT session_id FROM transcript_files WHERE project_dir = ?)';
+  return likePattern === null
+    ? iterateRows<ChunkRow>(getDb(), `SELECT * FROM chunks WHERE project_dir = ? AND ${archived}`, projectDir, projectDir)
+    : iterateRows<ChunkRow>(getDb(), `SELECT * FROM chunks WHERE project_dir = ? AND ${archived} AND content_text LIKE ? ESCAPE '\\'`, projectDir, projectDir, likePattern);
+}
+
+/**
+ * Get index state for an archived transcript.
+ */
+export function getIndexState(fileKey: string): IndexStateRow | null {
+  const db = getDb();
+  return getRow<IndexStateRow>(db, 'SELECT * FROM index_state WHERE file_path = ?', fileKey);
+}
+
+/**
+ * Update index state for an archived transcript.
+ */
+export function setIndexState(fileKey: string, archivedBytes: number, lastLine: number): void {
   const db = getDb();
   db.prepare(`
     INSERT OR REPLACE INTO index_state (file_path, file_size, last_line, indexed_at)
     VALUES (?, ?, ?, ?)
-  `).run(filePath, fileSize, lastLine, new Date().toISOString());
+  `).run(fileKey, archivedBytes, lastLine, new Date().toISOString());
 }
 
 /**
@@ -312,7 +437,6 @@ export function getIndexStatus(projectDir?: string): {
   projects: Array<{
     projectDir: string;
     chunkCount: number;
-    fileCount: number;
     lastIndexed: string | null;
   }>;
   dbSizeBytes: number;
@@ -332,29 +456,19 @@ export function getIndexStatus(projectDir?: string): {
     SELECT COUNT(*) as total FROM index_state
   `).get() as { total: number };
 
-  const projects = chunkStats.map((row) => {
-    const lastIndexed = db.prepare(`
-      SELECT MAX(indexed_at) as last
-      FROM index_state
-      WHERE file_path LIKE ?
-    `).get(`%${row.project_dir}%`) as { last: string | null } | undefined;
-
-    return {
-      projectDir: row.project_dir,
-      chunkCount: row.chunk_count,
-      fileCount: 0, // computed below
-      lastIndexed: lastIndexed?.last || null,
-    };
-  });
+  const lastIndexedOf = db.prepare("SELECT MAX(indexed_at) as last FROM index_state WHERE file_path LIKE ? ESCAPE '\\'");
+  const projects = chunkStats.map((row) => ({
+    projectDir: row.project_dir,
+    chunkCount: row.chunk_count,
+    lastIndexed: (lastIndexedOf.get(`${escapeLike(row.project_dir)}/%`) as { last: string | null } | undefined)?.last || null,
+  }));
 
   const totalChunks = chunkStats.reduce((sum, r) => sum + r.chunk_count, 0);
 
-  // Get DB file size
-  const dbPath = getDbPath();
   let dbSizeBytes = 0;
   try {
-    dbSizeBytes = fsStatSync(dbPath).size;
-  } catch { /* ignore */ }
+    dbSizeBytes = fsStatSync(getDbPath()).size;
+  } catch { /* not created yet */ }
 
   return {
     totalChunks,
@@ -364,28 +478,63 @@ export function getIndexStatus(projectDir?: string): {
   };
 }
 
+/** A string matched literally by LIKE … ESCAPE '\'. */
+export function escapeLike(value: string): string {
+  return value.replace(/[\\%_]/g, (c) => `\\${c}`);
+}
+
 /**
- * Clear all indexed data for a project.
+ * Delete the chunks of a project's archived transcripts and their index progress, to re-create
+ * them from the archive (rebuild). The chunks of partial sessions are kept: nothing can re-create
+ * them.
  */
-export function clearProject(projectDir: string): void {
+export function clearArchivedChunks(projectDir: string, sessionId?: string): void {
+  const db = getDb();
+  const sessionFilter = sessionId ? 'AND session_id = ?' : '';
+  const params = sessionId ? [projectDir, projectDir, sessionId] : [projectDir, projectDir];
+
+  inTransaction(db, () => {
+    const chunkIds = allRows<{ chunk_id: number }>(db, `
+      SELECT chunk_id FROM chunks
+      WHERE project_dir = ? AND session_id IN (SELECT session_id FROM transcript_files WHERE project_dir = ?) ${sessionFilter}`, ...params);
+    if (tableExists(db, CHUNK_VECTORS)) {
+      const deleteVector = db.prepare(`DELETE FROM ${CHUNK_VECTORS} WHERE chunk_id = ?`);
+      for (const { chunk_id } of chunkIds) deleteVector.run(BigInt(chunk_id));
+    }
+    const deleteChunk = db.prepare('DELETE FROM chunks WHERE chunk_id = ?');
+    for (const { chunk_id } of chunkIds) deleteChunk.run(chunk_id);
+
+    if (sessionId) {
+      db.prepare('DELETE FROM index_state WHERE file_path IN (SELECT file_key FROM transcript_files WHERE project_dir = ? AND (session_id = ? OR parent_session_id = ?))')
+        .run(projectDir, sessionId, sessionId);
+    } else {
+      db.prepare('DELETE FROM index_state WHERE file_path IN (SELECT file_key FROM transcript_files WHERE project_dir = ?)').run(projectDir);
+    }
+  });
+
+  incrementalVacuum();
+}
+
+/**
+ * Delete everything souvenir kept of a project: archived transcripts and files, chunks, vectors.
+ * For a project whose transcripts Claude Code deleted, this is the last copy of its conversations:
+ * only on the user's explicit request (souvenir_projects action="clean").
+ */
+export function deleteProject(projectDir: string): void {
   const db = getDb();
 
   inTransaction(db, () => {
-    // Get chunk IDs to remove from vec table
-    const chunkIds = db.prepare('SELECT chunk_id FROM chunks WHERE project_dir = ?')
-      .all(projectDir) as Array<{ chunk_id: number }>;
-
+    const chunkIds = allRows<{ chunk_id: number }>(db, 'SELECT chunk_id FROM chunks WHERE project_dir = ?', projectDir);
     if (tableExists(db, CHUNK_VECTORS)) {
       const deleteVector = db.prepare(`DELETE FROM ${CHUNK_VECTORS} WHERE chunk_id = ?`);
-      for (const { chunk_id } of chunkIds) {
-        deleteVector.run(BigInt(chunk_id));
-      }
+      for (const { chunk_id } of chunkIds) deleteVector.run(BigInt(chunk_id));
     }
-
     db.prepare('DELETE FROM chunks WHERE project_dir = ?').run(projectDir);
-
-    // Clear index state for files in this project
-    db.prepare('DELETE FROM index_state WHERE file_path LIKE ?').run(`%${projectDir}%`);
+    db.prepare('DELETE FROM index_state WHERE file_path IN (SELECT file_key FROM transcript_files WHERE project_dir = ?)').run(projectDir);
+    db.prepare('DELETE FROM transcript_lines WHERE file_key IN (SELECT file_key FROM transcript_files WHERE project_dir = ?)').run(projectDir);
+    db.prepare('DELETE FROM transcript_files WHERE project_dir = ?').run(projectDir);
+    db.prepare('DELETE FROM transcript_attachments WHERE project_dir = ?').run(projectDir);
+    db.prepare('DELETE FROM metadata WHERE key = ?').run(PENDING_VECTORS_KEY + projectDir);
   });
 
   incrementalVacuum();

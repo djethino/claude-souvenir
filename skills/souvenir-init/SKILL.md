@@ -42,7 +42,7 @@ Settings are plugin options (`/plugin configure`). Ask only for what the user wa
 | `embedding_model` | Model name as the server knows it | `embeddinggemma` / `text-embedding-3-small` |
 | `embedding_dimensions` | Shorter vectors, only for models that support it (OpenAI text-embedding-3, Matryoshka models) | native size |
 | `embedding_api_key` | Only if the server requires a key | none |
-| `db_path` | Absolute path of the transcript index database | `<Claude config dir>/ASymptOmatik/souvenir/souvenir.db` |
+| `db_path` | Absolute path of the database: the archive of every session (the only copy once Claude Code deletes its transcripts) and the search index. Changing it starts an empty archive: say so, and that the old file must be moved to the new path to keep the history | `<Claude config dir>/ASymptOmatik/souvenir/souvenir.db` |
 
 Known models get their recommended input prefixes automatically (embeddinggemma, nomic-embed-text, mxbai-embed-large, snowflake-arctic-embed, bge, e5, qwen3-embedding, all-minilm, granite-embedding, OpenAI text-embedding-3...). Other models work, embedded without prefixes.
 
@@ -59,7 +59,7 @@ Changing the provider, model or dimensions makes existing indexes incompatible: 
 
 - Current project only (quick): `souvenir_index action="build"`.
 - All projects: `souvenir_index action="build" project="all"`. It embeds every past conversation and can take a long time with a large history; ask before starting.
-- After a model change (index INCOMPATIBLE): `souvenir_index action="rebuild" project="all"` re-embeds everything. Ask first and say it replaces the whole index.
+- After a model change (index INCOMPATIBLE): `souvenir_index action="rebuild" project="all"` re-embeds everything from the archive. Ask first and say it replaces the whole search index and can take hours with a large history; the archived conversations themselves are not touched.
 
 Progress is reported while it runs; indexing then keeps itself up to date in the background after every interaction.
 

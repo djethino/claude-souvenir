@@ -2,7 +2,7 @@ import { createRequire as __souvenirCreateRequire } from 'module';
 const require = __souvenirCreateRequire(import.meta.url);
 
 // src/background-index.ts
-import { readFileSync as readFileSync4, writeFileSync, writeSync, mkdirSync as mkdirSync2, unlinkSync, openSync as openSync2, closeSync as closeSync2 } from "fs";
+import { readFileSync as readFileSync5, writeFileSync, writeSync, mkdirSync as mkdirSync2, unlinkSync, openSync as openSync2, closeSync as closeSync2 } from "fs";
 import { join as join6 } from "path";
 
 // src/utils/paths.ts
@@ -58,6 +58,9 @@ function getDbPath() {
 }
 function cwdToProjectDir(cwd) {
   return cwd.replace(/[\\/]+$/, "").replace(/[^a-zA-Z0-9]/g, "-");
+}
+function isProjectPath(path, projectDir) {
+  return cwdToProjectDir(path).toLowerCase() === projectDir.toLowerCase();
 }
 function getProjectTranscriptDir(projectDir) {
   return join(getProjectsDir(), projectDir);
@@ -421,10 +424,6 @@ function createEmbeddingProvider(config) {
   }
 }
 
-// src/db/indexer.ts
-import { statSync as statSync2 } from "fs";
-import { basename as basename2 } from "path";
-
 // src/utils/serial.ts
 function serialized(fn) {
   let queue = Promise.resolve();
@@ -436,211 +435,14 @@ function serialized(fn) {
   };
 }
 
-// src/transcript/discovery.ts
-import { readFileSync, readdirSync, existsSync as existsSync2, statSync, openSync, readSync, closeSync } from "fs";
-import { join as join3, basename } from "path";
+// src/archive/store.ts
+import { deflateRawSync, inflateRawSync } from "zlib";
 
-// src/transcript/parser.ts
-import { createReadStream } from "fs";
-import { createInterface } from "readline";
-var SKIPPED_LINE_MARKER = '"file-history-snapshot"';
-var DEFAULT_ENTRY_TYPES = ["user", "assistant", "summary"];
-async function* parseTranscript(filePath, options = {}) {
-  const {
-    includeTypes = DEFAULT_ENTRY_TYPES,
-    fromLine = 1,
-    maxEntries,
-    containsText,
-    caseInsensitive = true
-  } = options;
-  const searchText = containsText && caseInsensitive ? containsText.toLowerCase() : containsText;
-  let lineNumber = 0;
-  let yielded = 0;
-  const stream = createReadStream(filePath, { encoding: "utf-8" });
-  const rl = createInterface({ input: stream, crlfDelay: Infinity });
-  try {
-    for await (const line of rl) {
-      lineNumber++;
-      if (lineNumber < fromLine) continue;
-      if (maxEntries && yielded >= maxEntries) break;
-      if (!line.trim()) continue;
-      if (line.includes(SKIPPED_LINE_MARKER)) continue;
-      if (searchText) {
-        const haystack = caseInsensitive ? line.toLowerCase() : line;
-        if (!haystack.includes(searchText)) continue;
-      }
-      let entry;
-      try {
-        entry = JSON.parse(line);
-      } catch {
-        logger.debug(`Skipping corrupt line ${lineNumber} in ${filePath}`);
-        continue;
-      }
-      if (!includeTypes.includes(entry.type)) continue;
-      yielded++;
-      yield { entry, lineNumber, rawLength: line.length };
-    }
-  } finally {
-    rl.close();
-    stream.destroy();
-  }
-}
-function extractText(entry) {
-  switch (entry.type) {
-    case "user": {
-      const user = entry;
-      if (typeof user.message.content === "string") {
-        return user.message.content;
-      }
-      return user.message.content.map((block) => {
-        if ("text" in block) return block.text;
-        if ("content" in block) return block.content;
-        return "";
-      }).filter(Boolean).join("\n");
-    }
-    case "assistant": {
-      const asst = entry;
-      return asst.message.content.map((block) => {
-        if (block.type === "text") return block.text;
-        if (block.type === "tool_use") {
-          const tool = block;
-          return `[Tool: ${tool.name}]`;
-        }
-        return "";
-      }).filter(Boolean).join("\n");
-    }
-    case "summary":
-      return entry.summary || "";
-    default:
-      return "";
-  }
-}
-
-// src/transcript/entry-count.ts
-var CHUNK_SIZE = 1024 * 1024;
-var COUNTED_TYPES = new Set(DEFAULT_ENTRY_TYPES);
-
-// src/transcript/discovery.ts
-function listTranscriptFiles(projectDir, options = {}) {
-  const dir = getProjectTranscriptDir(projectDir);
-  if (!existsSync2(dir)) return [];
-  const mainFiles = readdirSync(dir).filter((f) => f.endsWith(".jsonl")).map((f) => join3(dir, f));
-  if (!options.includeSubagents) return mainFiles;
-  const subagentFiles = [];
-  const entries = readdirSync(dir, { withFileTypes: true });
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
-    if (!entry.name.match(/^[0-9a-f]{8}-/)) continue;
-    if (options.sessionId && entry.name !== options.sessionId) continue;
-    const subagentDir = join3(dir, entry.name, "subagents");
-    if (!existsSync2(subagentDir)) continue;
-    try {
-      const agentFiles = readdirSync(subagentDir).filter((f) => {
-        if (!f.endsWith(".jsonl")) return false;
-        if (f.includes("aprompt_suggestion")) return false;
-        return true;
-      }).map((f) => join3(subagentDir, f));
-      subagentFiles.push(...agentFiles);
-    } catch (err) {
-      logger.warn(`Error reading subagents for ${entry.name}:`, err);
-    }
-  }
-  return [...mainFiles, ...subagentFiles];
-}
-
-// src/embedding/chunker.ts
-var MAX_EMBED_CHARS = 1600;
-var MAX_CONTENT_CHARS = 2e3;
-function truncateForEmbed(text, maxChars) {
-  if (text.length <= maxChars) return text;
-  const truncated = text.slice(0, maxChars);
-  const lastSpace = truncated.lastIndexOf(" ");
-  return lastSpace > maxChars * 0.7 ? truncated.slice(0, lastSpace) : truncated;
-}
-async function chunkTranscript(filePath, sessionId, projectDir, options = {}) {
-  const chunks = [];
-  let lastLine = 0;
-  const entries = [];
-  const stream = parseTranscript(filePath, {
-    includeTypes: ["user", "assistant", "summary"],
-    fromLine: options.fromLine
-  });
-  for await (const parsed of stream) {
-    entries.push(parsed);
-    lastLine = Math.max(lastLine, parsed.lineNumber);
-  }
-  let i = 0;
-  while (i < entries.length) {
-    const current = entries[i];
-    const entry = current.entry;
-    if (entry.type === "summary") {
-      const text = entry.summary || "";
-      if (text.trim()) {
-        chunks.push({
-          session_id: sessionId,
-          project_dir: projectDir,
-          entry_uuid: entry.uuid,
-          role: "summary",
-          content_text: truncateForEmbed(text, MAX_CONTENT_CHARS),
-          embed_text: truncateForEmbed(text, MAX_EMBED_CHARS),
-          timestamp: entry.timestamp,
-          line_number: current.lineNumber
-        });
-      }
-      i++;
-      continue;
-    }
-    if (entry.type === "user") {
-      const userText = extractText(entry);
-      let turnText = userText;
-      let contentParts = [`USER: ${userText}`];
-      if (i + 1 < entries.length && entries[i + 1].entry.type === "assistant") {
-        const assistantEntry = entries[i + 1].entry;
-        const assistantText = extractText(assistantEntry);
-        turnText += "\n" + assistantText;
-        contentParts.push(`ASSISTANT: ${assistantText}`);
-        i++;
-      }
-      if (turnText.trim()) {
-        chunks.push({
-          session_id: sessionId,
-          project_dir: projectDir,
-          entry_uuid: entry.uuid,
-          role: "turn",
-          content_text: truncateForEmbed(contentParts.join("\n"), MAX_CONTENT_CHARS),
-          embed_text: truncateForEmbed(turnText, MAX_EMBED_CHARS),
-          timestamp: entry.timestamp,
-          line_number: current.lineNumber
-        });
-      }
-      i++;
-      continue;
-    }
-    if (entry.type === "assistant") {
-      const text = extractText(entry);
-      if (text.trim()) {
-        chunks.push({
-          session_id: sessionId,
-          project_dir: projectDir,
-          entry_uuid: entry.uuid,
-          role: "assistant",
-          content_text: truncateForEmbed(`ASSISTANT: ${text}`, MAX_CONTENT_CHARS),
-          embed_text: truncateForEmbed(text, MAX_EMBED_CHARS),
-          timestamp: entry.timestamp,
-          line_number: current.lineNumber
-        });
-      }
-      i++;
-      continue;
-    }
-    i++;
-  }
-  logger.debug(`Chunked ${filePath}: ${entries.length} entries -> ${chunks.length} chunks`);
-  return { chunks, lastLine };
-}
+// src/db/store.ts
+import { isAbsolute as isAbsolute2, relative, sep } from "path";
 
 // src/db/schema.ts
-var SCHEMA_VERSION = 2;
+var SCHEMA_VERSION = 3;
 var CREATE_TABLES = `
   CREATE TABLE IF NOT EXISTS metadata (
     key TEXT PRIMARY KEY,
@@ -654,10 +456,10 @@ var CREATE_TABLES = `
     entry_uuid TEXT,
     role TEXT,
     content_text TEXT NOT NULL,
-    embed_text TEXT NOT NULL,
     timestamp TEXT,
     line_number INTEGER,
-    UNIQUE(session_id, line_number)
+    part INTEGER NOT NULL DEFAULT 0,
+    UNIQUE(session_id, line_number, part)
   );
 
   CREATE TABLE IF NOT EXISTS index_state (
@@ -667,10 +469,51 @@ var CREATE_TABLES = `
     indexed_at TEXT NOT NULL
   );
 
+  CREATE TABLE IF NOT EXISTS transcript_files (
+    file_key TEXT PRIMARY KEY,
+    project_dir TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    parent_session_id TEXT,
+    archived_bytes INTEGER NOT NULL DEFAULT 0,
+    line_count INTEGER NOT NULL DEFAULT 0,
+    entry_count INTEGER NOT NULL DEFAULT 0,
+    first_timestamp TEXT,
+    last_timestamp TEXT,
+    first_prompt TEXT NOT NULL DEFAULT '',
+    title TEXT NOT NULL DEFAULT '',
+    custom_title TEXT NOT NULL DEFAULT '',
+    git_branch TEXT NOT NULL DEFAULT '',
+    project_path TEXT NOT NULL DEFAULT '',
+    source_gone_at TEXT,
+    error TEXT,
+    updated_at TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS transcript_lines (
+    file_key TEXT NOT NULL,
+    line_number INTEGER NOT NULL,
+    data BLOB NOT NULL,
+    PRIMARY KEY (file_key, line_number)
+  );
+
+  CREATE TABLE IF NOT EXISTS transcript_attachments (
+    file_key TEXT PRIMARY KEY,
+    project_dir TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    size INTEGER NOT NULL,
+    mtime_ms REAL NOT NULL,
+    data BLOB NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+`;
+var CREATE_INDEXES = `
   CREATE INDEX IF NOT EXISTS idx_chunks_session ON chunks(session_id);
   CREATE INDEX IF NOT EXISTS idx_chunks_project ON chunks(project_dir);
   CREATE INDEX IF NOT EXISTS idx_chunks_role ON chunks(role);
   CREATE INDEX IF NOT EXISTS idx_chunks_timestamp ON chunks(timestamp);
+  CREATE INDEX IF NOT EXISTS idx_tfiles_session ON transcript_files(session_id);
+  CREATE INDEX IF NOT EXISTS idx_tfiles_project ON transcript_files(project_dir);
+  CREATE INDEX IF NOT EXISTS idx_tattach_session ON transcript_attachments(session_id);
 `;
 var LEGACY_VEC_TABLE = "vec_chunks";
 var CHUNK_VECTORS = "chunk_vectors";
@@ -689,7 +532,7 @@ function createChunkVectorsTable(dimensions) {
 
 // src/db/sqlite.ts
 import { createRequire } from "module";
-import { existsSync as existsSync3, mkdirSync } from "fs";
+import { existsSync as existsSync2, mkdirSync } from "fs";
 import { dirname } from "path";
 import { fileURLToPath } from "url";
 var MIN_NODE = [22, 13];
@@ -709,14 +552,14 @@ function assertNodeVersion() {
 }
 function sqliteVecPath() {
   const platform = `${process.platform}-${process.arch}`;
-  const relative2 = VEC_BINARIES[platform];
-  if (!relative2) {
+  const relative4 = VEC_BINARIES[platform];
+  if (!relative4) {
     throw new Error(
       `souvenir: no sqlite-vec binary for ${platform} (supported: ${Object.keys(VEC_BINARIES).join(", ")})`
     );
   }
-  const path = fileURLToPath(new URL(`../vendor/sqlite-vec/bin/${relative2}`, import.meta.url));
-  if (!existsSync3(path)) {
+  const path = fileURLToPath(new URL(`../vendor/sqlite-vec/bin/${relative4}`, import.meta.url));
+  if (!existsSync2(path)) {
     throw new Error(`souvenir: sqlite-vec binary missing at ${path}`);
   }
   return path;
@@ -725,7 +568,7 @@ function openDatabase(dbPath, label) {
   assertNodeVersion();
   const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite");
   const dir = dirname(dbPath);
-  if (!existsSync3(dir)) {
+  if (!existsSync2(dir)) {
     mkdirSync(dir, { recursive: true });
   }
   logger.info(`Opening ${label} database at ${dbPath}`);
@@ -758,6 +601,16 @@ function getRow(db, sql, ...params) {
 }
 function allRows(db, sql, ...params) {
   return db.prepare(sql).all(...params);
+}
+var statementsInUse = /* @__PURE__ */ new Set();
+function* iterateRows(db, sql, ...params) {
+  const statement = db.prepare(sql);
+  statementsInUse.add(statement);
+  try {
+    for (const row of statement.iterate(...params)) yield row;
+  } finally {
+    statementsInUse.delete(statement);
+  }
 }
 function vectorBlob(vector) {
   return new Uint8Array(vector.buffer, vector.byteOffset, vector.byteLength);
@@ -824,6 +677,7 @@ function vectorTableDimensions(db, table) {
 // src/db/store.ts
 var _db = null;
 var REBUILD_HINT = 'rebuild it with souvenir_index action="rebuild" project="all" (re-embeds every indexed chunk)';
+var PENDING_VECTORS_KEY = "pending_vectors:";
 function getDb() {
   if (_db) return _db;
   const db = openDatabase(getDbPath(), "transcripts");
@@ -831,6 +685,9 @@ function getDb() {
     db.exec(CREATE_TABLES);
     migrateLegacyIdentity(db);
     migrateLegacyVectors(db);
+    migrateChunksTable(db);
+    migrateIndexStateKeys(db);
+    db.exec(CREATE_INDEXES);
     db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)").run(
       "schema_version",
       String(SCHEMA_VERSION)
@@ -843,7 +700,7 @@ function getDb() {
   logger.info("Database initialized");
   return db;
 }
-function chunkSpeakers(role, contentText) {
+function legacyChunkSpeakers(role, contentText) {
   if (role === "turn") return { hasUser: 1n, hasAssistant: contentText.includes("\nASSISTANT: ") ? 1n : 0n };
   if (role === "assistant") return { hasUser: 0n, hasAssistant: 1n };
   return { hasUser: 0n, hasAssistant: 0n };
@@ -870,7 +727,7 @@ function migrateLegacyVectors(db) {
           const id = BigInt(r.chunk_id);
           const vector = legacyVector.get(id);
           if (!vector || alreadyMoved.get(id)) continue;
-          const { hasUser, hasAssistant } = chunkSpeakers(r.role, r.content_text);
+          const { hasUser, hasAssistant } = legacyChunkSpeakers(r.role, r.content_text);
           insert.run(id, r.project_dir, r.session_id, r.role ?? "", hasUser, hasAssistant, r.timestamp ?? "", vector.embedding);
           moved++;
         }
@@ -885,6 +742,50 @@ function migrateLegacyVectors(db) {
   db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
   logger.info(`Moved ${moved} vectors from ${LEGACY_VEC_TABLE} to ${CHUNK_VECTORS} in ${Date.now() - started} ms`);
 }
+function migrateChunksTable(db) {
+  const columns = allRows(db, "PRAGMA table_info(chunks)").map((c) => c.name);
+  if (!columns.includes("embed_text")) return;
+  const started = Date.now();
+  inTransaction(db, () => {
+    db.exec(`
+      CREATE TABLE chunks_v3 (
+        chunk_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT NOT NULL,
+        project_dir TEXT NOT NULL,
+        entry_uuid TEXT,
+        role TEXT,
+        content_text TEXT NOT NULL,
+        timestamp TEXT,
+        line_number INTEGER,
+        part INTEGER NOT NULL DEFAULT 0,
+        UNIQUE(session_id, line_number, part)
+      );
+      INSERT INTO chunks_v3 (chunk_id, session_id, project_dir, entry_uuid, role, content_text, timestamp, line_number, part)
+        SELECT chunk_id, session_id, project_dir, entry_uuid, role, content_text, timestamp, line_number, 0 FROM chunks;
+      DROP TABLE chunks;
+      ALTER TABLE chunks_v3 RENAME TO chunks;
+    `);
+    if (tableExists(db, CHUNK_VECTORS)) {
+      const orphans = deleteOrphanVectors(db, CHUNK_VECTORS, "chunks");
+      if (orphans > 0) logger.info(`Deleted ${orphans} vectors of chunks that no longer exist`);
+    }
+  });
+  db.exec("PRAGMA incremental_vacuum");
+  db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+  logger.info(`Chunks table migrated to schema 3 in ${Date.now() - started} ms`);
+}
+function migrateIndexStateKeys(db) {
+  const rows = allRows(db, "SELECT file_path FROM index_state").filter((r) => isAbsolute2(r.file_path));
+  if (rows.length === 0) return;
+  const projectsDir = getProjectsDir();
+  const rename = db.prepare("UPDATE OR REPLACE index_state SET file_path = ? WHERE file_path = ?");
+  inTransaction(db, () => {
+    for (const { file_path } of rows) {
+      rename.run(relative(projectsDir, file_path).split(sep).join("/"), file_path);
+    }
+  });
+  logger.info(`Index progress of ${rows.length} transcripts keyed by archive path`);
+}
 function prepareVectorIndex(identity, options = {}) {
   const db = getDb();
   const stored = getStoredIdentity(db);
@@ -894,8 +795,12 @@ function prepareVectorIndex(identity, options = {}) {
   inTransaction(db, () => {
     if (options.resetAll) {
       if (tableExists(db, CHUNK_VECTORS)) db.exec(`DROP TABLE ${CHUNK_VECTORS}`);
-      db.prepare("DELETE FROM chunks").run();
-      db.prepare("DELETE FROM index_state").run();
+      db.exec("DELETE FROM chunks WHERE session_id IN (SELECT session_id FROM transcript_files)");
+      db.exec("DELETE FROM index_state");
+      const markPending = db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)");
+      for (const { project_dir } of allRows(db, "SELECT DISTINCT project_dir FROM chunks")) {
+        markPending.run(PENDING_VECTORS_KEY + project_dir, (/* @__PURE__ */ new Date()).toISOString());
+      }
     }
     if (!tableExists(db, CHUNK_VECTORS)) db.exec(createChunkVectorsTable(identity.dimensions));
     setStoredIdentity(db, identity);
@@ -910,68 +815,98 @@ function insertChunks(chunks, embeddings) {
     throw new Error(`Chunk count (${chunks.length}) doesn't match embedding count (${embeddings.length})`);
   }
   const insertChunk = db.prepare(`
-    INSERT OR IGNORE INTO chunks (session_id, project_dir, entry_uuid, role, content_text, embed_text, timestamp, line_number)
-    VALUES (@session_id, @project_dir, @entry_uuid, @role, @content_text, @embed_text, @timestamp, @line_number)
-  `);
-  const insertVec = db.prepare(`
-    INSERT INTO ${CHUNK_VECTORS} (chunk_id, project_dir, session_id, role, has_user, has_assistant, timestamp, embedding)
+    INSERT OR IGNORE INTO chunks (session_id, project_dir, entry_uuid, role, content_text, timestamp, line_number, part)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `);
   let inserted = 0;
   inTransaction(db, () => {
     for (let i = 0; i < chunks.length; i++) {
       const chunk = chunks[i];
-      const result = insertChunk.run({
-        session_id: chunk.session_id,
-        project_dir: chunk.project_dir,
-        entry_uuid: chunk.entry_uuid || null,
-        role: chunk.role || null,
-        content_text: chunk.content_text,
-        embed_text: chunk.embed_text,
-        timestamp: chunk.timestamp || null,
-        line_number: chunk.line_number ?? null
-      });
+      const result = insertChunk.run(
+        chunk.session_id,
+        chunk.project_dir,
+        chunk.entry_uuid || null,
+        chunk.role,
+        chunk.content_text,
+        chunk.timestamp || null,
+        chunk.line_number,
+        chunk.part
+      );
       if (result.changes > 0) {
-        const { hasUser, hasAssistant } = chunkSpeakers(chunk.role ?? null, chunk.content_text);
-        insertVec.run(
-          BigInt(result.lastInsertRowid),
-          chunk.project_dir,
-          chunk.session_id,
-          chunk.role ?? "",
-          hasUser,
-          hasAssistant,
-          chunk.timestamp ?? "",
-          vectorBlob(embeddings[i])
-        );
+        insertVector(db, BigInt(result.lastInsertRowid), chunk, chunk.hasUser, chunk.hasAssistant, embeddings[i]);
         inserted++;
       }
     }
   });
   return inserted;
 }
-function getIndexState(filePath) {
-  const db = getDb();
-  return getRow(db, "SELECT * FROM index_state WHERE file_path = ?", filePath);
+function insertVector(db, chunkId, chunk, hasUser, hasAssistant, embedding) {
+  db.prepare(`
+    INSERT INTO ${CHUNK_VECTORS} (chunk_id, project_dir, session_id, role, has_user, has_assistant, timestamp, embedding)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    chunkId,
+    chunk.project_dir,
+    chunk.session_id,
+    chunk.role ?? "",
+    hasUser ? 1n : 0n,
+    hasAssistant ? 1n : 0n,
+    chunk.timestamp ?? "",
+    vectorBlob(embedding)
+  );
 }
-function setIndexState(filePath, fileSize, lastLine) {
+function hasPendingVectors(projectDir) {
+  return getRow(getDb(), "SELECT 1 AS pending FROM metadata WHERE key = ?", PENDING_VECTORS_KEY + projectDir) !== null;
+}
+function getChunksWithoutVectors(projectDir, afterChunkId, limit) {
+  const db = getDb();
+  const page = allRows(db, "SELECT * FROM chunks WHERE project_dir = ? AND chunk_id > ? ORDER BY chunk_id LIMIT ?", projectDir, afterChunkId, limit);
+  if (page.length === 0) return { missing: [], lastChunkId: null };
+  const hasVector = db.prepare(`SELECT 1 FROM ${CHUNK_VECTORS} WHERE chunk_id = ?`);
+  return { missing: page.filter((c) => !hasVector.get(BigInt(c.chunk_id))), lastChunkId: page[page.length - 1].chunk_id };
+}
+function insertVectors(chunks, embeddings) {
+  const db = getDb();
+  inTransaction(db, () => {
+    chunks.forEach((c, i) => {
+      const { hasUser, hasAssistant } = legacyChunkSpeakers(c.role, c.content_text);
+      insertVector(db, BigInt(c.chunk_id), c, hasUser === 1n, hasAssistant === 1n, embeddings[i]);
+    });
+  });
+}
+function clearPendingVectors(projectDir) {
+  getDb().prepare("DELETE FROM metadata WHERE key = ?").run(PENDING_VECTORS_KEY + projectDir);
+}
+function getIndexState(fileKey) {
+  const db = getDb();
+  return getRow(db, "SELECT * FROM index_state WHERE file_path = ?", fileKey);
+}
+function setIndexState(fileKey, archivedBytes, lastLine) {
   const db = getDb();
   db.prepare(`
     INSERT OR REPLACE INTO index_state (file_path, file_size, last_line, indexed_at)
     VALUES (?, ?, ?, ?)
-  `).run(filePath, fileSize, lastLine, (/* @__PURE__ */ new Date()).toISOString());
+  `).run(fileKey, archivedBytes, lastLine, (/* @__PURE__ */ new Date()).toISOString());
 }
-function clearProject(projectDir) {
+function clearArchivedChunks(projectDir, sessionId) {
   const db = getDb();
+  const sessionFilter = sessionId ? "AND session_id = ?" : "";
+  const params = sessionId ? [projectDir, projectDir, sessionId] : [projectDir, projectDir];
   inTransaction(db, () => {
-    const chunkIds = db.prepare("SELECT chunk_id FROM chunks WHERE project_dir = ?").all(projectDir);
+    const chunkIds = allRows(db, `
+      SELECT chunk_id FROM chunks
+      WHERE project_dir = ? AND session_id IN (SELECT session_id FROM transcript_files WHERE project_dir = ?) ${sessionFilter}`, ...params);
     if (tableExists(db, CHUNK_VECTORS)) {
       const deleteVector = db.prepare(`DELETE FROM ${CHUNK_VECTORS} WHERE chunk_id = ?`);
-      for (const { chunk_id } of chunkIds) {
-        deleteVector.run(BigInt(chunk_id));
-      }
+      for (const { chunk_id } of chunkIds) deleteVector.run(BigInt(chunk_id));
     }
-    db.prepare("DELETE FROM chunks WHERE project_dir = ?").run(projectDir);
-    db.prepare("DELETE FROM index_state WHERE file_path LIKE ?").run(`%${projectDir}%`);
+    const deleteChunk = db.prepare("DELETE FROM chunks WHERE chunk_id = ?");
+    for (const { chunk_id } of chunkIds) deleteChunk.run(chunk_id);
+    if (sessionId) {
+      db.prepare("DELETE FROM index_state WHERE file_path IN (SELECT file_key FROM transcript_files WHERE project_dir = ? AND (session_id = ? OR parent_session_id = ?))").run(projectDir, sessionId, sessionId);
+    } else {
+      db.prepare("DELETE FROM index_state WHERE file_path IN (SELECT file_key FROM transcript_files WHERE project_dir = ?)").run(projectDir);
+    }
   });
   incrementalVacuum();
 }
@@ -984,11 +919,512 @@ function incrementalVacuum() {
   }
 }
 
+// src/archive/store.ts
+function compress(text) {
+  return deflateRawSync(typeof text === "string" ? Buffer.from(text, "utf8") : text);
+}
+function decompress(data) {
+  return inflateRawSync(data);
+}
+function getArchivedFile(fileKey) {
+  return getRow(getDb(), "SELECT * FROM transcript_files WHERE file_key = ?", fileKey);
+}
+function getArchivedFiles(projectDir) {
+  return allRows(getDb(), "SELECT * FROM transcript_files WHERE project_dir = ?", projectDir);
+}
+function* archivedLines(fileKey, fromLine = 1) {
+  const rows = iterateRows(
+    getDb(),
+    "SELECT line_number, data FROM transcript_lines WHERE file_key = ? AND line_number >= ? ORDER BY line_number",
+    fileKey,
+    fromLine
+  );
+  for (const row of rows) {
+    yield { lineNumber: row.line_number, text: decompress(row.data).toString("utf8") };
+  }
+}
+
+// src/transcript/parser.ts
+var SKIPPED_LINE_MARKER = '"file-history-snapshot"';
+var DEFAULT_ENTRY_TYPES = ["user", "assistant", "summary"];
+async function* parseTranscript(fileKey, options = {}) {
+  const {
+    includeTypes = DEFAULT_ENTRY_TYPES,
+    fromLine = 1,
+    toLine,
+    maxEntries,
+    containsText,
+    caseInsensitive = true
+  } = options;
+  const searchText = containsText && caseInsensitive ? containsText.toLowerCase() : containsText;
+  let yielded = 0;
+  for (const { lineNumber, text: line } of archivedLines(fileKey, fromLine)) {
+    if (toLine !== void 0 && lineNumber > toLine) break;
+    if (maxEntries && yielded >= maxEntries) break;
+    if (!line.trim()) continue;
+    if (line.includes(SKIPPED_LINE_MARKER)) continue;
+    if (searchText) {
+      const haystack = caseInsensitive ? line.toLowerCase() : line;
+      if (!haystack.includes(searchText)) continue;
+    }
+    let entry;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      logger.debug(`Skipping corrupt line ${lineNumber} in ${fileKey}`);
+      continue;
+    }
+    if (!includeTypes.includes(entry.type)) continue;
+    yielded++;
+    yield { entry, lineNumber, rawLength: line.length };
+  }
+}
+function toolResultText(content) {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content.map((b) => b?.type === "text" && typeof b.text === "string" ? b.text : "").filter(Boolean).join("\n");
+  }
+  return "";
+}
+function extractText(entry) {
+  switch (entry.type) {
+    case "user": {
+      const user = entry;
+      if (typeof user.message.content === "string") {
+        return user.message.content;
+      }
+      return user.message.content.map((block) => {
+        if (block.type === "text") return block.text;
+        if (block.type === "tool_result") return toolResultText(block.content);
+        return "";
+      }).filter(Boolean).join("\n");
+    }
+    case "assistant": {
+      const asst = entry;
+      return asst.message.content.map((block) => {
+        if (block.type === "text") return block.text;
+        if (block.type === "tool_use") {
+          const tool = block;
+          return `[Tool: ${tool.name}]`;
+        }
+        return "";
+      }).filter(Boolean).join("\n");
+    }
+    case "summary":
+      return entry.summary || "";
+    default:
+      return "";
+  }
+}
+function isToolResultEntry(entry) {
+  if (entry.type !== "user") return false;
+  const content = entry.message.content;
+  return Array.isArray(content) && content.length > 0 && content.every((b) => b.type === "tool_result");
+}
+
+// src/embedding/chunker.ts
+var EMBED_WINDOW_CHARS = 1600;
+var WINDOW_OVERLAP_CHARS = 200;
+function windows(text) {
+  if (text.length <= EMBED_WINDOW_CHARS) return [{ start: 0, end: text.length }];
+  const parts = [];
+  let start = 0;
+  for (; ; ) {
+    let end = Math.min(start + EMBED_WINDOW_CHARS, text.length);
+    if (end < text.length) {
+      const space = text.lastIndexOf(" ", end);
+      if (space > start + EMBED_WINDOW_CHARS * 0.7) end = space;
+    }
+    parts.push({ start, end });
+    if (end >= text.length) return parts;
+    start = Math.max(end - WINDOW_OVERLAP_CHARS, start + 1);
+  }
+}
+async function chunkTranscript(file, fromLine) {
+  const toLine = file.line_count;
+  const entries = [];
+  for await (const parsed of parseTranscript(file.file_key, { includeTypes: ["user", "assistant", "summary"], fromLine, toLine })) {
+    entries.push(parsed);
+  }
+  const chunks = [];
+  const base = { session_id: file.session_id, project_dir: file.project_dir };
+  const addText = (text, start, role, userEnd, hasAssistant, firstPartOnly = false) => {
+    const parts = windows(text);
+    (firstPartOnly ? parts.slice(0, 1) : parts).forEach(({ start: s, end: e }, part) => {
+      chunks.push({
+        ...base,
+        entry_uuid: start.entry.uuid,
+        role,
+        content_text: text.slice(s, e),
+        timestamp: start.entry.timestamp,
+        line_number: start.lineNumber,
+        part,
+        hasUser: s < userEnd,
+        hasAssistant: hasAssistant && e > userEnd
+      });
+    });
+  };
+  let i = 0;
+  while (i < entries.length) {
+    const current = entries[i];
+    const { entry } = current;
+    if (entry.type === "summary") {
+      const text2 = extractText(entry);
+      if (text2.trim()) addText(text2, current, "summary", 0, false);
+      i++;
+      continue;
+    }
+    if (entry.type === "user" && isToolResultEntry(entry)) {
+      const text2 = extractText(entry);
+      if (text2.trim()) addText(`TOOL RESULT: ${text2}`, current, "tool_result", 0, false, true);
+      i++;
+      continue;
+    }
+    if (entry.type === "user") {
+      const userPart = `USER: ${extractText(entry)}`;
+      const replies = [];
+      i++;
+      while (i < entries.length) {
+        const next = entries[i];
+        if (next.entry.type === "assistant") {
+          const text3 = extractText(next.entry);
+          if (text3.trim()) replies.push(text3);
+        } else if (next.entry.type === "user" && isToolResultEntry(next.entry)) {
+          const text3 = extractText(next.entry);
+          if (text3.trim()) addText(`TOOL RESULT: ${text3}`, next, "tool_result", 0, false, true);
+        } else if (next.entry.type === "summary") {
+          const text3 = extractText(next.entry);
+          if (text3.trim()) addText(text3, next, "summary", 0, false);
+        } else {
+          break;
+        }
+        i++;
+      }
+      const text2 = replies.length > 0 ? `${userPart}
+ASSISTANT: ${replies.join("\n")}` : userPart;
+      if (text2.trim() !== "USER:") addText(text2, current, "turn", userPart.length, replies.length > 0);
+      continue;
+    }
+    const text = extractText(entry);
+    if (text.trim()) addText(`ASSISTANT: ${text}`, current, "assistant", 0, true);
+    i++;
+  }
+  logger.debug(`Chunked ${file.file_key} from line ${fromLine}: ${entries.length} entries -> ${chunks.length} chunks`);
+  return { chunks, lastLine: toLine };
+}
+
+// src/archive/archiver.ts
+import { closeSync, openSync, readFileSync as readFileSync2, readSync, statSync as statSync2 } from "fs";
+import { setImmediate as nextTick } from "timers/promises";
+
+// src/transcript/discovery.ts
+import { readFileSync, readdirSync, existsSync as existsSync3, statSync } from "fs";
+import { join as join3, basename, relative as relative2, sep as sep2 } from "path";
+var SESSION_DIR = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function listProjectDirsOnDisk() {
+  const projectsDir = getProjectsDir();
+  if (!existsSync3(projectsDir)) return [];
+  return readdirSync(projectsDir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
+}
+function listSourceFiles(projectDir) {
+  const dir = getProjectTranscriptDir(projectDir);
+  const transcripts = [];
+  const attachments = [];
+  if (!existsSync3(dir)) return { transcripts, attachments };
+  const keyOf = (path) => relative2(getProjectsDir(), path).split(sep2).join("/");
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const path = join3(dir, entry.name);
+    if (entry.isFile() && entry.name.endsWith(".jsonl")) {
+      transcripts.push({ path, fileKey: keyOf(path), sessionId: basename(entry.name, ".jsonl"), parentSessionId: null });
+      continue;
+    }
+    if (!entry.isDirectory() || !SESSION_DIR.test(entry.name)) continue;
+    const sessionId = entry.name;
+    for (const file of walkFiles(path)) {
+      const inSubagents = relative2(path, file).split(sep2)[0] === "subagents";
+      if (inSubagents && file.endsWith(".jsonl")) {
+        if (basename(file).includes("aprompt_suggestion")) continue;
+        transcripts.push({ path: file, fileKey: keyOf(file), sessionId: basename(file, ".jsonl"), parentSessionId: sessionId });
+      } else if (!(inSubagents && basename(file).includes("aprompt_suggestion"))) {
+        attachments.push({ path: file, fileKey: keyOf(file), sessionId });
+      }
+    }
+  }
+  return { transcripts, attachments };
+}
+function walkFiles(dir) {
+  const files = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const path = join3(dir, entry.name);
+    if (entry.isDirectory()) files.push(...walkFiles(path));
+    else if (entry.isFile()) files.push(path);
+  }
+  return files;
+}
+
+// src/archive/archiver.ts
+var BATCH_BYTES = 8 * 1024 * 1024;
+var FIRST_PROMPT_LABEL_CHARS = 1e3;
+var COUNTED_TYPES = /* @__PURE__ */ new Set(["user", "assistant", "summary"]);
+var NEWLINE = 10;
+var archiveProjects = serialized(runArchive);
+async function runArchive(projectDirs, options = {}) {
+  const report = { filesUpdated: 0, linesAdded: 0, attachmentsUpdated: 0, sourcesGone: 0, errors: [] };
+  for (const projectDir of projectDirs) {
+    if (options.signal?.aborted) break;
+    const { transcripts, attachments } = listSourceFiles(projectDir);
+    const total = transcripts.length + attachments.length;
+    let current = 0;
+    for (const source of transcripts) {
+      if (options.signal?.aborted) break;
+      options.onProgress?.({ phase: `Archiving ${projectDir}`, current: ++current, total, detail: source.fileKey });
+      try {
+        const added = await archiveTranscript(projectDir, source, options.signal);
+        if (added > 0) {
+          report.filesUpdated++;
+          report.linesAdded += added;
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logger.error(`Could not archive ${source.path}:`, msg);
+        report.errors.push(`${source.fileKey}: ${msg}`);
+      }
+    }
+    for (const attachment of attachments) {
+      if (options.signal?.aborted) break;
+      options.onProgress?.({ phase: `Archiving ${projectDir}`, current: ++current, total, detail: attachment.fileKey });
+      try {
+        if (await archiveAttachment(projectDir, attachment)) report.attachmentsUpdated++;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logger.error(`Could not archive ${attachment.path}:`, msg);
+        report.errors.push(`${attachment.fileKey}: ${msg}`);
+      }
+      await nextTick();
+    }
+    if (!options.signal?.aborted) {
+      report.sourcesGone += await markSourcesGone(projectDir, new Set(transcripts.map((t) => t.fileKey)));
+    }
+  }
+  if (report.linesAdded > 0 || report.attachmentsUpdated > 0) {
+    logger.info(`Archived ${report.linesAdded} lines in ${report.filesUpdated} transcripts, ${report.attachmentsUpdated} attached files`);
+  }
+  return report;
+}
+async function archiveTranscript(projectDir, source, signal) {
+  const db = getDb();
+  db.prepare(`
+    INSERT OR IGNORE INTO transcript_files (file_key, project_dir, session_id, parent_session_id, updated_at)
+    VALUES (?, ?, ?, ?, ?)
+  `).run(source.fileKey, projectDir, source.sessionId, source.parentSessionId, (/* @__PURE__ */ new Date()).toISOString());
+  let added = 0;
+  for (; ; ) {
+    if (signal?.aborted) return added;
+    const state = getArchivedFile(source.fileKey);
+    let size;
+    try {
+      size = statSync2(source.path).size;
+    } catch {
+      return added;
+    }
+    if (size < state.archived_bytes) {
+      const reason = `the transcript is now ${size} bytes, smaller than the ${state.archived_bytes} bytes already archived: it was rewritten, the archived copy is kept unchanged and new lines are not archived`;
+      if (state.error !== reason) {
+        db.prepare("UPDATE transcript_files SET error = ?, updated_at = ? WHERE file_key = ?").run(reason, (/* @__PURE__ */ new Date()).toISOString(), source.fileKey);
+      }
+      throw new Error(reason);
+    }
+    if (size === state.archived_bytes) {
+      if (state.error) db.prepare("UPDATE transcript_files SET error = NULL WHERE file_key = ?").run(source.fileKey);
+      return added;
+    }
+    const batch = readCompleteLines(source.path, state.archived_bytes, size);
+    if (!batch) return added;
+    const written = await writeBatchWhenFree(projectDir, state, batch.lines, batch.bytes);
+    if (written === null) continue;
+    added += written;
+    await nextTick();
+  }
+}
+function readCompleteLines(path, offset, size) {
+  const fd = openSync(path, "r");
+  try {
+    let length = Math.min(BATCH_BYTES, size - offset);
+    for (; ; ) {
+      const buf = Buffer.alloc(length);
+      const read = readSync(fd, buf, 0, length, offset);
+      const data = buf.subarray(0, read);
+      const lastNewline = data.lastIndexOf(NEWLINE);
+      if (lastNewline === -1) {
+        if (offset + read >= size) return null;
+        length = Math.min(length * 2, size - offset);
+        continue;
+      }
+      const lines = [];
+      let start = 0;
+      for (let nl = data.indexOf(NEWLINE); nl !== -1 && nl <= lastNewline; nl = data.indexOf(NEWLINE, start)) {
+        const end = nl > start && data[nl - 1] === 13 ? nl - 1 : nl;
+        lines.push(data.subarray(start, end));
+        start = nl + 1;
+      }
+      return { lines, bytes: lastNewline + 1 };
+    }
+  } finally {
+    closeSync(fd);
+  }
+}
+var WRITE_ATTEMPTS = 6;
+async function writeBatchWhenFree(projectDir, state, lines, bytes) {
+  const compressed = lines.map((line) => compress(line));
+  const meta = readMetadata(projectDir, state, lines);
+  return whenWriteLockFree(state.file_key, () => writeBatch(state, compressed, meta, bytes));
+}
+async function whenWriteLockFree(fileKey, write) {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return write();
+    } catch (err) {
+      const busy = err instanceof Error && /database is locked|SQLITE_BUSY/i.test(err.message);
+      if (!busy || attempt >= WRITE_ATTEMPTS) throw err;
+      logger.debug(`Archive write of ${fileKey} waiting for another process (attempt ${attempt})`);
+      await nextTick();
+    }
+  }
+}
+function writeBatch(state, lines, meta, bytes) {
+  const db = getDb();
+  const insertLine = db.prepare("INSERT INTO transcript_lines (file_key, line_number, data) VALUES (?, ?, ?)");
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const current = getArchivedFile(state.file_key);
+    if (current.archived_bytes !== state.archived_bytes || current.line_count !== state.line_count) {
+      db.exec("ROLLBACK");
+      return null;
+    }
+    for (let i = 0; i < lines.length; i++) {
+      insertLine.run(state.file_key, state.line_count + i + 1, lines[i]);
+    }
+    db.prepare(`
+      UPDATE transcript_files SET
+        archived_bytes = ?, line_count = ?, entry_count = entry_count + ?,
+        first_timestamp = COALESCE(first_timestamp, ?),
+        last_timestamp = CASE WHEN ? IS NOT NULL AND (last_timestamp IS NULL OR ? > last_timestamp) THEN ? ELSE last_timestamp END,
+        first_prompt = CASE WHEN first_prompt = '' THEN ? ELSE first_prompt END,
+        title = CASE WHEN ? != '' THEN ? ELSE title END,
+        custom_title = CASE WHEN ? != '' THEN ? ELSE custom_title END,
+        git_branch = CASE WHEN git_branch = '' THEN ? ELSE git_branch END,
+        project_path = CASE WHEN project_path = '' THEN ? ELSE project_path END,
+        parent_session_id = COALESCE(parent_session_id, ?),
+        source_gone_at = NULL, error = NULL, updated_at = ?
+      WHERE file_key = ?
+    `).run(
+      state.archived_bytes + bytes,
+      state.line_count + lines.length,
+      meta.entries,
+      meta.firstTimestamp,
+      meta.lastTimestamp,
+      meta.lastTimestamp,
+      meta.lastTimestamp,
+      meta.firstPrompt,
+      meta.title,
+      meta.title,
+      meta.customTitle,
+      meta.customTitle,
+      meta.gitBranch,
+      meta.projectPath,
+      meta.parentSessionId,
+      (/* @__PURE__ */ new Date()).toISOString(),
+      state.file_key
+    );
+    db.exec("COMMIT");
+    return lines.length;
+  } catch (err) {
+    db.exec("ROLLBACK");
+    throw err;
+  }
+}
+function readMetadata(projectDir, state, lines) {
+  const meta = {
+    entries: 0,
+    firstTimestamp: null,
+    lastTimestamp: null,
+    firstPrompt: "",
+    title: "",
+    customTitle: "",
+    gitBranch: "",
+    projectPath: "",
+    parentSessionId: null
+  };
+  const needsParent = state.parent_session_id === null && state.session_id.startsWith("agent-");
+  for (const line of lines) {
+    let entry;
+    try {
+      entry = JSON.parse(line.toString("utf8"));
+    } catch {
+      continue;
+    }
+    const type = typeof entry.type === "string" ? entry.type : "";
+    if (COUNTED_TYPES.has(type)) meta.entries++;
+    const ts = typeof entry.timestamp === "string" ? entry.timestamp : null;
+    if (ts) {
+      if (!meta.firstTimestamp) meta.firstTimestamp = ts;
+      if (!meta.lastTimestamp || ts > meta.lastTimestamp) meta.lastTimestamp = ts;
+    }
+    if (type === "summary" && typeof entry.summary === "string" && entry.summary) meta.title = entry.summary;
+    if (type === "ai-title" && typeof entry.aiTitle === "string" && entry.aiTitle) meta.title = entry.aiTitle;
+    if (type === "custom-title" && typeof entry.customTitle === "string" && entry.customTitle) meta.customTitle = entry.customTitle;
+    if (!meta.gitBranch && typeof entry.gitBranch === "string") meta.gitBranch = entry.gitBranch;
+    if (!meta.projectPath && typeof entry.cwd === "string" && isProjectPath(entry.cwd, projectDir)) meta.projectPath = entry.cwd;
+    if (needsParent && !meta.parentSessionId && typeof entry.sessionId === "string" && entry.sessionId !== state.session_id) {
+      meta.parentSessionId = entry.sessionId;
+    }
+    if (!state.first_prompt && !meta.firstPrompt && type === "user" && !entry.isMeta) {
+      meta.firstPrompt = promptText(entry).slice(0, FIRST_PROMPT_LABEL_CHARS);
+    }
+  }
+  return meta;
+}
+function promptText(entry) {
+  const content = entry.message?.content;
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    const text = content.find((b) => b?.type === "text" && typeof b.text === "string");
+    return text ? text.text : "";
+  }
+  return "";
+}
+async function archiveAttachment(projectDir, source) {
+  const stat = statSync2(source.path);
+  const db = getDb();
+  const existing = db.prepare("SELECT size, mtime_ms FROM transcript_attachments WHERE file_key = ?").get(source.fileKey);
+  if (existing && existing.size === stat.size && existing.mtime_ms === stat.mtimeMs) return false;
+  const data = compress(readFileSync2(source.path));
+  await whenWriteLockFree(source.fileKey, () => db.prepare(`
+    INSERT OR REPLACE INTO transcript_attachments (file_key, project_dir, session_id, size, mtime_ms, data, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(source.fileKey, projectDir, source.sessionId, stat.size, stat.mtimeMs, data, (/* @__PURE__ */ new Date()).toISOString()));
+  return true;
+}
+async function markSourcesGone(projectDir, present) {
+  const gone = getArchivedFiles(projectDir).filter((f) => f.source_gone_at === null && !present.has(f.file_key));
+  if (gone.length === 0) return 0;
+  const db = getDb();
+  const now = (/* @__PURE__ */ new Date()).toISOString();
+  const mark = db.prepare("UPDATE transcript_files SET source_gone_at = ? WHERE file_key = ? AND source_gone_at IS NULL");
+  await whenWriteLockFree(projectDir, () => inTransaction(db, () => {
+    for (const f of gone) mark.run(now, f.file_key);
+  }));
+  logger.info(`${gone.length} transcript(s) of ${projectDir} deleted by Claude Code: the archived copies are kept`);
+  return gone.length;
+}
+
 // src/db/indexer.ts
 var EMBED_BATCH_SIZE = 32;
+var PENDING_PAGE_SIZE = 2e3;
 var buildIndex = serialized(runBuildIndex);
 async function runBuildIndex(provider, projectDirs, options = {}) {
   const { sessionId, includeSubagents = true, rebuild = false, onProgress, signal } = options;
+  const archive = await archiveProjects(projectDirs, { onProgress, signal });
   if (!provider.isReady()) {
     onProgress?.({ phase: "Initializing embedding model", current: 0, total: 1 });
     await provider.initialize();
@@ -996,13 +1432,13 @@ async function runBuildIndex(provider, projectDirs, options = {}) {
   const stored = getIndexIdentity();
   const resetAll = rebuild && stored !== null && !sameIdentity(stored, provider.identity);
   if (resetAll) {
-    logger.info("Embedding model changed: resetting the whole index");
+    logger.info("Embedding model changed: resetting the vectors of every project");
   }
   prepareVectorIndex(provider.identity, { resetAll });
   if (rebuild && !resetAll) {
-    logger.info("Rebuilding index from scratch...");
+    logger.info("Rebuilding index from the archive...");
     for (const dir of projectDirs) {
-      clearProject(dir);
+      clearArchivedChunks(dir, sessionId);
     }
   }
   let totalChunks = 0;
@@ -1011,76 +1447,84 @@ async function runBuildIndex(provider, projectDirs, options = {}) {
   let skipped = 0;
   const errors = [];
   for (const projectDir of projectDirs) {
-    let files = listTranscriptFiles(projectDir, {
-      includeSubagents,
-      sessionId
+    const files = getArchivedFiles(projectDir).filter((f) => {
+      if (f.parent_session_id !== null && !includeSubagents) return false;
+      return !sessionId || f.session_id === sessionId || f.parent_session_id === sessionId;
     });
-    if (sessionId && !includeSubagents) {
-      files = files.filter((f) => basename2(f, ".jsonl") === sessionId);
-    }
     const totalFiles = files.length;
-    onProgress?.({ phase: `Processing ${projectDir}`, current: 0, total: totalFiles });
+    onProgress?.({ phase: `Indexing ${projectDir}`, current: 0, total: totalFiles });
     for (let fi = 0; fi < files.length; fi++) {
       if (signal?.aborted) break;
-      const filePath = files[fi];
-      const fileSessionId = basename2(filePath, ".jsonl");
+      const file = files[fi];
       onProgress?.({
-        phase: `Processing ${projectDir}`,
+        phase: `Indexing ${projectDir}`,
         current: fi + 1,
         total: totalFiles,
-        detail: `Session ${fileSessionId.slice(0, 8)}...`
+        detail: `Session ${file.session_id.slice(0, 8)}...`
       });
       try {
-        const stat = statSync2(filePath);
-        const indexState = getIndexState(filePath);
-        if (indexState && !rebuild) {
-          if (indexState.file_size === stat.size) {
-            skipped++;
-            continue;
-          }
-        }
-        const fromLine = !rebuild && indexState ? indexState.last_line + 1 : 1;
-        const { chunks, lastLine } = await chunkTranscript(
-          filePath,
-          fileSessionId,
-          projectDir,
-          { fromLine }
-        );
-        if (chunks.length === 0) {
-          setIndexState(filePath, stat.size, lastLine || fromLine);
+        const indexState = getIndexState(file.file_key);
+        if (indexState && indexState.last_line >= file.line_count) {
           skipped++;
           continue;
         }
-        totalChunks += chunks.length;
+        const fromLine = indexState ? indexState.last_line + 1 : 1;
+        const { chunks, lastLine } = await chunkTranscript(file, fromLine);
         for (let i = 0; i < chunks.length; i += EMBED_BATCH_SIZE) {
           const batch = chunks.slice(i, i + EMBED_BATCH_SIZE);
-          const texts = batch.map((c) => c.embed_text);
-          const embeddings = await provider.embed(texts);
-          const inserted = insertChunks(batch, embeddings);
-          totalEmbedded += inserted;
+          const embeddings = await provider.embed(batch.map((c) => c.content_text));
+          totalEmbedded += insertChunks(batch, embeddings);
         }
-        setIndexState(filePath, stat.size, lastLine);
-        filesProcessed++;
+        totalChunks += chunks.length;
+        setIndexState(file.file_key, file.archived_bytes, lastLine);
+        if (chunks.length > 0) filesProcessed++;
+        else skipped++;
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        logger.error(`Error processing ${filePath}:`, msg);
+        logger.error(`Error indexing ${file.file_key}:`, msg);
         if (errors.length < 5) {
-          errors.push(`${basename2(filePath, ".jsonl").slice(0, 8)}...: ${msg.slice(0, 200)}`);
+          errors.push(`${file.session_id.slice(0, 8)}...: ${msg.slice(0, 200)}`);
         }
+      }
+    }
+    if (!signal?.aborted && hasPendingVectors(projectDir)) {
+      try {
+        totalEmbedded += await embedPendingChunks(provider, projectDir, onProgress, signal);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logger.error(`Error re-embedding the kept chunks of ${projectDir}:`, msg);
+        if (errors.length < 5) errors.push(`${projectDir} (kept chunks): ${msg.slice(0, 200)}`);
       }
     }
   }
   logger.info(`Indexing complete: ${totalChunks} chunks, ${totalEmbedded} embedded, ${filesProcessed} files, ${skipped} skipped`);
-  return { totalChunks, totalEmbedded, filesProcessed, skipped, errors, resetAll };
+  return { totalChunks, totalEmbedded, filesProcessed, skipped, errors, resetAll, archive };
+}
+async function embedPendingChunks(provider, projectDir, onProgress, signal) {
+  let embedded = 0;
+  for (let after = 0; ; ) {
+    if (signal?.aborted) return embedded;
+    const { missing, lastChunkId } = getChunksWithoutVectors(projectDir, after, PENDING_PAGE_SIZE);
+    if (lastChunkId === null) break;
+    for (let i = 0; i < missing.length; i += EMBED_BATCH_SIZE) {
+      const batch = missing.slice(i, i + EMBED_BATCH_SIZE);
+      insertVectors(batch, await provider.embed(batch.map((c) => c.content_text)));
+      embedded += batch.length;
+    }
+    onProgress?.({ phase: `Re-embedding kept excerpts of ${projectDir}`, current: embedded, total: 0 });
+    after = lastChunkId;
+  }
+  clearPendingVectors(projectDir);
+  return embedded;
 }
 
 // src/docs/indexer.ts
-import { statSync as statSync3, readdirSync as readdirSync2, readFileSync as readFileSync3 } from "fs";
-import { join as join5, relative, resolve } from "path";
+import { statSync as statSync3, readdirSync as readdirSync2, readFileSync as readFileSync4 } from "fs";
+import { join as join5, relative as relative3, resolve } from "path";
 import { createHash } from "crypto";
 
 // src/docs/chunker.ts
-import { readFileSync as readFileSync2 } from "fs";
+import { readFileSync as readFileSync3 } from "fs";
 import { extname } from "path";
 var CATEGORY_MAP = {
   // doc
@@ -1140,11 +1584,11 @@ function detectCategory(filePath) {
 function isSupportedExtension(filePath) {
   return detectCategory(filePath) !== null;
 }
-var MAX_EMBED_CHARS2 = 1600;
-var MAX_CONTENT_CHARS2 = 2e3;
+var MAX_EMBED_CHARS = 1600;
+var MAX_CONTENT_CHARS = 2e3;
 var MAX_CHUNK_LINES = 80;
 var MIN_CHUNK_LINES = 5;
-function truncateForEmbed2(text, maxChars) {
+function truncateForEmbed(text, maxChars) {
   if (text.length <= maxChars) return text;
   const truncated = text.slice(0, maxChars);
   const lastSpace = truncated.lastIndexOf(" ");
@@ -1195,9 +1639,9 @@ function chunkMarkdown(lines, relativePath) {
       chunks.push({
         file_path: relativePath,
         category: "doc",
-        content_text: truncateForEmbed2(content, MAX_CONTENT_CHARS2),
-        embed_text: truncateForEmbed2(`[${relativePath}]
-${content}`, MAX_EMBED_CHARS2),
+        content_text: truncateForEmbed(content, MAX_CONTENT_CHARS),
+        embed_text: truncateForEmbed(`[${relativePath}]
+${content}`, MAX_EMBED_CHARS),
         start_line: 1,
         end_line: lines.length,
         section_path: null
@@ -1211,9 +1655,9 @@ ${content}`, MAX_EMBED_CHARS2),
       chunks.push({
         file_path: relativePath,
         category: "doc",
-        content_text: truncateForEmbed2(preContent, MAX_CONTENT_CHARS2),
-        embed_text: truncateForEmbed2(`[${relativePath}]
-${preContent}`, MAX_EMBED_CHARS2),
+        content_text: truncateForEmbed(preContent, MAX_CONTENT_CHARS),
+        embed_text: truncateForEmbed(`[${relativePath}]
+${preContent}`, MAX_EMBED_CHARS),
         start_line: 1,
         end_line: headers[0].lineIndex,
         section_path: null
@@ -1237,16 +1681,16 @@ ${preContent}`, MAX_EMBED_CHARS2),
       section_path: sectionPath
     });
     if (!sectionContent.trim()) continue;
-    if (sectionContent.length > MAX_CONTENT_CHARS2) {
+    if (sectionContent.length > MAX_CONTENT_CHARS) {
       const subChunks = splitAtParagraphs(sectionLines, startLine, relativePath, "doc", sectionPath);
       chunks.push(...subChunks);
     } else {
       chunks.push({
         file_path: relativePath,
         category: "doc",
-        content_text: truncateForEmbed2(sectionContent, MAX_CONTENT_CHARS2),
-        embed_text: truncateForEmbed2(`[${sectionPath}]
-${sectionContent}`, MAX_EMBED_CHARS2),
+        content_text: truncateForEmbed(sectionContent, MAX_CONTENT_CHARS),
+        embed_text: truncateForEmbed(`[${sectionPath}]
+${sectionContent}`, MAX_EMBED_CHARS),
         start_line: startLine + 1,
         end_line: endLine,
         section_path: sectionPath
@@ -1263,9 +1707,9 @@ function chunkCode(lines, relativePath) {
       chunks.push({
         file_path: relativePath,
         category: "code",
-        content_text: truncateForEmbed2(content, MAX_CONTENT_CHARS2),
-        embed_text: truncateForEmbed2(`[${relativePath}]
-${content}`, MAX_EMBED_CHARS2),
+        content_text: truncateForEmbed(content, MAX_CONTENT_CHARS),
+        embed_text: truncateForEmbed(`[${relativePath}]
+${content}`, MAX_EMBED_CHARS),
         start_line: 1,
         end_line: lines.length,
         section_path: null
@@ -1299,9 +1743,9 @@ ${content}`, MAX_EMBED_CHARS2),
       chunks.push({
         file_path: relativePath,
         category: "code",
-        content_text: truncateForEmbed2(content, MAX_CONTENT_CHARS2),
-        embed_text: truncateForEmbed2(`[${relativePath}:${chunkStart + 1}-${chunkEnd}]
-${content}`, MAX_EMBED_CHARS2),
+        content_text: truncateForEmbed(content, MAX_CONTENT_CHARS),
+        embed_text: truncateForEmbed(`[${relativePath}:${chunkStart + 1}-${chunkEnd}]
+${content}`, MAX_EMBED_CHARS),
         start_line: chunkStart + 1,
         end_line: chunkEnd,
         section_path: null
@@ -1315,13 +1759,13 @@ function chunkConfig(lines, relativePath) {
   const content = lines.join("\n");
   const chunks = [];
   if (!content.trim()) return { chunks, sections: [] };
-  if (content.length <= MAX_CONTENT_CHARS2) {
+  if (content.length <= MAX_CONTENT_CHARS) {
     chunks.push({
       file_path: relativePath,
       category: "config",
-      content_text: truncateForEmbed2(content, MAX_CONTENT_CHARS2),
-      embed_text: truncateForEmbed2(`[config: ${relativePath}]
-${content}`, MAX_EMBED_CHARS2),
+      content_text: truncateForEmbed(content, MAX_CONTENT_CHARS),
+      embed_text: truncateForEmbed(`[config: ${relativePath}]
+${content}`, MAX_EMBED_CHARS),
       start_line: 1,
       end_line: lines.length,
       section_path: null
@@ -1342,17 +1786,17 @@ function splitAtParagraphs(lines, baseLineIndex, relativePath, category, section
   for (let i = 0; i < lines.length; i++) {
     currentBlock.push(lines[i]);
     const blockContent = currentBlock.join("\n");
-    if (blockContent.length >= MAX_CONTENT_CHARS2 * 0.8 && lines[i].trim() === "") {
+    if (blockContent.length >= MAX_CONTENT_CHARS * 0.8 && lines[i].trim() === "") {
       if (blockContent.trim()) {
         chunks.push({
           file_path: relativePath,
           category,
-          content_text: truncateForEmbed2(blockContent, MAX_CONTENT_CHARS2),
-          embed_text: truncateForEmbed2(
+          content_text: truncateForEmbed(blockContent, MAX_CONTENT_CHARS),
+          embed_text: truncateForEmbed(
             sectionPath ? `[${sectionPath}]
 ${blockContent}` : `[${relativePath}]
 ${blockContent}`,
-            MAX_EMBED_CHARS2
+            MAX_EMBED_CHARS
           ),
           start_line: baseLineIndex + blockStart + 1,
           end_line: baseLineIndex + i + 1,
@@ -1369,12 +1813,12 @@ ${blockContent}`,
       chunks.push({
         file_path: relativePath,
         category,
-        content_text: truncateForEmbed2(remaining, MAX_CONTENT_CHARS2),
-        embed_text: truncateForEmbed2(
+        content_text: truncateForEmbed(remaining, MAX_CONTENT_CHARS),
+        embed_text: truncateForEmbed(
           sectionPath ? `[${sectionPath}]
 ${remaining}` : `[${relativePath}]
 ${remaining}`,
-          MAX_EMBED_CHARS2
+          MAX_EMBED_CHARS
         ),
         start_line: baseLineIndex + blockStart + 1,
         end_line: baseLineIndex + lines.length,
@@ -1389,7 +1833,7 @@ function chunkFile(filePath, relativePath, category) {
   if (!resolvedCategory) {
     return { chunks: [], sections: [] };
   }
-  const content = readFileSync2(filePath, "utf-8");
+  const content = readFileSync3(filePath, "utf-8");
   const lines = content.split("\n");
   switch (resolvedCategory) {
     case "doc":
@@ -1763,14 +2207,14 @@ function resolveSourceFiles(projectRoot) {
       if (!isSupportedExtension(absoluteSource)) continue;
       const cat = source.category || detectCategory(absoluteSource);
       if (!cat) continue;
-      const rel = relative(projectRoot, absoluteSource).replace(/\\/g, "/");
+      const rel = relative3(projectRoot, absoluteSource).replace(/\\/g, "/");
       fileSet.set(rel, { absolutePath: absoluteSource, relativePath: rel, category: cat });
     } else {
       const files = listFilesRecursive(absoluteSource, source.pattern, source.recursive !== 0);
       for (const filePath of files) {
         const cat = source.category || detectCategory(filePath);
         if (!cat) continue;
-        const rel = relative(projectRoot, filePath).replace(/\\/g, "/");
+        const rel = relative3(projectRoot, filePath).replace(/\\/g, "/");
         if (!fileSet.has(rel)) {
           fileSet.set(rel, { absolutePath: filePath, relativePath: rel, category: cat });
         }
@@ -1822,7 +2266,7 @@ async function runBuildDocsIndex(projectRoot, provider, options = {}) {
         }
       }
       try {
-        const content = readFileSync3(absolutePath, "utf-8");
+        const content = readFileSync4(absolutePath, "utf-8");
         const contentHash = createHash("sha256").update(content).digest("hex");
         insertSnapshot(projectRoot, relativePath, content, contentHash, stat.size);
       } catch (snapErr) {
@@ -1881,7 +2325,7 @@ var LAST_RUN_FILE = join6(SOUVENIR_DIR, "bg-index.last");
 var MIN_INTERVAL_MS = 3e4;
 mkdirSync2(SOUVENIR_DIR, { recursive: true });
 try {
-  const lastRun = parseInt(readFileSync4(LAST_RUN_FILE, "utf-8"), 10);
+  const lastRun = parseInt(readFileSync5(LAST_RUN_FILE, "utf-8"), 10);
   if (!isNaN(lastRun) && Date.now() - lastRun < MIN_INTERVAL_MS) {
     process.exit(0);
   }
@@ -1904,7 +2348,7 @@ function acquireLock() {
       return true;
     } catch (err) {
       if (err.code !== "EEXIST") throw err;
-      const holder = parseInt(readFileSync4(LOCK_FILE, "utf-8"), 10);
+      const holder = parseInt(readFileSync5(LOCK_FILE, "utf-8"), 10);
       if (!isNaN(holder) && isRunning(holder)) return false;
       try {
         unlinkSync(LOCK_FILE);
@@ -1918,6 +2362,12 @@ if (!acquireLock()) {
   process.exit(0);
 }
 async function run() {
+  const archive = await archiveProjects(listProjectDirsOnDisk());
+  for (const err of archive.errors) {
+    process.stderr.write(`[souvenir] Archive error: ${err}
+`);
+  }
+  if (archive.errors.length > 0) process.exitCode = 1;
   const config = getConfig();
   if (!config.currentProject) {
     return;

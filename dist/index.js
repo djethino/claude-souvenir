@@ -3199,10 +3199,10 @@ function isValidJWT(token, algorithm = null) {
     const tokensParts = token.split(".");
     if (tokensParts.length !== 3)
       return false;
-    const [header] = tokensParts;
-    if (!header)
+    const [header2] = tokensParts;
+    if (!header2)
       return false;
-    const parsedHeader = JSON.parse(atob(header));
+    const parsedHeader = JSON.parse(atob(header2));
     if ("typ" in parsedHeader && parsedHeader?.typ !== "JWT")
       return false;
     if (!parsedHeader.alg)
@@ -9414,8 +9414,8 @@ function ko_default() {
 }
 
 // node_modules/zod/v4/locales/lt.js
-var capitalizeFirstCharacter = (text) => {
-  return text.charAt(0).toUpperCase() + text.slice(1);
+var capitalizeFirstCharacter = (text2) => {
+  return text2.charAt(0).toUpperCase() + text2.slice(1);
 };
 function getUnitTypeFromNumber(number4) {
   const abs = Math.abs(number4);
@@ -25221,10 +25221,10 @@ var require_content_type = /* @__PURE__ */ __commonJSMin(((exports) => {
   exports.parse = parse3;
   function parse3(string4) {
     if (!string4) throw new TypeError("argument string is required");
-    var header = typeof string4 === "object" ? getcontenttype(string4) : string4;
-    if (typeof header !== "string") throw new TypeError("argument string is required to be a string");
-    var index = header.indexOf(";");
-    var type = index !== -1 ? header.slice(0, index).trim() : header.trim();
+    var header2 = typeof string4 === "object" ? getcontenttype(string4) : string4;
+    if (typeof header2 !== "string") throw new TypeError("argument string is required to be a string");
+    var index = header2.indexOf(";");
+    var type = index !== -1 ? header2.slice(0, index).trim() : header2.trim();
     if (!TYPE_REGEXP.test(type)) throw new TypeError("invalid media type");
     var obj = new ContentType(type.toLowerCase());
     if (index !== -1) {
@@ -25232,7 +25232,7 @@ var require_content_type = /* @__PURE__ */ __commonJSMin(((exports) => {
       var match;
       var value;
       PARAM_REGEXP.lastIndex = index;
-      while (match = PARAM_REGEXP.exec(header)) {
+      while (match = PARAM_REGEXP.exec(header2)) {
         if (match.index !== index) throw new TypeError("invalid parameter format");
         index += match[0].length;
         key = match[1].toLowerCase();
@@ -25243,16 +25243,16 @@ var require_content_type = /* @__PURE__ */ __commonJSMin(((exports) => {
         }
         obj.parameters[key] = value;
       }
-      if (index !== header.length) throw new TypeError("invalid parameter format");
+      if (index !== header2.length) throw new TypeError("invalid parameter format");
     }
     return obj;
   }
   function getcontenttype(obj) {
-    var header;
-    if (typeof obj.getHeader === "function") header = obj.getHeader("content-type");
-    else if (typeof obj.headers === "object") header = obj.headers && obj.headers["content-type"];
-    if (typeof header !== "string") throw new TypeError("content-type header is missing from object");
-    return header;
+    var header2;
+    if (typeof obj.getHeader === "function") header2 = obj.getHeader("content-type");
+    else if (typeof obj.headers === "object") header2 = obj.headers && obj.headers["content-type"];
+    if (typeof header2 !== "string") throw new TypeError("content-type header is missing from object");
+    return header2;
   }
   function ContentType(type) {
     this.parameters = /* @__PURE__ */ Object.create(null);
@@ -28873,41 +28873,41 @@ var require_fast_uri = /* @__PURE__ */ __commonJSMin(((exports, module) => {
     schemelessOptions.skipEscape = true;
     return serialize(resolved, schemelessOptions);
   }
-  function resolveComponent(base, relative3, options, skipNormalization) {
+  function resolveComponent(base, relative5, options, skipNormalization) {
     const target = {};
     if (!skipNormalization) {
       base = parse3(serialize(base, options), options);
-      relative3 = parse3(serialize(relative3, options), options);
+      relative5 = parse3(serialize(relative5, options), options);
     }
     options = options || {};
-    if (!options.tolerant && relative3.scheme) {
-      target.scheme = relative3.scheme;
-      target.userinfo = relative3.userinfo;
-      target.host = relative3.host;
-      target.port = relative3.port;
-      target.path = removeDotSegments(relative3.path || "");
-      target.query = relative3.query;
+    if (!options.tolerant && relative5.scheme) {
+      target.scheme = relative5.scheme;
+      target.userinfo = relative5.userinfo;
+      target.host = relative5.host;
+      target.port = relative5.port;
+      target.path = removeDotSegments(relative5.path || "");
+      target.query = relative5.query;
     } else {
-      if (relative3.userinfo !== void 0 || relative3.host !== void 0 || relative3.port !== void 0) {
-        target.userinfo = relative3.userinfo;
-        target.host = relative3.host;
-        target.port = relative3.port;
-        target.path = removeDotSegments(relative3.path || "");
-        target.query = relative3.query;
+      if (relative5.userinfo !== void 0 || relative5.host !== void 0 || relative5.port !== void 0) {
+        target.userinfo = relative5.userinfo;
+        target.host = relative5.host;
+        target.port = relative5.port;
+        target.path = removeDotSegments(relative5.path || "");
+        target.query = relative5.query;
       } else {
-        if (!relative3.path) {
+        if (!relative5.path) {
           target.path = base.path;
-          if (relative3.query !== void 0) target.query = relative3.query;
+          if (relative5.query !== void 0) target.query = relative5.query;
           else target.query = base.query;
         } else {
-          if (relative3.path[0] === "/") target.path = removeDotSegments(relative3.path);
+          if (relative5.path[0] === "/") target.path = removeDotSegments(relative5.path);
           else {
-            if ((base.userinfo !== void 0 || base.host !== void 0 || base.port !== void 0) && !base.path) target.path = "/" + relative3.path;
-            else if (!base.path) target.path = relative3.path;
-            else target.path = base.path.slice(0, base.path.lastIndexOf("/") + 1) + relative3.path;
+            if ((base.userinfo !== void 0 || base.host !== void 0 || base.port !== void 0) && !base.path) target.path = "/" + relative5.path;
+            else if (!base.path) target.path = relative5.path;
+            else target.path = base.path.slice(0, base.path.lastIndexOf("/") + 1) + relative5.path;
             target.path = removeDotSegments(target.path);
           }
-          target.query = relative3.query;
+          target.query = relative5.query;
         }
         target.userinfo = base.userinfo;
         target.host = base.host;
@@ -28915,7 +28915,7 @@ var require_fast_uri = /* @__PURE__ */ __commonJSMin(((exports, module) => {
       }
       target.scheme = base.scheme;
     }
-    target.fragment = relative3.fragment;
+    target.fragment = relative5.fragment;
     return target;
   }
   function equal(uriA, uriB, options) {
@@ -29538,7 +29538,7 @@ var require_core$3 = /* @__PURE__ */ __commonJSMin(((exports) => {
     }
     errorsText(errors = this.errors, { separator = ", ", dataVar = "data" } = {}) {
       if (!errors || errors.length === 0) return "No errors";
-      return errors.map((e) => `${dataVar}${e.instancePath} ${e.message}`).reduce((text, msg) => text + separator + msg);
+      return errors.map((e) => `${dataVar}${e.instancePath} ${e.message}`).reduce((text2, msg) => text2 + separator + msg);
     }
     $dataMetaSchema(metaSchema, keywordsJsonPointers) {
       const rules = this.RULES.all;
@@ -34754,85 +34754,12 @@ var logger = {
   }
 };
 
-// src/transcript/parser.ts
-import { createReadStream } from "fs";
-import { createInterface } from "readline";
-var SKIPPED_LINE_MARKER = '"file-history-snapshot"';
-var DEFAULT_ENTRY_TYPES = ["user", "assistant", "summary"];
-async function* parseTranscript(filePath, options = {}) {
-  const {
-    includeTypes = DEFAULT_ENTRY_TYPES,
-    fromLine = 1,
-    maxEntries,
-    containsText,
-    caseInsensitive = true
-  } = options;
-  const searchText = containsText && caseInsensitive ? containsText.toLowerCase() : containsText;
-  let lineNumber = 0;
-  let yielded = 0;
-  const stream = createReadStream(filePath, { encoding: "utf-8" });
-  const rl = createInterface({ input: stream, crlfDelay: Infinity });
-  try {
-    for await (const line of rl) {
-      lineNumber++;
-      if (lineNumber < fromLine) continue;
-      if (maxEntries && yielded >= maxEntries) break;
-      if (!line.trim()) continue;
-      if (line.includes(SKIPPED_LINE_MARKER)) continue;
-      if (searchText) {
-        const haystack = caseInsensitive ? line.toLowerCase() : line;
-        if (!haystack.includes(searchText)) continue;
-      }
-      let entry;
-      try {
-        entry = JSON.parse(line);
-      } catch {
-        logger.debug(`Skipping corrupt line ${lineNumber} in ${filePath}`);
-        continue;
-      }
-      if (!includeTypes.includes(entry.type)) continue;
-      yielded++;
-      yield { entry, lineNumber, rawLength: line.length };
-    }
-  } finally {
-    rl.close();
-    stream.destroy();
-  }
-}
-function extractText(entry) {
-  switch (entry.type) {
-    case "user": {
-      const user = entry;
-      if (typeof user.message.content === "string") {
-        return user.message.content;
-      }
-      return user.message.content.map((block) => {
-        if ("text" in block) return block.text;
-        if ("content" in block) return block.content;
-        return "";
-      }).filter(Boolean).join("\n");
-    }
-    case "assistant": {
-      const asst = entry;
-      return asst.message.content.map((block) => {
-        if (block.type === "text") return block.text;
-        if (block.type === "tool_use") {
-          const tool = block;
-          return `[Tool: ${tool.name}]`;
-        }
-        return "";
-      }).filter(Boolean).join("\n");
-    }
-    case "summary":
-      return entry.summary || "";
-    default:
-      return "";
-  }
-}
+// src/archive/store.ts
+import { deflateRawSync, inflateRawSync } from "zlib";
 
-// src/transcript/discovery.ts
-import { readFileSync, readdirSync, existsSync, statSync as statSync2, openSync as openSync2, readSync as readSync2, closeSync as closeSync2 } from "fs";
-import { join as join2, basename } from "path";
+// src/db/store.ts
+import { existsSync as existsSync2, statSync as fsStatSync } from "fs";
+import { isAbsolute as isAbsolute2, relative, sep } from "path";
 
 // src/utils/paths.ts
 import { homedir } from "os";
@@ -34898,66 +34825,884 @@ function getProjectTranscriptDir(projectDir) {
   return join(getProjectsDir(), projectDir);
 }
 
-// src/transcript/entry-count.ts
-import { closeSync, openSync, readSync, statSync } from "fs";
-function countTranscriptEntries(filePath) {
-  const size = statSync(filePath).size;
-  let state = counts.get(filePath);
-  if (!state || size < state.offset) {
-    state = { offset: 0, complete: 0, pending: Buffer.alloc(0) };
-    counts.set(filePath, state);
+// src/db/schema.ts
+var SCHEMA_VERSION = 3;
+var CREATE_TABLES = `
+  CREATE TABLE IF NOT EXISTS metadata (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS chunks (
+    chunk_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL,
+    project_dir TEXT NOT NULL,
+    entry_uuid TEXT,
+    role TEXT,
+    content_text TEXT NOT NULL,
+    timestamp TEXT,
+    line_number INTEGER,
+    part INTEGER NOT NULL DEFAULT 0,
+    UNIQUE(session_id, line_number, part)
+  );
+
+  CREATE TABLE IF NOT EXISTS index_state (
+    file_path TEXT PRIMARY KEY,
+    file_size INTEGER NOT NULL,
+    last_line INTEGER NOT NULL,
+    indexed_at TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS transcript_files (
+    file_key TEXT PRIMARY KEY,
+    project_dir TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    parent_session_id TEXT,
+    archived_bytes INTEGER NOT NULL DEFAULT 0,
+    line_count INTEGER NOT NULL DEFAULT 0,
+    entry_count INTEGER NOT NULL DEFAULT 0,
+    first_timestamp TEXT,
+    last_timestamp TEXT,
+    first_prompt TEXT NOT NULL DEFAULT '',
+    title TEXT NOT NULL DEFAULT '',
+    custom_title TEXT NOT NULL DEFAULT '',
+    git_branch TEXT NOT NULL DEFAULT '',
+    project_path TEXT NOT NULL DEFAULT '',
+    source_gone_at TEXT,
+    error TEXT,
+    updated_at TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS transcript_lines (
+    file_key TEXT NOT NULL,
+    line_number INTEGER NOT NULL,
+    data BLOB NOT NULL,
+    PRIMARY KEY (file_key, line_number)
+  );
+
+  CREATE TABLE IF NOT EXISTS transcript_attachments (
+    file_key TEXT PRIMARY KEY,
+    project_dir TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    size INTEGER NOT NULL,
+    mtime_ms REAL NOT NULL,
+    data BLOB NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+`;
+var CREATE_INDEXES = `
+  CREATE INDEX IF NOT EXISTS idx_chunks_session ON chunks(session_id);
+  CREATE INDEX IF NOT EXISTS idx_chunks_project ON chunks(project_dir);
+  CREATE INDEX IF NOT EXISTS idx_chunks_role ON chunks(role);
+  CREATE INDEX IF NOT EXISTS idx_chunks_timestamp ON chunks(timestamp);
+  CREATE INDEX IF NOT EXISTS idx_tfiles_session ON transcript_files(session_id);
+  CREATE INDEX IF NOT EXISTS idx_tfiles_project ON transcript_files(project_dir);
+  CREATE INDEX IF NOT EXISTS idx_tattach_session ON transcript_attachments(session_id);
+`;
+var LEGACY_VEC_TABLE = "vec_chunks";
+var CHUNK_VECTORS = "chunk_vectors";
+function createChunkVectorsTable(dimensions) {
+  return `CREATE VIRTUAL TABLE ${CHUNK_VECTORS} USING vec0 (
+    chunk_id INTEGER PRIMARY KEY,
+    project_dir TEXT PARTITION KEY,
+    session_id TEXT,
+    role TEXT,
+    has_user INTEGER,
+    has_assistant INTEGER,
+    timestamp TEXT,
+    embedding float[${dimensions}] distance_metric=cosine
+  );`;
+}
+
+// src/db/sqlite.ts
+import { createRequire } from "module";
+import { existsSync, mkdirSync } from "fs";
+import { dirname } from "path";
+import { fileURLToPath } from "url";
+var MIN_NODE = [22, 13];
+var VEC_BINARIES = {
+  "win32-x64": "windows-x64/vec0.dll",
+  "linux-x64": "linux-x64/vec0.so",
+  "darwin-x64": "darwin-x64/vec0.dylib",
+  "darwin-arm64": "darwin-arm64/vec0.dylib"
+};
+function assertNodeVersion() {
+  const [major, minor] = process.versions.node.split(".").map(Number);
+  if (major < MIN_NODE[0] || major === MIN_NODE[0] && minor < MIN_NODE[1]) {
+    throw new Error(
+      `souvenir requires Node.js >= ${MIN_NODE.join(".")} (built-in node:sqlite), found ${process.versions.node}`
+    );
   }
-  if (size > state.offset) {
-    const fd = openSync(filePath, "r");
-    try {
-      const chunk = Buffer.alloc(CHUNK_SIZE);
-      while (state.offset < size) {
-        const read = readSync(fd, chunk, 0, Math.min(CHUNK_SIZE, size - state.offset), state.offset);
-        if (read === 0) break;
-        state.offset += read;
-        let data = state.pending.length ? Buffer.concat([state.pending, chunk.subarray(0, read)]) : chunk.subarray(0, read);
-        let start = 0;
-        for (let nl = data.indexOf(NEWLINE, start); nl !== -1; nl = data.indexOf(NEWLINE, start)) {
-          if (isEntry(data.toString("utf8", start, nl))) state.complete++;
-          start = nl + 1;
-        }
-        data = data.subarray(start);
-        state.pending = Buffer.from(data);
-      }
-    } finally {
-      closeSync(fd);
+}
+function sqliteVecPath() {
+  const platform = `${process.platform}-${process.arch}`;
+  const relative5 = VEC_BINARIES[platform];
+  if (!relative5) {
+    throw new Error(
+      `souvenir: no sqlite-vec binary for ${platform} (supported: ${Object.keys(VEC_BINARIES).join(", ")})`
+    );
+  }
+  const path = fileURLToPath(new URL(`../vendor/sqlite-vec/bin/${relative5}`, import.meta.url));
+  if (!existsSync(path)) {
+    throw new Error(`souvenir: sqlite-vec binary missing at ${path}`);
+  }
+  return path;
+}
+function openDatabase(dbPath, label) {
+  assertNodeVersion();
+  const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite");
+  const dir = dirname(dbPath);
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true });
+  }
+  logger.info(`Opening ${label} database at ${dbPath}`);
+  const db = new DatabaseSync(dbPath, { allowExtension: true });
+  db.loadExtension(sqliteVecPath());
+  db.exec("PRAGMA journal_mode = WAL");
+  db.exec("PRAGMA busy_timeout = 5000");
+  db.exec("PRAGMA journal_size_limit = 67108864");
+  const { auto_vacuum: autoVacuum } = db.prepare("PRAGMA auto_vacuum").get();
+  if (autoVacuum !== 2) {
+    db.exec("PRAGMA auto_vacuum = INCREMENTAL");
+    db.exec("VACUUM");
+    logger.info(`${label} database: enabled incremental auto_vacuum (one-time migration)`);
+  }
+  return db;
+}
+function inTransaction(db, fn) {
+  db.exec("BEGIN");
+  try {
+    const result = fn();
+    db.exec("COMMIT");
+    return result;
+  } catch (err) {
+    db.exec("ROLLBACK");
+    throw err;
+  }
+}
+function getRow(db, sql, ...params) {
+  return db.prepare(sql).get(...params) ?? null;
+}
+function allRows(db, sql, ...params) {
+  return db.prepare(sql).all(...params);
+}
+var statementsInUse = /* @__PURE__ */ new Set();
+function* iterateRows(db, sql, ...params) {
+  const statement = db.prepare(sql);
+  statementsInUse.add(statement);
+  try {
+    for (const row of statement.iterate(...params)) yield row;
+  } finally {
+    statementsInUse.delete(statement);
+  }
+}
+function vectorBlob(vector) {
+  return new Uint8Array(vector.buffer, vector.byteOffset, vector.byteLength);
+}
+
+// src/embedding/models.ts
+var REPRESENT_QUERY = "Represent this sentence for searching relevant passages: ";
+var RETRIEVAL_TASK = "Given a web search query, retrieve relevant passages that answer the query";
+var KNOWN_MODELS = [
+  // google/embeddinggemma-2 and google/embeddinggemma-300m
+  { match: "embeddinggemma", documentPrefix: "title: none | text: ", queryPrefix: "task: search result | query: " },
+  // nomic-ai/nomic-embed-text-v1.5 and -v2-moe
+  { match: "nomic-embed-text", documentPrefix: "search_document: ", queryPrefix: "search_query: " },
+  // Snowflake/snowflake-arctic-embed-l-v2.0 (Ollama: snowflake-arctic-embed2)
+  { match: "snowflake-arctic-embed2", documentPrefix: "", queryPrefix: "query: " },
+  { match: "snowflake-arctic-embed-l-v2", documentPrefix: "", queryPrefix: "query: " },
+  { match: "snowflake-arctic-embed-m-v2", documentPrefix: "", queryPrefix: "query: " },
+  // Snowflake/snowflake-arctic-embed (v1), mixedbread-ai/mxbai-embed-large-v1, BAAI/bge-large-en-v1.5
+  { match: "snowflake-arctic-embed", documentPrefix: "", queryPrefix: REPRESENT_QUERY },
+  { match: "mxbai-embed-large", documentPrefix: "", queryPrefix: REPRESENT_QUERY },
+  { match: "bge-large", documentPrefix: "", queryPrefix: REPRESENT_QUERY },
+  // intfloat/multilingual-e5-large-instruct (space after "Query:")
+  { match: "e5-large-instruct", documentPrefix: "", queryPrefix: `Instruct: ${RETRIEVAL_TASK}
+Query: ` },
+  // intfloat/multilingual-e5-* and e5-*-v2
+  { match: "multilingual-e5", documentPrefix: "passage: ", queryPrefix: "query: " },
+  { match: "e5-small", documentPrefix: "passage: ", queryPrefix: "query: " },
+  { match: "e5-base", documentPrefix: "passage: ", queryPrefix: "query: " },
+  { match: "e5-large", documentPrefix: "passage: ", queryPrefix: "query: " },
+  // Qwen/Qwen3-Embedding-* (official template: no space after "Query:")
+  { match: "qwen3-embedding", documentPrefix: "", queryPrefix: `Instruct: ${RETRIEVAL_TASK}
+Query:` },
+  // No prefixes
+  { match: "bge-m3", documentPrefix: "", queryPrefix: "" },
+  { match: "all-minilm", documentPrefix: "", queryPrefix: "" },
+  { match: "granite-embedding", documentPrefix: "", queryPrefix: "" },
+  { match: "paraphrase-multilingual", documentPrefix: "", queryPrefix: "" },
+  { match: "text-embedding-3", documentPrefix: "", queryPrefix: "" }
+];
+function normalizeModelName(model) {
+  const withoutTag = model.trim().toLowerCase().replace(/:[^/]*$/, "");
+  return withoutTag.slice(withoutTag.lastIndexOf("/") + 1);
+}
+function findModelPrompts(model) {
+  const name = normalizeModelName(model);
+  return KNOWN_MODELS.find((m) => name.includes(m.match)) ?? null;
+}
+
+// src/embedding/provider.ts
+function sameIdentity(a, b) {
+  return a.provider === b.provider && a.model === b.model && a.dimensions === b.dimensions && a.documentPrefix === b.documentPrefix && a.queryPrefix === b.queryPrefix;
+}
+function describeIdentity(identity) {
+  return `${identity.provider} (${identity.model}, ${identity.dimensions} dimensions)`;
+}
+var BaseEmbeddingProvider = class {
+  constructor(settings, maxBatchSize) {
+    this.settings = settings;
+    this.maxBatchSize = maxBatchSize;
+    this.name = `${settings.provider} (${settings.model})`;
+    const prompts = findModelPrompts(settings.model);
+    if (!prompts) {
+      logger.warn(`No known input prefixes for model "${settings.model}": texts are embedded as is`);
+    }
+    this.documentPrefix = prompts?.documentPrefix ?? "";
+    this.queryPrefix = prompts?.queryPrefix ?? "";
+  }
+  settings;
+  maxBatchSize;
+  name;
+  ready = false;
+  _identity = null;
+  documentPrefix;
+  queryPrefix;
+  get identity() {
+    if (!this._identity) {
+      throw new Error(`Embedding provider ${this.name} is not initialized`);
+    }
+    return this._identity;
+  }
+  isReady() {
+    return this.ready;
+  }
+  async initialize() {
+    if (this.ready) return;
+    await this.prepare();
+    const [probe] = await this.request([this.queryPrefix + "dimension probe"]);
+    if (this.settings.dimensions !== void 0 && probe.length !== this.settings.dimensions) {
+      throw new Error(
+        `${this.name} returned ${probe.length}-dimension vectors although embedding_dimensions is ${this.settings.dimensions}: this model or server does not support shortened vectors. Clear the embedding_dimensions option to use the native size.`
+      );
+    }
+    this._identity = {
+      provider: this.settings.provider,
+      model: this.settings.model,
+      dimensions: probe.length,
+      documentPrefix: this.documentPrefix,
+      queryPrefix: this.queryPrefix
+    };
+    this.ready = true;
+    logger.info(`Embedding provider ready: ${describeIdentity(this._identity)}`);
+  }
+  async embed(texts) {
+    if (!this.ready) await this.initialize();
+    const results = [];
+    for (let i = 0; i < texts.length; i += this.maxBatchSize) {
+      const batch = texts.slice(i, i + this.maxBatchSize).map((t) => this.documentPrefix + t);
+      results.push(...(await this.request(batch)).map((v) => new Float32Array(v)));
+    }
+    return results;
+  }
+  async embedQuery(text2) {
+    if (!this.ready) await this.initialize();
+    const [vector] = await this.request([this.queryPrefix + text2]);
+    return new Float32Array(vector);
+  }
+  async dispose() {
+    this.ready = false;
+  }
+};
+
+// src/db/identity.ts
+var IDENTITY_KEY = "embedding_identity";
+var LEGACY_PREFIXES = {
+  ollama: { documentPrefix: "title: none | text: ", queryPrefix: "task: search result | query: " },
+  openai: { documentPrefix: "", queryPrefix: "" }
+};
+var IndexMismatchError = class extends Error {
+};
+function getStoredIdentity(db) {
+  const row = getRow(db, "SELECT value FROM metadata WHERE key = ?", IDENTITY_KEY);
+  return row ? JSON.parse(row.value) : null;
+}
+function setStoredIdentity(db, identity) {
+  db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)").run(IDENTITY_KEY, JSON.stringify(identity));
+}
+function migrateLegacyIdentity(db) {
+  if (!getStoredIdentity(db)) {
+    const name = getRow(db, "SELECT value FROM metadata WHERE key = ?", "embedding_provider")?.value;
+    const dims = getRow(db, "SELECT value FROM metadata WHERE key = ?", "embedding_dimensions")?.value;
+    const match = name?.match(/^(ollama|openai) \((.+)\)$/);
+    if (match && dims) {
+      const provider = match[1];
+      setStoredIdentity(db, { provider, model: match[2], dimensions: Number(dims), ...LEGACY_PREFIXES[provider] });
     }
   }
-  return state.complete + (state.pending.length && isEntry(state.pending.toString("utf8")) ? 1 : 0);
+  db.prepare("DELETE FROM metadata WHERE key IN ('embedding_provider', 'embedding_dimensions')").run();
 }
-var CHUNK_SIZE = 1024 * 1024;
-var NEWLINE = 10;
-var COUNTED_TYPES = new Set(DEFAULT_ENTRY_TYPES);
-var counts = /* @__PURE__ */ new Map();
-function isEntry(line) {
-  if (!line.trim() || line.includes(SKIPPED_LINE_MARKER)) return false;
+function assertSameIdentity(stored, current, label, rebuildHint) {
+  if (!stored || sameIdentity(stored, current)) return;
+  throw new IndexMismatchError(
+    `The ${label} index was built with ${describeIdentity(stored)}, but the current embedding settings give ${describeIdentity(current)}. Vectors from different models cannot be compared. Either restore the previous embedding settings (/plugin configure asymptomatik-souvenir), or ${rebuildHint}.`
+  );
+}
+function tableExists(db, table) {
+  return getRow(db, "SELECT 1 AS found FROM sqlite_master WHERE name = ? AND type = 'table'", table) !== null;
+}
+function deleteOrphanVectors(db, vectorTable, chunkTable) {
+  const ids = db.prepare(`SELECT chunk_id FROM ${vectorTable}`).all();
+  const chunkExists = db.prepare(`SELECT 1 FROM ${chunkTable} WHERE chunk_id = ?`);
+  const remove = db.prepare(`DELETE FROM ${vectorTable} WHERE chunk_id = ?`);
+  let removed = 0;
+  for (const { chunk_id } of ids) {
+    if (!chunkExists.get(chunk_id)) {
+      remove.run(BigInt(chunk_id));
+      removed++;
+    }
+  }
+  return removed;
+}
+function vectorTableDimensions(db, table) {
+  const sql = getRow(db, "SELECT sql FROM sqlite_master WHERE name = ? AND type = 'table'", table)?.sql;
+  const match = sql?.match(/float\[(\d+)\]/i);
+  if (!match) {
+    throw new Error(`Cannot read the vector size of table ${table}`);
+  }
+  return Number(match[1]);
+}
+
+// src/db/store.ts
+var _db = null;
+var REBUILD_HINT = 'rebuild it with souvenir_index action="rebuild" project="all" (re-embeds every indexed chunk)';
+var PENDING_VECTORS_KEY = "pending_vectors:";
+function getDb() {
+  if (_db) return _db;
+  const db = openDatabase(getDbPath(), "transcripts");
   try {
-    return COUNTED_TYPES.has(JSON.parse(line).type ?? "");
+    db.exec(CREATE_TABLES);
+    migrateLegacyIdentity(db);
+    migrateLegacyVectors(db);
+    migrateChunksTable(db);
+    migrateIndexStateKeys(db);
+    db.exec(CREATE_INDEXES);
+    db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)").run(
+      "schema_version",
+      String(SCHEMA_VERSION)
+    );
+  } catch (err) {
+    db.close();
+    throw err;
+  }
+  _db = db;
+  logger.info("Database initialized");
+  return db;
+}
+function legacyChunkSpeakers(role, contentText) {
+  if (role === "turn") return { hasUser: 1n, hasAssistant: contentText.includes("\nASSISTANT: ") ? 1n : 0n };
+  if (role === "assistant") return { hasUser: 0n, hasAssistant: 1n };
+  return { hasUser: 0n, hasAssistant: 0n };
+}
+function migrateLegacyVectors(db) {
+  if (!tableExists(db, LEGACY_VEC_TABLE)) return;
+  const legacyDims = vectorTableDimensions(db, LEGACY_VEC_TABLE);
+  const currentDims = tableExists(db, CHUNK_VECTORS) ? vectorTableDimensions(db, CHUNK_VECTORS) : null;
+  const started = Date.now();
+  let moved = 0;
+  inTransaction(db, () => {
+    if (currentDims !== null && currentDims !== legacyDims) {
+      logger.warn(`Dropping ${LEGACY_VEC_TABLE} (${legacyDims}d): incompatible with ${CHUNK_VECTORS} (${currentDims}d)`);
+    } else {
+      if (currentDims === null) db.exec(createChunkVectorsTable(legacyDims));
+      const page = db.prepare("SELECT chunk_id, project_dir, session_id, role, timestamp, content_text FROM chunks WHERE chunk_id > ? ORDER BY chunk_id LIMIT 5000");
+      const legacyVector = db.prepare(`SELECT embedding FROM ${LEGACY_VEC_TABLE} WHERE chunk_id = ?`);
+      const alreadyMoved = db.prepare(`SELECT chunk_id FROM ${CHUNK_VECTORS} WHERE chunk_id = ?`);
+      const insert = db.prepare(`INSERT INTO ${CHUNK_VECTORS} (chunk_id, project_dir, session_id, role, has_user, has_assistant, timestamp, embedding) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
+      for (let last = 0; ; ) {
+        const rows = page.all(last);
+        if (rows.length === 0) break;
+        for (const r of rows) {
+          const id = BigInt(r.chunk_id);
+          const vector = legacyVector.get(id);
+          if (!vector || alreadyMoved.get(id)) continue;
+          const { hasUser, hasAssistant } = legacyChunkSpeakers(r.role, r.content_text);
+          insert.run(id, r.project_dir, r.session_id, r.role ?? "", hasUser, hasAssistant, r.timestamp ?? "", vector.embedding);
+          moved++;
+        }
+        last = rows[rows.length - 1].chunk_id;
+      }
+      const orphans = deleteOrphanVectors(db, CHUNK_VECTORS, "chunks");
+      if (orphans > 0) logger.info(`Deleted ${orphans} vectors of chunks that no longer exist`);
+    }
+    db.exec(`DROP TABLE ${LEGACY_VEC_TABLE}`);
+  });
+  db.exec("PRAGMA incremental_vacuum");
+  db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+  logger.info(`Moved ${moved} vectors from ${LEGACY_VEC_TABLE} to ${CHUNK_VECTORS} in ${Date.now() - started} ms`);
+}
+function migrateChunksTable(db) {
+  const columns = allRows(db, "PRAGMA table_info(chunks)").map((c) => c.name);
+  if (!columns.includes("embed_text")) return;
+  const started = Date.now();
+  inTransaction(db, () => {
+    db.exec(`
+      CREATE TABLE chunks_v3 (
+        chunk_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT NOT NULL,
+        project_dir TEXT NOT NULL,
+        entry_uuid TEXT,
+        role TEXT,
+        content_text TEXT NOT NULL,
+        timestamp TEXT,
+        line_number INTEGER,
+        part INTEGER NOT NULL DEFAULT 0,
+        UNIQUE(session_id, line_number, part)
+      );
+      INSERT INTO chunks_v3 (chunk_id, session_id, project_dir, entry_uuid, role, content_text, timestamp, line_number, part)
+        SELECT chunk_id, session_id, project_dir, entry_uuid, role, content_text, timestamp, line_number, 0 FROM chunks;
+      DROP TABLE chunks;
+      ALTER TABLE chunks_v3 RENAME TO chunks;
+    `);
+    if (tableExists(db, CHUNK_VECTORS)) {
+      const orphans = deleteOrphanVectors(db, CHUNK_VECTORS, "chunks");
+      if (orphans > 0) logger.info(`Deleted ${orphans} vectors of chunks that no longer exist`);
+    }
+  });
+  db.exec("PRAGMA incremental_vacuum");
+  db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+  logger.info(`Chunks table migrated to schema 3 in ${Date.now() - started} ms`);
+}
+function migrateIndexStateKeys(db) {
+  const rows = allRows(db, "SELECT file_path FROM index_state").filter((r) => isAbsolute2(r.file_path));
+  if (rows.length === 0) return;
+  const projectsDir = getProjectsDir();
+  const rename = db.prepare("UPDATE OR REPLACE index_state SET file_path = ? WHERE file_path = ?");
+  inTransaction(db, () => {
+    for (const { file_path } of rows) {
+      rename.run(relative(projectsDir, file_path).split(sep).join("/"), file_path);
+    }
+  });
+  logger.info(`Index progress of ${rows.length} transcripts keyed by archive path`);
+}
+function prepareVectorIndex(identity, options = {}) {
+  const db = getDb();
+  const stored = getStoredIdentity(db);
+  if (!options.resetAll) {
+    assertSameIdentity(stored, identity, "transcript", REBUILD_HINT);
+  }
+  inTransaction(db, () => {
+    if (options.resetAll) {
+      if (tableExists(db, CHUNK_VECTORS)) db.exec(`DROP TABLE ${CHUNK_VECTORS}`);
+      db.exec("DELETE FROM chunks WHERE session_id IN (SELECT session_id FROM transcript_files)");
+      db.exec("DELETE FROM index_state");
+      const markPending = db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)");
+      for (const { project_dir } of allRows(db, "SELECT DISTINCT project_dir FROM chunks")) {
+        markPending.run(PENDING_VECTORS_KEY + project_dir, (/* @__PURE__ */ new Date()).toISOString());
+      }
+    }
+    if (!tableExists(db, CHUNK_VECTORS)) db.exec(createChunkVectorsTable(identity.dimensions));
+    setStoredIdentity(db, identity);
+  });
+}
+function assertSearchable(identity) {
+  const db = getDb();
+  const stored = getStoredIdentity(db);
+  if (!stored || !tableExists(db, CHUNK_VECTORS)) {
+    throw new IndexMismatchError('No semantic index found. Run souvenir_index with action="build" first to create the index.');
+  }
+  assertSameIdentity(stored, identity, "transcript", REBUILD_HINT);
+}
+function getIndexIdentity() {
+  return getStoredIdentity(getDb());
+}
+function closeDb() {
+  if (_db) {
+    _db.close();
+    _db = null;
+  }
+}
+function insertChunks(chunks, embeddings) {
+  const db = getDb();
+  if (chunks.length !== embeddings.length) {
+    throw new Error(`Chunk count (${chunks.length}) doesn't match embedding count (${embeddings.length})`);
+  }
+  const insertChunk = db.prepare(`
+    INSERT OR IGNORE INTO chunks (session_id, project_dir, entry_uuid, role, content_text, timestamp, line_number, part)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  let inserted = 0;
+  inTransaction(db, () => {
+    for (let i = 0; i < chunks.length; i++) {
+      const chunk = chunks[i];
+      const result = insertChunk.run(
+        chunk.session_id,
+        chunk.project_dir,
+        chunk.entry_uuid || null,
+        chunk.role,
+        chunk.content_text,
+        chunk.timestamp || null,
+        chunk.line_number,
+        chunk.part
+      );
+      if (result.changes > 0) {
+        insertVector(db, BigInt(result.lastInsertRowid), chunk, chunk.hasUser, chunk.hasAssistant, embeddings[i]);
+        inserted++;
+      }
+    }
+  });
+  return inserted;
+}
+function insertVector(db, chunkId, chunk, hasUser, hasAssistant, embedding) {
+  db.prepare(`
+    INSERT INTO ${CHUNK_VECTORS} (chunk_id, project_dir, session_id, role, has_user, has_assistant, timestamp, embedding)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    chunkId,
+    chunk.project_dir,
+    chunk.session_id,
+    chunk.role ?? "",
+    hasUser ? 1n : 0n,
+    hasAssistant ? 1n : 0n,
+    chunk.timestamp ?? "",
+    vectorBlob(embedding)
+  );
+}
+function hasPendingVectors(projectDir) {
+  return getRow(getDb(), "SELECT 1 AS pending FROM metadata WHERE key = ?", PENDING_VECTORS_KEY + projectDir) !== null;
+}
+function getChunksWithoutVectors(projectDir, afterChunkId, limit) {
+  const db = getDb();
+  const page = allRows(db, "SELECT * FROM chunks WHERE project_dir = ? AND chunk_id > ? ORDER BY chunk_id LIMIT ?", projectDir, afterChunkId, limit);
+  if (page.length === 0) return { missing: [], lastChunkId: null };
+  const hasVector = db.prepare(`SELECT 1 FROM ${CHUNK_VECTORS} WHERE chunk_id = ?`);
+  return { missing: page.filter((c) => !hasVector.get(BigInt(c.chunk_id))), lastChunkId: page[page.length - 1].chunk_id };
+}
+function insertVectors(chunks, embeddings) {
+  const db = getDb();
+  inTransaction(db, () => {
+    chunks.forEach((c, i) => {
+      const { hasUser, hasAssistant } = legacyChunkSpeakers(c.role, c.content_text);
+      insertVector(db, BigInt(c.chunk_id), c, hasUser === 1n, hasAssistant === 1n, embeddings[i]);
+    });
+  });
+}
+function clearPendingVectors(projectDir) {
+  getDb().prepare("DELETE FROM metadata WHERE key = ?").run(PENDING_VECTORS_KEY + projectDir);
+}
+function searchSemantic(identity, queryEmbedding, options = {}) {
+  assertSearchable(identity);
+  const db = getDb();
+  const filters = [];
+  const params = [vectorBlob(queryEmbedding), options.topK || 10];
+  if (options.projectDir) {
+    filters.push("project_dir = ?");
+    params.push(options.projectDir);
+  }
+  if (options.sessionId) {
+    filters.push("session_id = ?");
+    params.push(options.sessionId);
+  }
+  if (options.speaker === "user") filters.push("has_user = 1");
+  if (options.speaker === "assistant") filters.push("has_assistant = 1");
+  if (options.dateFrom || options.dateTo) filters.push("timestamp != ''");
+  if (options.dateFrom) {
+    filters.push("timestamp >= ?");
+    params.push(options.dateFrom);
+  }
+  if (options.dateTo) {
+    filters.push("timestamp <= ?");
+    params.push(options.dateTo);
+  }
+  return db.prepare(`
+    SELECT c.*, v.distance
+    FROM (
+      SELECT chunk_id, distance FROM ${CHUNK_VECTORS}
+      WHERE embedding MATCH ? AND k = ?${filters.map((f) => ` AND ${f}`).join("")}
+    ) v
+    JOIN chunks c ON c.chunk_id = v.chunk_id
+    ORDER BY v.distance
+  `).all(...params);
+}
+function getSessionChunks(projectDir, sessionId) {
+  return allRows(getDb(), "SELECT * FROM chunks WHERE project_dir = ? AND session_id = ? ORDER BY line_number, part", projectDir, sessionId);
+}
+function iteratePartialSessionChunks(projectDir, likePattern) {
+  const archived = "session_id NOT IN (SELECT session_id FROM transcript_files WHERE project_dir = ?)";
+  return likePattern === null ? iterateRows(getDb(), `SELECT * FROM chunks WHERE project_dir = ? AND ${archived}`, projectDir, projectDir) : iterateRows(getDb(), `SELECT * FROM chunks WHERE project_dir = ? AND ${archived} AND content_text LIKE ? ESCAPE '\\'`, projectDir, projectDir, likePattern);
+}
+function getIndexState(fileKey) {
+  const db = getDb();
+  return getRow(db, "SELECT * FROM index_state WHERE file_path = ?", fileKey);
+}
+function setIndexState(fileKey, archivedBytes, lastLine) {
+  const db = getDb();
+  db.prepare(`
+    INSERT OR REPLACE INTO index_state (file_path, file_size, last_line, indexed_at)
+    VALUES (?, ?, ?, ?)
+  `).run(fileKey, archivedBytes, lastLine, (/* @__PURE__ */ new Date()).toISOString());
+}
+function getIndexStatus(projectDir) {
+  const db = getDb();
+  const projectFilter = projectDir ? "WHERE project_dir = ?" : "";
+  const params = projectDir ? [projectDir] : [];
+  const chunkStats = db.prepare(`
+    SELECT project_dir, COUNT(*) as chunk_count
+    FROM chunks ${projectFilter}
+    GROUP BY project_dir
+  `).all(...params);
+  const fileStats = db.prepare(`
+    SELECT COUNT(*) as total FROM index_state
+  `).get();
+  const lastIndexedOf = db.prepare("SELECT MAX(indexed_at) as last FROM index_state WHERE file_path LIKE ? ESCAPE '\\'");
+  const projects = chunkStats.map((row) => ({
+    projectDir: row.project_dir,
+    chunkCount: row.chunk_count,
+    lastIndexed: lastIndexedOf.get(`${escapeLike(row.project_dir)}/%`)?.last || null
+  }));
+  const totalChunks = chunkStats.reduce((sum, r) => sum + r.chunk_count, 0);
+  let dbSizeBytes = 0;
+  try {
+    dbSizeBytes = fsStatSync(getDbPath()).size;
   } catch {
-    return false;
+  }
+  return {
+    totalChunks,
+    totalFiles: fileStats.total,
+    projects,
+    dbSizeBytes
+  };
+}
+function escapeLike(value) {
+  return value.replace(/[\\%_]/g, (c) => `\\${c}`);
+}
+function clearArchivedChunks(projectDir, sessionId) {
+  const db = getDb();
+  const sessionFilter = sessionId ? "AND session_id = ?" : "";
+  const params = sessionId ? [projectDir, projectDir, sessionId] : [projectDir, projectDir];
+  inTransaction(db, () => {
+    const chunkIds = allRows(db, `
+      SELECT chunk_id FROM chunks
+      WHERE project_dir = ? AND session_id IN (SELECT session_id FROM transcript_files WHERE project_dir = ?) ${sessionFilter}`, ...params);
+    if (tableExists(db, CHUNK_VECTORS)) {
+      const deleteVector = db.prepare(`DELETE FROM ${CHUNK_VECTORS} WHERE chunk_id = ?`);
+      for (const { chunk_id } of chunkIds) deleteVector.run(BigInt(chunk_id));
+    }
+    const deleteChunk = db.prepare("DELETE FROM chunks WHERE chunk_id = ?");
+    for (const { chunk_id } of chunkIds) deleteChunk.run(chunk_id);
+    if (sessionId) {
+      db.prepare("DELETE FROM index_state WHERE file_path IN (SELECT file_key FROM transcript_files WHERE project_dir = ? AND (session_id = ? OR parent_session_id = ?))").run(projectDir, sessionId, sessionId);
+    } else {
+      db.prepare("DELETE FROM index_state WHERE file_path IN (SELECT file_key FROM transcript_files WHERE project_dir = ?)").run(projectDir);
+    }
+  });
+  incrementalVacuum();
+}
+function deleteProject(projectDir) {
+  const db = getDb();
+  inTransaction(db, () => {
+    const chunkIds = allRows(db, "SELECT chunk_id FROM chunks WHERE project_dir = ?", projectDir);
+    if (tableExists(db, CHUNK_VECTORS)) {
+      const deleteVector = db.prepare(`DELETE FROM ${CHUNK_VECTORS} WHERE chunk_id = ?`);
+      for (const { chunk_id } of chunkIds) deleteVector.run(BigInt(chunk_id));
+    }
+    db.prepare("DELETE FROM chunks WHERE project_dir = ?").run(projectDir);
+    db.prepare("DELETE FROM index_state WHERE file_path IN (SELECT file_key FROM transcript_files WHERE project_dir = ?)").run(projectDir);
+    db.prepare("DELETE FROM transcript_lines WHERE file_key IN (SELECT file_key FROM transcript_files WHERE project_dir = ?)").run(projectDir);
+    db.prepare("DELETE FROM transcript_files WHERE project_dir = ?").run(projectDir);
+    db.prepare("DELETE FROM transcript_attachments WHERE project_dir = ?").run(projectDir);
+    db.prepare("DELETE FROM metadata WHERE key = ?").run(PENDING_VECTORS_KEY + projectDir);
+  });
+  incrementalVacuum();
+}
+function incrementalVacuum() {
+  try {
+    const db = getDb();
+    db.exec("PRAGMA incremental_vacuum");
+  } catch (err) {
+    logger.error("Incremental vacuum error:", err);
+  }
+}
+function fullVacuum() {
+  const db = getDb();
+  db.exec("VACUUM");
+}
+function getProjectChunkCount(projectDir) {
+  try {
+    const dbPath = getDbPath();
+    if (!existsSync2(dbPath)) return 0;
+    const db = getDb();
+    const row = db.prepare("SELECT COUNT(*) as cnt FROM chunks WHERE project_dir = ?").get(projectDir);
+    return row?.cnt ?? 0;
+  } catch {
+    return 0;
   }
 }
 
+// src/archive/store.ts
+function compress(text2) {
+  return deflateRawSync(typeof text2 === "string" ? Buffer.from(text2, "utf8") : text2);
+}
+function decompress(data) {
+  return inflateRawSync(data);
+}
+function getArchivedFile(fileKey) {
+  return getRow(getDb(), "SELECT * FROM transcript_files WHERE file_key = ?", fileKey);
+}
+function getArchivedFiles(projectDir) {
+  return allRows(getDb(), "SELECT * FROM transcript_files WHERE project_dir = ?", projectDir);
+}
+function findArchivedFiles(sessionId, projectDir) {
+  return projectDir ? allRows(getDb(), "SELECT * FROM transcript_files WHERE session_id = ? AND project_dir = ? ORDER BY parent_session_id IS NOT NULL", sessionId, projectDir) : allRows(getDb(), "SELECT * FROM transcript_files WHERE session_id = ? ORDER BY parent_session_id IS NOT NULL", sessionId);
+}
+function getArchivedProjectDirs() {
+  return allRows(getDb(), "SELECT DISTINCT project_dir FROM transcript_files").map((r) => r.project_dir);
+}
+function* archivedLines(fileKey, fromLine = 1) {
+  const rows = iterateRows(
+    getDb(),
+    "SELECT line_number, data FROM transcript_lines WHERE file_key = ? AND line_number >= ? ORDER BY line_number",
+    fileKey,
+    fromLine
+  );
+  for (const row of rows) {
+    yield { lineNumber: row.line_number, text: decompress(row.data).toString("utf8") };
+  }
+}
+function getAttachments(projectDir, sessionId) {
+  return allRows(
+    getDb(),
+    "SELECT file_key, project_dir, session_id, size, mtime_ms FROM transcript_attachments WHERE project_dir = ? AND session_id = ? ORDER BY file_key",
+    projectDir,
+    sessionId
+  );
+}
+function getAttachment(fileKey) {
+  return getRow(getDb(), "SELECT * FROM transcript_attachments WHERE file_key = ?", fileKey);
+}
+function getArchiveStats(projectDir) {
+  const db = getDb();
+  const where = projectDir ? "WHERE project_dir = ?" : "";
+  const params = projectDir ? [projectDir] : [];
+  const files = getRow(db, `
+    SELECT COUNT(*) AS files, COUNT(DISTINCT CASE WHEN parent_session_id IS NULL THEN session_id END) AS sessions,
+           COALESCE(SUM(line_count), 0) AS lines, COUNT(source_gone_at) AS gone, COUNT(error) AS errors
+    FROM transcript_files ${where}`, ...params);
+  const stored = projectDir ? getRow(db, "SELECT COALESCE(SUM(LENGTH(l.data)), 0) AS bytes FROM transcript_lines l JOIN transcript_files f ON f.file_key = l.file_key WHERE f.project_dir = ?", projectDir) : getRow(db, "SELECT COALESCE(SUM(LENGTH(data)), 0) AS bytes FROM transcript_lines");
+  const attachments = getRow(
+    db,
+    `SELECT COUNT(*) AS count, COALESCE(SUM(LENGTH(data)), 0) AS bytes FROM transcript_attachments ${where}`,
+    ...params
+  );
+  return {
+    files: files.files,
+    sessions: files.sessions,
+    lines: files.lines,
+    sourcesGone: files.gone,
+    errors: files.errors,
+    storedBytes: stored.bytes,
+    attachments: attachments.count,
+    attachmentBytes: attachments.bytes
+  };
+}
+
+// src/transcript/parser.ts
+var SKIPPED_LINE_MARKER = '"file-history-snapshot"';
+var DEFAULT_ENTRY_TYPES = ["user", "assistant", "summary"];
+async function* parseTranscript(fileKey, options = {}) {
+  const {
+    includeTypes = DEFAULT_ENTRY_TYPES,
+    fromLine = 1,
+    toLine,
+    maxEntries,
+    containsText,
+    caseInsensitive = true
+  } = options;
+  const searchText = containsText && caseInsensitive ? containsText.toLowerCase() : containsText;
+  let yielded = 0;
+  for (const { lineNumber, text: line } of archivedLines(fileKey, fromLine)) {
+    if (toLine !== void 0 && lineNumber > toLine) break;
+    if (maxEntries && yielded >= maxEntries) break;
+    if (!line.trim()) continue;
+    if (line.includes(SKIPPED_LINE_MARKER)) continue;
+    if (searchText) {
+      const haystack = caseInsensitive ? line.toLowerCase() : line;
+      if (!haystack.includes(searchText)) continue;
+    }
+    let entry;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      logger.debug(`Skipping corrupt line ${lineNumber} in ${fileKey}`);
+      continue;
+    }
+    if (!includeTypes.includes(entry.type)) continue;
+    yielded++;
+    yield { entry, lineNumber, rawLength: line.length };
+  }
+}
+function toolResultText(content) {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content.map((b) => b?.type === "text" && typeof b.text === "string" ? b.text : "").filter(Boolean).join("\n");
+  }
+  return "";
+}
+function extractText(entry) {
+  switch (entry.type) {
+    case "user": {
+      const user = entry;
+      if (typeof user.message.content === "string") {
+        return user.message.content;
+      }
+      return user.message.content.map((block) => {
+        if (block.type === "text") return block.text;
+        if (block.type === "tool_result") return toolResultText(block.content);
+        return "";
+      }).filter(Boolean).join("\n");
+    }
+    case "assistant": {
+      const asst = entry;
+      return asst.message.content.map((block) => {
+        if (block.type === "text") return block.text;
+        if (block.type === "tool_use") {
+          const tool = block;
+          return `[Tool: ${tool.name}]`;
+        }
+        return "";
+      }).filter(Boolean).join("\n");
+    }
+    case "summary":
+      return entry.summary || "";
+    default:
+      return "";
+  }
+}
+function isToolResultEntry(entry) {
+  if (entry.type !== "user") return false;
+  const content = entry.message.content;
+  return Array.isArray(content) && content.length > 0 && content.every((b) => b.type === "tool_result");
+}
+
 // src/transcript/discovery.ts
+import { readFileSync, readdirSync, existsSync as existsSync3, statSync } from "fs";
+import { join as join2, basename, relative as relative2, sep as sep2 } from "path";
 var indexCache = /* @__PURE__ */ new Map();
-function listProjectDirs() {
+var SESSION_DIR = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function listProjectDirsOnDisk() {
   const projectsDir = getProjectsDir();
-  if (!existsSync(projectsDir)) return [];
+  if (!existsSync3(projectsDir)) return [];
   return readdirSync(projectsDir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
 }
 function loadSessionIndex(projectDir) {
   const indexPath = join2(getProjectTranscriptDir(projectDir), "sessions-index.json");
-  if (!existsSync(indexPath)) {
+  if (!existsSync3(indexPath)) {
     logger.debug(`No sessions-index.json for ${projectDir}`);
     return null;
   }
   try {
-    const stat = statSync2(indexPath);
+    const stat = statSync(indexPath);
     const cached2 = indexCache.get(projectDir);
     if (cached2 && cached2.mtime === stat.mtimeMs) {
       return cached2.data;
@@ -34971,31 +35716,439 @@ function loadSessionIndex(projectDir) {
     return null;
   }
 }
+function listSourceFiles(projectDir) {
+  const dir = getProjectTranscriptDir(projectDir);
+  const transcripts = [];
+  const attachments = [];
+  if (!existsSync3(dir)) return { transcripts, attachments };
+  const keyOf = (path) => relative2(getProjectsDir(), path).split(sep2).join("/");
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const path = join2(dir, entry.name);
+    if (entry.isFile() && entry.name.endsWith(".jsonl")) {
+      transcripts.push({ path, fileKey: keyOf(path), sessionId: basename(entry.name, ".jsonl"), parentSessionId: null });
+      continue;
+    }
+    if (!entry.isDirectory() || !SESSION_DIR.test(entry.name)) continue;
+    const sessionId = entry.name;
+    for (const file2 of walkFiles(path)) {
+      const inSubagents = relative2(path, file2).split(sep2)[0] === "subagents";
+      if (inSubagents && file2.endsWith(".jsonl")) {
+        if (basename(file2).includes("aprompt_suggestion")) continue;
+        transcripts.push({ path: file2, fileKey: keyOf(file2), sessionId: basename(file2, ".jsonl"), parentSessionId: sessionId });
+      } else if (!(inSubagents && basename(file2).includes("aprompt_suggestion"))) {
+        attachments.push({ path: file2, fileKey: keyOf(file2), sessionId });
+      }
+    }
+  }
+  return { transcripts, attachments };
+}
+function walkFiles(dir) {
+  const files = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const path = join2(dir, entry.name);
+    if (entry.isDirectory()) files.push(...walkFiles(path));
+    else if (entry.isFile()) files.push(path);
+  }
+  return files;
+}
+
+// src/archive/archiver.ts
+import { closeSync, openSync, readFileSync as readFileSync2, readSync, statSync as statSync2 } from "fs";
+import { setImmediate as nextTick } from "timers/promises";
+
+// src/utils/serial.ts
+function serialized(fn) {
+  let queue = Promise.resolve();
+  return (...args) => {
+    const run = queue.then(() => fn(...args));
+    queue = run.catch(() => {
+    });
+    return run;
+  };
+}
+
+// src/archive/archiver.ts
+var BATCH_BYTES = 8 * 1024 * 1024;
+var FIRST_PROMPT_LABEL_CHARS = 1e3;
+var COUNTED_TYPES = /* @__PURE__ */ new Set(["user", "assistant", "summary"]);
+var NEWLINE = 10;
+var archiveProjects = serialized(runArchive);
+async function runArchive(projectDirs, options = {}) {
+  const report = { filesUpdated: 0, linesAdded: 0, attachmentsUpdated: 0, sourcesGone: 0, errors: [] };
+  for (const projectDir of projectDirs) {
+    if (options.signal?.aborted) break;
+    const { transcripts, attachments } = listSourceFiles(projectDir);
+    const total = transcripts.length + attachments.length;
+    let current = 0;
+    for (const source of transcripts) {
+      if (options.signal?.aborted) break;
+      options.onProgress?.({ phase: `Archiving ${projectDir}`, current: ++current, total, detail: source.fileKey });
+      try {
+        const added = await archiveTranscript(projectDir, source, options.signal);
+        if (added > 0) {
+          report.filesUpdated++;
+          report.linesAdded += added;
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logger.error(`Could not archive ${source.path}:`, msg);
+        report.errors.push(`${source.fileKey}: ${msg}`);
+      }
+    }
+    for (const attachment of attachments) {
+      if (options.signal?.aborted) break;
+      options.onProgress?.({ phase: `Archiving ${projectDir}`, current: ++current, total, detail: attachment.fileKey });
+      try {
+        if (await archiveAttachment(projectDir, attachment)) report.attachmentsUpdated++;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logger.error(`Could not archive ${attachment.path}:`, msg);
+        report.errors.push(`${attachment.fileKey}: ${msg}`);
+      }
+      await nextTick();
+    }
+    if (!options.signal?.aborted) {
+      report.sourcesGone += await markSourcesGone(projectDir, new Set(transcripts.map((t) => t.fileKey)));
+    }
+  }
+  if (report.linesAdded > 0 || report.attachmentsUpdated > 0) {
+    logger.info(`Archived ${report.linesAdded} lines in ${report.filesUpdated} transcripts, ${report.attachmentsUpdated} attached files`);
+  }
+  return report;
+}
+async function archiveTranscript(projectDir, source, signal) {
+  const db = getDb();
+  db.prepare(`
+    INSERT OR IGNORE INTO transcript_files (file_key, project_dir, session_id, parent_session_id, updated_at)
+    VALUES (?, ?, ?, ?, ?)
+  `).run(source.fileKey, projectDir, source.sessionId, source.parentSessionId, (/* @__PURE__ */ new Date()).toISOString());
+  let added = 0;
+  for (; ; ) {
+    if (signal?.aborted) return added;
+    const state = getArchivedFile(source.fileKey);
+    let size;
+    try {
+      size = statSync2(source.path).size;
+    } catch {
+      return added;
+    }
+    if (size < state.archived_bytes) {
+      const reason = `the transcript is now ${size} bytes, smaller than the ${state.archived_bytes} bytes already archived: it was rewritten, the archived copy is kept unchanged and new lines are not archived`;
+      if (state.error !== reason) {
+        db.prepare("UPDATE transcript_files SET error = ?, updated_at = ? WHERE file_key = ?").run(reason, (/* @__PURE__ */ new Date()).toISOString(), source.fileKey);
+      }
+      throw new Error(reason);
+    }
+    if (size === state.archived_bytes) {
+      if (state.error) db.prepare("UPDATE transcript_files SET error = NULL WHERE file_key = ?").run(source.fileKey);
+      return added;
+    }
+    const batch = readCompleteLines(source.path, state.archived_bytes, size);
+    if (!batch) return added;
+    const written = await writeBatchWhenFree(projectDir, state, batch.lines, batch.bytes);
+    if (written === null) continue;
+    added += written;
+    await nextTick();
+  }
+}
+function readCompleteLines(path, offset, size) {
+  const fd = openSync(path, "r");
+  try {
+    let length = Math.min(BATCH_BYTES, size - offset);
+    for (; ; ) {
+      const buf = Buffer.alloc(length);
+      const read = readSync(fd, buf, 0, length, offset);
+      const data = buf.subarray(0, read);
+      const lastNewline = data.lastIndexOf(NEWLINE);
+      if (lastNewline === -1) {
+        if (offset + read >= size) return null;
+        length = Math.min(length * 2, size - offset);
+        continue;
+      }
+      const lines = [];
+      let start = 0;
+      for (let nl = data.indexOf(NEWLINE); nl !== -1 && nl <= lastNewline; nl = data.indexOf(NEWLINE, start)) {
+        const end = nl > start && data[nl - 1] === 13 ? nl - 1 : nl;
+        lines.push(data.subarray(start, end));
+        start = nl + 1;
+      }
+      return { lines, bytes: lastNewline + 1 };
+    }
+  } finally {
+    closeSync(fd);
+  }
+}
+var WRITE_ATTEMPTS = 6;
+async function writeBatchWhenFree(projectDir, state, lines, bytes) {
+  const compressed = lines.map((line) => compress(line));
+  const meta3 = readMetadata(projectDir, state, lines);
+  return whenWriteLockFree(state.file_key, () => writeBatch(state, compressed, meta3, bytes));
+}
+async function whenWriteLockFree(fileKey, write) {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return write();
+    } catch (err) {
+      const busy = err instanceof Error && /database is locked|SQLITE_BUSY/i.test(err.message);
+      if (!busy || attempt >= WRITE_ATTEMPTS) throw err;
+      logger.debug(`Archive write of ${fileKey} waiting for another process (attempt ${attempt})`);
+      await nextTick();
+    }
+  }
+}
+function writeBatch(state, lines, meta3, bytes) {
+  const db = getDb();
+  const insertLine = db.prepare("INSERT INTO transcript_lines (file_key, line_number, data) VALUES (?, ?, ?)");
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const current = getArchivedFile(state.file_key);
+    if (current.archived_bytes !== state.archived_bytes || current.line_count !== state.line_count) {
+      db.exec("ROLLBACK");
+      return null;
+    }
+    for (let i = 0; i < lines.length; i++) {
+      insertLine.run(state.file_key, state.line_count + i + 1, lines[i]);
+    }
+    db.prepare(`
+      UPDATE transcript_files SET
+        archived_bytes = ?, line_count = ?, entry_count = entry_count + ?,
+        first_timestamp = COALESCE(first_timestamp, ?),
+        last_timestamp = CASE WHEN ? IS NOT NULL AND (last_timestamp IS NULL OR ? > last_timestamp) THEN ? ELSE last_timestamp END,
+        first_prompt = CASE WHEN first_prompt = '' THEN ? ELSE first_prompt END,
+        title = CASE WHEN ? != '' THEN ? ELSE title END,
+        custom_title = CASE WHEN ? != '' THEN ? ELSE custom_title END,
+        git_branch = CASE WHEN git_branch = '' THEN ? ELSE git_branch END,
+        project_path = CASE WHEN project_path = '' THEN ? ELSE project_path END,
+        parent_session_id = COALESCE(parent_session_id, ?),
+        source_gone_at = NULL, error = NULL, updated_at = ?
+      WHERE file_key = ?
+    `).run(
+      state.archived_bytes + bytes,
+      state.line_count + lines.length,
+      meta3.entries,
+      meta3.firstTimestamp,
+      meta3.lastTimestamp,
+      meta3.lastTimestamp,
+      meta3.lastTimestamp,
+      meta3.firstPrompt,
+      meta3.title,
+      meta3.title,
+      meta3.customTitle,
+      meta3.customTitle,
+      meta3.gitBranch,
+      meta3.projectPath,
+      meta3.parentSessionId,
+      (/* @__PURE__ */ new Date()).toISOString(),
+      state.file_key
+    );
+    db.exec("COMMIT");
+    return lines.length;
+  } catch (err) {
+    db.exec("ROLLBACK");
+    throw err;
+  }
+}
+function readMetadata(projectDir, state, lines) {
+  const meta3 = {
+    entries: 0,
+    firstTimestamp: null,
+    lastTimestamp: null,
+    firstPrompt: "",
+    title: "",
+    customTitle: "",
+    gitBranch: "",
+    projectPath: "",
+    parentSessionId: null
+  };
+  const needsParent = state.parent_session_id === null && state.session_id.startsWith("agent-");
+  for (const line of lines) {
+    let entry;
+    try {
+      entry = JSON.parse(line.toString("utf8"));
+    } catch {
+      continue;
+    }
+    const type = typeof entry.type === "string" ? entry.type : "";
+    if (COUNTED_TYPES.has(type)) meta3.entries++;
+    const ts = typeof entry.timestamp === "string" ? entry.timestamp : null;
+    if (ts) {
+      if (!meta3.firstTimestamp) meta3.firstTimestamp = ts;
+      if (!meta3.lastTimestamp || ts > meta3.lastTimestamp) meta3.lastTimestamp = ts;
+    }
+    if (type === "summary" && typeof entry.summary === "string" && entry.summary) meta3.title = entry.summary;
+    if (type === "ai-title" && typeof entry.aiTitle === "string" && entry.aiTitle) meta3.title = entry.aiTitle;
+    if (type === "custom-title" && typeof entry.customTitle === "string" && entry.customTitle) meta3.customTitle = entry.customTitle;
+    if (!meta3.gitBranch && typeof entry.gitBranch === "string") meta3.gitBranch = entry.gitBranch;
+    if (!meta3.projectPath && typeof entry.cwd === "string" && isProjectPath(entry.cwd, projectDir)) meta3.projectPath = entry.cwd;
+    if (needsParent && !meta3.parentSessionId && typeof entry.sessionId === "string" && entry.sessionId !== state.session_id) {
+      meta3.parentSessionId = entry.sessionId;
+    }
+    if (!state.first_prompt && !meta3.firstPrompt && type === "user" && !entry.isMeta) {
+      meta3.firstPrompt = promptText(entry).slice(0, FIRST_PROMPT_LABEL_CHARS);
+    }
+  }
+  return meta3;
+}
+function promptText(entry) {
+  const content = entry.message?.content;
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    const text2 = content.find((b) => b?.type === "text" && typeof b.text === "string");
+    return text2 ? text2.text : "";
+  }
+  return "";
+}
+async function archiveAttachment(projectDir, source) {
+  const stat = statSync2(source.path);
+  const db = getDb();
+  const existing = db.prepare("SELECT size, mtime_ms FROM transcript_attachments WHERE file_key = ?").get(source.fileKey);
+  if (existing && existing.size === stat.size && existing.mtime_ms === stat.mtimeMs) return false;
+  const data = compress(readFileSync2(source.path));
+  await whenWriteLockFree(source.fileKey, () => db.prepare(`
+    INSERT OR REPLACE INTO transcript_attachments (file_key, project_dir, session_id, size, mtime_ms, data, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(source.fileKey, projectDir, source.sessionId, stat.size, stat.mtimeMs, data, (/* @__PURE__ */ new Date()).toISOString()));
+  return true;
+}
+async function markSourcesGone(projectDir, present) {
+  const gone = getArchivedFiles(projectDir).filter((f) => f.source_gone_at === null && !present.has(f.file_key));
+  if (gone.length === 0) return 0;
+  const db = getDb();
+  const now = (/* @__PURE__ */ new Date()).toISOString();
+  const mark = db.prepare("UPDATE transcript_files SET source_gone_at = ? WHERE file_key = ? AND source_gone_at IS NULL");
+  await whenWriteLockFree(projectDir, () => inTransaction(db, () => {
+    for (const f of gone) mark.run(now, f.file_key);
+  }));
+  logger.info(`${gone.length} transcript(s) of ${projectDir} deleted by Claude Code: the archived copies are kept`);
+  return gone.length;
+}
+
+// src/archive/catalog.ts
+function ensureArchived(projectDirs, onProgress) {
+  return archiveProjects(projectDirs, { onProgress });
+}
+function archiveErrorNote(report) {
+  if (report.errors.length === 0) return null;
+  return `Note: ${report.errors.length} file(s) could not be archived, their newest content may be missing (${report.errors.slice(0, 3).join("; ")}${report.errors.length > 3 ? "; \u2026" : ""}).`;
+}
+function listProjectDirs() {
+  const dirs = new Set(listProjectDirsOnDisk());
+  for (const dir of getArchivedProjectDirs()) dirs.add(dir);
+  for (const { project_dir } of allRows(getDb(), "SELECT DISTINCT project_dir FROM chunks")) {
+    dirs.add(project_dir);
+  }
+  return [...dirs];
+}
+function legacySessions(projectDir, sessionId) {
+  const filter = sessionId ? "AND session_id = ?" : "";
+  const params = sessionId ? [projectDir, projectDir, sessionId] : [projectDir, projectDir];
+  return allRows(getDb(), `
+    SELECT session_id, COUNT(*) AS excerpts, MIN(timestamp) AS first_ts, MAX(timestamp) AS last_ts
+    FROM chunks
+    WHERE project_dir = ? AND session_id NOT IN (SELECT session_id FROM transcript_files WHERE project_dir = ?) ${filter}
+    GROUP BY session_id`, ...params);
+}
+function legacyFirstPrompt(projectDir, sessionId) {
+  const first = getRow(
+    getDb(),
+    "SELECT content_text FROM chunks WHERE session_id = ? AND project_dir = ? AND role = 'turn' ORDER BY line_number, part LIMIT 1",
+    sessionId,
+    projectDir
+  )?.content_text ?? "";
+  if (!first.startsWith("USER: ")) return "";
+  const end = first.indexOf("\nASSISTANT: ");
+  return first.slice("USER: ".length, end === -1 ? void 0 : end);
+}
+function fromArchive(row, indexEntry) {
+  return {
+    sessionId: row.session_id,
+    projectDir: row.project_dir,
+    fileKey: row.file_key,
+    firstPrompt: row.first_prompt || indexEntry?.firstPrompt || "",
+    summary: row.custom_title || row.title || indexEntry?.summary || "",
+    messageCount: row.entry_count,
+    created: row.first_timestamp ?? indexEntry?.created ?? row.updated_at,
+    modified: row.last_timestamp ?? indexEntry?.modified ?? row.updated_at,
+    gitBranch: row.git_branch || indexEntry?.gitBranch || "",
+    projectPath: row.project_path || indexEntry?.projectPath || "",
+    isSidechain: row.parent_session_id !== null,
+    availability: "complete",
+    sourceDeleted: row.source_gone_at !== null
+  };
+}
+function fromLegacy(projectDir, row, indexEntry) {
+  const created = row.first_ts ?? indexEntry?.created ?? "";
+  return {
+    sessionId: row.session_id,
+    projectDir,
+    fileKey: null,
+    firstPrompt: indexEntry?.firstPrompt || legacyFirstPrompt(projectDir, row.session_id),
+    summary: indexEntry?.summary ?? "",
+    messageCount: row.excerpts,
+    created,
+    modified: row.last_ts ?? indexEntry?.modified ?? created,
+    gitBranch: indexEntry?.gitBranch ?? "",
+    projectPath: indexEntry?.projectPath ?? "",
+    isSidechain: indexEntry?.isSidechain ?? row.session_id.startsWith("agent-"),
+    availability: "partial",
+    sourceDeleted: true
+  };
+}
+function fromIndexOnly(projectDir, entry) {
+  return {
+    sessionId: entry.sessionId,
+    projectDir,
+    fileKey: null,
+    firstPrompt: entry.firstPrompt,
+    summary: entry.summary,
+    messageCount: 0,
+    created: entry.created,
+    modified: entry.modified,
+    gitBranch: entry.gitBranch,
+    projectPath: entry.projectPath,
+    isSidechain: entry.isSidechain,
+    availability: "lost",
+    sourceDeleted: true
+  };
+}
+function allSessions(projectDir) {
+  const indexEntries = new Map((loadSessionIndex(projectDir)?.entries ?? []).map((e) => [e.sessionId, e]));
+  const sessions = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const row of getArchivedFiles(projectDir)) {
+    sessions.push(fromArchive(row, indexEntries.get(row.session_id)));
+    seen.add(row.session_id);
+  }
+  for (const row of legacySessions(projectDir)) {
+    sessions.push(fromLegacy(projectDir, row, indexEntries.get(row.session_id)));
+    seen.add(row.session_id);
+  }
+  for (const entry of indexEntries.values()) {
+    if (!seen.has(entry.sessionId)) sessions.push(fromIndexOnly(projectDir, entry));
+  }
+  return sessions;
+}
 function getSessions(projectDir, options = {}) {
-  const index = loadSessionIndex(projectDir);
-  const indexedEntries = index?.entries ?? [];
-  const orphans = discoverOrphanSessions(projectDir);
-  let entries = [...indexedEntries, ...orphans];
+  let sessions = allSessions(projectDir);
   if (!options.includeSidechains) {
-    entries = entries.filter((e) => !e.isSidechain);
+    sessions = sessions.filter((s) => !s.isSidechain);
   }
   if (options.search) {
     const term = options.search.toLowerCase();
-    entries = entries.filter(
-      (e) => (e.summary || "").toLowerCase().includes(term) || (e.firstPrompt || "").toLowerCase().includes(term)
+    sessions = sessions.filter(
+      (s) => s.summary.toLowerCase().includes(term) || s.firstPrompt.toLowerCase().includes(term)
     );
   }
   if (options.dateFrom) {
     const from = new Date(options.dateFrom).getTime();
-    entries = entries.filter((e) => new Date(e.created).getTime() >= from);
+    sessions = sessions.filter((s) => new Date(s.created).getTime() >= from);
   }
   if (options.dateTo) {
     const to = new Date(options.dateTo).getTime();
-    entries = entries.filter((e) => new Date(e.created).getTime() <= to);
+    sessions = sessions.filter((s) => new Date(s.created).getTime() <= to);
   }
-  entries = entries.map((e) => withEntryCount(e, projectDir));
   const sort = options.sort || "newest";
-  entries.sort((a, b) => {
+  sessions.sort((a, b) => {
     switch (sort) {
       case "newest":
         return new Date(b.modified).getTime() - new Date(a.modified).getTime();
@@ -35007,178 +36160,23 @@ function getSessions(projectDir, options = {}) {
         return 0;
     }
   });
-  return entries;
+  return sessions;
 }
-var UNKNOWN_COUNT = -1;
-function withEntryCount(entry, projectDir) {
-  const filePath = entry.fullPath && existsSync(entry.fullPath) ? entry.fullPath : join2(getProjectTranscriptDir(projectDir), `${entry.sessionId}.jsonl`);
-  if (!existsSync(filePath)) return entry;
-  try {
-    return { ...entry, messageCount: countTranscriptEntries(filePath) };
-  } catch (err) {
-    logger.warn(`Could not count the entries of ${filePath}:`, err);
-    return { ...entry, messageCount: UNKNOWN_COUNT };
+function findSession(sessionId, projectDir) {
+  const archived = findArchivedFiles(sessionId, projectDir)[0];
+  if (archived) {
+    return fromArchive(archived, loadSessionIndex(archived.project_dir)?.entries.find((e) => e.sessionId === sessionId));
   }
-}
-function getSessionFilePath(sessionId, projectDir) {
-  const projectDirs = projectDir ? [projectDir] : listProjectDirs();
-  for (const dir of projectDirs) {
-    const index = loadSessionIndex(dir);
-    if (index) {
-      const session = index.entries.find((e) => e.sessionId === sessionId);
-      if (session) {
-        const filePath = session.fullPath || join2(getProjectTranscriptDir(dir), `${sessionId}.jsonl`);
-        if (existsSync(filePath)) {
-          return { filePath, projectDir: dir };
-        }
-      }
-    }
-    const directPath = join2(getProjectTranscriptDir(dir), `${sessionId}.jsonl`);
-    if (existsSync(directPath)) {
-      return { filePath: directPath, projectDir: dir };
-    }
+  const legacyDirs = projectDir ? [projectDir] : allRows(getDb(), "SELECT DISTINCT project_dir FROM chunks WHERE session_id = ?", sessionId).map((r) => r.project_dir);
+  for (const dir of legacyDirs) {
+    const row = legacySessions(dir, sessionId)[0];
+    if (row) return fromLegacy(dir, row, loadSessionIndex(dir)?.entries.find((e) => e.sessionId === sessionId));
+  }
+  for (const dir of projectDir ? [projectDir] : listProjectDirsOnDisk()) {
+    const entry = loadSessionIndex(dir)?.entries.find((e) => e.sessionId === sessionId);
+    if (entry) return fromIndexOnly(dir, entry);
   }
   return null;
-}
-function getSessionMetadata(sessionId, projectDir) {
-  const projectDirs = projectDir ? [projectDir] : listProjectDirs();
-  for (const dir of projectDirs) {
-    const index = loadSessionIndex(dir);
-    if (index) {
-      const entry = index.entries.find((e) => e.sessionId === sessionId);
-      if (entry) return { entry, projectDir: dir };
-    }
-    const filePath = join2(getProjectTranscriptDir(dir), `${sessionId}.jsonl`);
-    if (existsSync(filePath)) {
-      const meta3 = extractMinimalMetadata(filePath, sessionId, dir);
-      if (meta3) return { entry: meta3, projectDir: dir };
-    }
-  }
-  return null;
-}
-function listTranscriptFiles(projectDir, options = {}) {
-  const dir = getProjectTranscriptDir(projectDir);
-  if (!existsSync(dir)) return [];
-  const mainFiles = readdirSync(dir).filter((f) => f.endsWith(".jsonl")).map((f) => join2(dir, f));
-  if (!options.includeSubagents) return mainFiles;
-  const subagentFiles = [];
-  const entries = readdirSync(dir, { withFileTypes: true });
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
-    if (!entry.name.match(/^[0-9a-f]{8}-/)) continue;
-    if (options.sessionId && entry.name !== options.sessionId) continue;
-    const subagentDir = join2(dir, entry.name, "subagents");
-    if (!existsSync(subagentDir)) continue;
-    try {
-      const agentFiles = readdirSync(subagentDir).filter((f) => {
-        if (!f.endsWith(".jsonl")) return false;
-        if (f.includes("aprompt_suggestion")) return false;
-        return true;
-      }).map((f) => join2(subagentDir, f));
-      subagentFiles.push(...agentFiles);
-    } catch (err) {
-      logger.warn(`Error reading subagents for ${entry.name}:`, err);
-    }
-  }
-  return [...mainFiles, ...subagentFiles];
-}
-function discoverOrphanSessions(projectDir) {
-  const dir = getProjectTranscriptDir(projectDir);
-  if (!existsSync(dir)) return [];
-  const index = loadSessionIndex(projectDir);
-  const indexedIds = new Set(index?.entries.map((e) => e.sessionId) ?? []);
-  const jsonlFiles = readdirSync(dir).filter((f) => f.endsWith(".jsonl")).map((f) => basename(f, ".jsonl")).filter((id) => !indexedIds.has(id));
-  if (jsonlFiles.length === 0) return [];
-  const orphans = [];
-  for (const sessionId of jsonlFiles) {
-    const filePath = join2(dir, `${sessionId}.jsonl`);
-    try {
-      const meta3 = extractMinimalMetadata(filePath, sessionId, projectDir);
-      if (meta3) orphans.push(meta3);
-    } catch (err) {
-      logger.warn(`Failed to read session ${sessionId}:`, err);
-      const mtime = new Date(statSync2(filePath).mtimeMs).toISOString();
-      orphans.push({
-        sessionId,
-        fullPath: filePath,
-        fileMtime: Date.parse(mtime),
-        summary: "",
-        firstPrompt: `(unreadable: ${err instanceof Error ? err.message : String(err)})`,
-        messageCount: 0,
-        created: mtime,
-        modified: mtime,
-        gitBranch: "",
-        projectPath: "",
-        isSidechain: false
-      });
-    }
-  }
-  return orphans;
-}
-function extractMinimalMetadata(filePath, sessionId, projectDir) {
-  const stat = statSync2(filePath);
-  if (stat.size === 0) return null;
-  const CHUNK_SIZE2 = 64 * 1024;
-  const buf = Buffer.alloc(Math.min(CHUNK_SIZE2, stat.size));
-  const fd = openSync2(filePath, "r");
-  try {
-    readSync2(fd, buf, 0, buf.length, 0);
-  } finally {
-    closeSync2(fd);
-  }
-  const text = buf.toString("utf-8");
-  const lines = text.split("\n");
-  let firstPrompt = "";
-  let firstTimestamp = "";
-  let hasMessage = false;
-  let gitBranch = "";
-  let projectPath = "";
-  for (const line of lines) {
-    if (!line.trim()) continue;
-    if (line.includes('"file-history-snapshot"')) continue;
-    try {
-      const entry = JSON.parse(line);
-      if (entry.timestamp && !firstTimestamp) {
-        firstTimestamp = entry.timestamp;
-      }
-      if (entry.type === "user" || entry.type === "assistant") {
-        hasMessage = true;
-      }
-      if (entry.gitBranch && !gitBranch) {
-        gitBranch = entry.gitBranch;
-      }
-      if (!projectPath && typeof entry.cwd === "string" && isProjectPath(entry.cwd, projectDir)) {
-        projectPath = entry.cwd;
-      }
-      if (entry.type === "user" && !entry.isMeta && !firstPrompt) {
-        if (typeof entry.message?.content === "string") {
-          firstPrompt = entry.message.content.slice(0, 200);
-        } else if (Array.isArray(entry.message?.content)) {
-          const textBlock = entry.message.content.find((b) => b.type === "text");
-          if (textBlock?.text) {
-            firstPrompt = textBlock.text.slice(0, 200);
-          }
-        }
-      }
-    } catch {
-    }
-  }
-  if (!hasMessage && !firstPrompt) return null;
-  return {
-    sessionId,
-    fullPath: filePath,
-    fileMtime: stat.mtimeMs,
-    firstPrompt,
-    summary: "",
-    // No summary available for orphans
-    messageCount: 0,
-    created: firstTimestamp || new Date(stat.birthtimeMs).toISOString(),
-    modified: new Date(stat.mtimeMs).toISOString(),
-    gitBranch,
-    projectPath,
-    // '' when no entry in the first 64 KB ran in the project root
-    isSidechain: false
-  };
 }
 function resolveCurrentSession(projectDir) {
   if (!projectDir) return null;
@@ -35186,43 +36184,40 @@ function resolveCurrentSession(projectDir) {
   return sessions.length > 0 ? sessions[0].sessionId : null;
 }
 function getProjectInfo(projectDir) {
+  const sessions = allSessions(projectDir).filter((s) => !s.isSidechain && s.availability !== "lost");
+  if (sessions.length === 0) return null;
+  const dates = sessions.map((s) => new Date(s.created).getTime()).filter((d) => !isNaN(d));
   const index = loadSessionIndex(projectDir);
-  const indexedEntries = index?.entries ?? [];
-  const orphans = discoverOrphanSessions(projectDir);
-  const allEntries = [...indexedEntries, ...orphans];
-  if (allEntries.length === 0) return null;
-  const nonSidechain = allEntries.filter((e) => !e.isSidechain);
-  const dates = nonSidechain.map((e) => new Date(e.created).getTime()).filter((d) => !isNaN(d));
   return {
     dirName: projectDir,
-    originalPath: index?.originalPath || allEntries.find((e) => e.projectPath && isProjectPath(e.projectPath, projectDir))?.projectPath || null,
-    sessionCount: nonSidechain.length,
+    originalPath: index?.originalPath || sessions.find((s) => s.projectPath && isProjectPath(s.projectPath, projectDir))?.projectPath || null,
+    sessionCount: sessions.length,
+    partialSessions: sessions.filter((s) => s.availability === "partial").length,
     latestDate: dates.length ? new Date(Math.max(...dates)).toISOString() : null,
     oldestDate: dates.length ? new Date(Math.min(...dates)).toISOString() : null
   };
 }
 
 // src/search/text-search.ts
-import { basename as basename2 } from "path";
 var CONTEXT_CHARS = 100;
-function extractSnippet(text, query, caseSensitive) {
-  const searchText = caseSensitive ? text : text.toLowerCase();
+function extractSnippet(text2, query, caseSensitive) {
+  const searchText = caseSensitive ? text2 : text2.toLowerCase();
   const searchQuery = caseSensitive ? query : query.toLowerCase();
   const idx = searchText.indexOf(searchQuery);
-  if (idx === -1) return text.slice(0, 200);
+  if (idx === -1) return text2.slice(0, 200);
   const start = Math.max(0, idx - CONTEXT_CHARS);
-  const end = Math.min(text.length, idx + query.length + CONTEXT_CHARS);
-  let snippet = text.slice(start, end);
+  const end = Math.min(text2.length, idx + query.length + CONTEXT_CHARS);
+  let snippet = text2.slice(start, end);
   if (start > 0) snippet = "..." + snippet;
-  if (end < text.length) snippet = snippet + "...";
+  if (end < text2.length) snippet = snippet + "...";
   return snippet.replace(/\n/g, " ");
 }
-function scoreMatch(text, query, caseSensitive) {
-  const t = caseSensitive ? text : text.toLowerCase();
+function scoreMatch(text2, query, caseSensitive) {
+  const t = caseSensitive ? text2 : text2.toLowerCase();
   const q = caseSensitive ? query : query.toLowerCase();
   if (t === q) return 1;
   const wordBoundaryRegex = new RegExp(`\\b${escapeRegex2(q)}\\b`, caseSensitive ? "" : "i");
-  if (wordBoundaryRegex.test(text)) return 0.8;
+  if (wordBoundaryRegex.test(text2)) return 0.8;
   if (t.startsWith(q)) return 0.7;
   if (t.includes(q)) return 0.5;
   return 0.3;
@@ -35246,7 +36241,6 @@ async function textSearch(options) {
   const allResults = [];
   let filesSearched = 0;
   const unreadable = [];
-  const sessionMeta = /* @__PURE__ */ new Map();
   let regexPattern = null;
   if (regex) {
     try {
@@ -35255,23 +36249,30 @@ async function textSearch(options) {
       throw new Error(`Invalid regex pattern: ${query} - ${err}`);
     }
   }
+  const match = (text2) => {
+    if (regexPattern) {
+      regexPattern.lastIndex = 0;
+      const m = regexPattern.exec(text2);
+      return m ? { snippet: extractSnippet(text2, m[0], caseSensitive), score: 0.7 } : null;
+    }
+    const found = caseSensitive ? text2.includes(query) : text2.toLowerCase().includes(query.toLowerCase());
+    return found ? { snippet: extractSnippet(text2, query, caseSensitive), score: scoreMatch(text2, query, caseSensitive) } : null;
+  };
   const includeSubagents = options.includeSubagents ?? false;
+  const includeTypes = ["summary"];
+  if (role === "both" || role === "user") includeTypes.push("user");
+  if (role === "both" || role === "assistant") includeTypes.push("assistant");
   for (const projectDir of projectDirs) {
-    const files = listTranscriptFiles(projectDir, {
-      includeSubagents,
-      sessionId
+    const sessions = new Map(getSessions(projectDir, { includeSidechains: true }).map((s) => [s.sessionId, s]));
+    const files = getArchivedFiles(projectDir).filter((f) => {
+      if (f.parent_session_id !== null && !includeSubagents) return false;
+      return !sessionId || f.session_id === sessionId || includeSubagents && f.parent_session_id === sessionId;
     });
-    for (const filePath of files) {
-      if (sessionId && !includeSubagents) {
-        const fileName = basename2(filePath, ".jsonl");
-        if (fileName !== sessionId) continue;
-      }
+    for (const file2 of files) {
       filesSearched++;
-      const includeTypes = ["summary"];
-      if (role === "both" || role === "user") includeTypes.push("user");
-      if (role === "both" || role === "assistant") includeTypes.push("assistant");
+      const meta3 = sessions.get(file2.session_id);
       try {
-        const stream = parseTranscript(filePath, {
+        const stream = parseTranscript(file2.file_key, {
           includeTypes,
           containsText: regex ? void 0 : query,
           caseInsensitive: !caseSensitive
@@ -35279,55 +36280,54 @@ async function textSearch(options) {
         for await (const { entry, lineNumber } of stream) {
           if (dateFrom && entry.timestamp && entry.timestamp < dateFrom) continue;
           if (dateTo && entry.timestamp && entry.timestamp > dateTo) continue;
-          const text = extractText(entry);
-          if (!text) continue;
-          let matched = false;
-          let snippet = "";
-          let score = 0;
-          if (regex && regexPattern) {
-            regexPattern.lastIndex = 0;
-            matched = regexPattern.test(text);
-            if (matched) {
-              regexPattern.lastIndex = 0;
-              const m = regexPattern.exec(text);
-              snippet = m ? extractSnippet(text, m[0], caseSensitive) : text.slice(0, 200);
-              score = 0.7;
-            }
-          } else {
-            const textLower = caseSensitive ? text : text.toLowerCase();
-            const queryLower = caseSensitive ? query : query.toLowerCase();
-            matched = textLower.includes(queryLower);
-            if (matched) {
-              snippet = extractSnippet(text, query, caseSensitive);
-              score = scoreMatch(text, query, caseSensitive);
-            }
-          }
-          if (matched) {
-            const entrySessionId = entry.sessionId || basename2(filePath, ".jsonl");
-            let meta3 = sessionMeta.get(entrySessionId);
-            if (meta3 === void 0) {
-              meta3 = getSessionMetadata(entrySessionId, projectDir);
-              sessionMeta.set(entrySessionId, meta3);
-            }
-            allResults.push({
-              sessionId: entrySessionId,
-              projectDir,
-              entryUuid: entry.uuid,
-              role: entry.type === "user" ? "user" : entry.type === "assistant" ? "assistant" : "summary",
-              content: text.slice(0, 500),
-              snippet,
-              timestamp: entry.timestamp,
-              lineNumber,
-              score,
-              sessionSummary: meta3?.entry.summary,
-              sessionFirstPrompt: meta3?.entry.firstPrompt
-            });
-          }
+          const text2 = extractText(entry);
+          if (!text2) continue;
+          const found = match(text2);
+          if (!found) continue;
+          allResults.push({
+            sessionId: file2.session_id,
+            projectDir,
+            entryUuid: entry.uuid,
+            role: entry.type === "user" ? "user" : entry.type === "assistant" ? "assistant" : "summary",
+            content: text2.slice(0, 500),
+            snippet: found.snippet,
+            timestamp: entry.timestamp,
+            lineNumber,
+            score: found.score,
+            sessionSummary: meta3?.summary,
+            sessionFirstPrompt: meta3?.firstPrompt
+          });
         }
       } catch (err) {
-        logger.warn(`Error searching ${filePath}:`, err);
-        unreadable.push(`${basename2(filePath, ".jsonl")}: ${err instanceof Error ? err.message : String(err)}`);
+        logger.warn(`Error searching ${file2.file_key}:`, err);
+        unreadable.push(`${file2.session_id}: ${err instanceof Error ? err.message : String(err)}`);
       }
+    }
+    const likeIsSafe = !regex && (caseSensitive || !/[^\x00-\x7f]/.test(query));
+    const like = likeIsSafe ? `%${escapeLike(query)}%` : null;
+    for (const chunk of iteratePartialSessionChunks(projectDir, like)) {
+      if (sessionId && chunk.session_id !== sessionId) continue;
+      if (!includeSubagents && sessions.get(chunk.session_id)?.isSidechain) continue;
+      if (dateFrom && chunk.timestamp && chunk.timestamp < dateFrom) continue;
+      if (dateTo && chunk.timestamp && chunk.timestamp > dateTo) continue;
+      if (role === "user" && chunk.role !== "turn") continue;
+      if (role === "assistant" && chunk.role !== "assistant" && !chunk.content_text.includes("\nASSISTANT: ")) continue;
+      const found = match(chunk.content_text);
+      if (!found) continue;
+      const meta3 = sessions.get(chunk.session_id);
+      allResults.push({
+        sessionId: chunk.session_id,
+        projectDir,
+        entryUuid: chunk.entry_uuid ?? void 0,
+        role: `${chunk.role ?? "turn"} (partial session excerpt)`,
+        content: chunk.content_text.slice(0, 500),
+        snippet: found.snippet,
+        timestamp: chunk.timestamp ?? void 0,
+        lineNumber: chunk.line_number ?? 0,
+        score: found.score,
+        sessionSummary: meta3?.summary,
+        sessionFirstPrompt: meta3?.firstPrompt
+      });
     }
   }
   allResults.sort((a, b) => {
@@ -35379,8 +36379,8 @@ function formatTimestamp(ts) {
     const d = new Date(ts);
     if (isNaN(d.getTime())) return ts;
     const absolute = d.toISOString().replace("T", " ").slice(0, 19);
-    const relative3 = formatRelativeTime(d);
-    return `${absolute} (${relative3})`;
+    const relative5 = formatRelativeTime(d);
+    return `${absolute} (${relative5})`;
   } catch {
     return ts;
   }
@@ -35395,11 +36395,11 @@ function formatTimestampCompact(ts) {
     return ts;
   }
 }
-function truncate(text, maxLen) {
-  if (text.length <= maxLen) return text;
-  const remaining = text.length - maxLen;
-  return text.slice(0, maxLen) + `
-[...truncated: showing ${maxLen}/${text.length} chars, ${remaining} more]`;
+function truncate(text2, maxLen) {
+  if (text2.length <= maxLen) return text2;
+  const remaining = text2.length - maxLen;
+  return text2.slice(0, maxLen) + `
+[...truncated: showing ${maxLen}/${text2.length} chars, ${remaining} more]`;
 }
 function formatContentBlock(block, detailLevel, noTruncate = false) {
   const textLimit = noTruncate ? Infinity : TEXT_LIMITS[detailLevel] ?? 4e3;
@@ -35424,7 +36424,9 @@ function formatContentBlock(block, detailLevel, noTruncate = false) {
       if (detailLevel === "compact") return "";
       const resultLimit = noTruncate ? Infinity : TOOL_RESULT_LIMITS[detailLevel] ?? 1e4;
       const result = block;
-      return `  [Result${result.is_error ? " ERROR" : ""}]: ${truncate(result.content, resultLimit)}`;
+      const images = Array.isArray(result.content) ? result.content.filter((b) => b.type === "image").length : 0;
+      const imageNote = images > 0 ? ` [${images} image${images > 1 ? "s" : ""}]` : "";
+      return `  [Result${result.is_error ? " ERROR" : ""}]:${imageNote} ${truncate(toolResultText(result.content), resultLimit)}`;
     }
     case "thinking":
       return "";
@@ -35494,16 +36496,37 @@ ${sum.summary}`;
       return "";
   }
 }
-function readablePrompt(text) {
-  const command = /<command-name>([^<]*)<\/command-name>/.exec(text);
+function formatExcerpt(excerpt) {
+  return `[${formatTimestamp(excerpt.timestamp ?? void 0)}] EXCERPT (${excerpt.role ?? "turn"}):
+${excerpt.content_text}`;
+}
+function readablePrompt(text2) {
+  const command = /<command-name>([^<]*)<\/command-name>/.exec(text2);
   if (command) {
-    const args = /<command-args>([^<]*)<\/command-args>/.exec(text)?.[1] ?? "";
+    const args = /<command-args>([^<]*)<\/command-args>/.exec(text2)?.[1] ?? "";
     return `${command[1]} ${args}`.trim();
   }
-  return text;
+  return text2;
 }
-function formatEntryCount(count) {
-  return count < 0 ? "unknown" : String(count);
+function formatEntryCount(meta3) {
+  switch (meta3.availability) {
+    case "complete":
+      return `${meta3.messageCount} entries`;
+    case "partial":
+      return `${meta3.messageCount} excerpts`;
+    case "lost":
+      return "no content kept";
+  }
+}
+function availabilityNote(meta3) {
+  switch (meta3.availability) {
+    case "complete":
+      return null;
+    case "partial":
+      return "PARTIAL: Claude Code deleted this transcript before souvenir archived whole transcripts (souvenir 0.6.0). Only the search index excerpts remain: the first 2,000 characters of each exchange, without tool calls or results.";
+    case "lost":
+      return "LOST: Claude Code deleted this transcript before souvenir kept anything of it. Only its listing in Claude Code's old sessions-index.json remains.";
+  }
 }
 function firstPromptOf(meta3) {
   return meta3.firstPrompt && meta3.firstPrompt !== "No prompt" ? readablePrompt(meta3.firstPrompt) : "";
@@ -35517,19 +36540,22 @@ function formatSessionHeader(meta3) {
   const lines = [
     `Session: ${sessionTitle(meta3)}`,
     `ID: ${meta3.sessionId}`,
-    `Project: ${meta3.projectPath || "Unknown"}`,
+    `Project: ${meta3.projectPath || meta3.projectDir}`,
     `Date: ${created} - ${modified}`,
-    `Entries: ${formatEntryCount(meta3.messageCount)}${meta3.gitBranch ? ` | Branch: ${meta3.gitBranch}` : ""}`
+    `Size: ${formatEntryCount(meta3)}${meta3.gitBranch ? ` | Branch: ${meta3.gitBranch}` : ""}`
   ];
+  const note = availabilityNote(meta3);
+  if (note) lines.push(note);
+  else if (meta3.sourceDeleted) lines.push("Read from souvenir's archive (Claude Code deleted its transcript file).");
   return lines.join("\n");
 }
 function formatSessionListEntry(meta3, index) {
   const date5 = meta3.created ? meta3.created.slice(0, 10) : "???";
-  const relative3 = meta3.modified ? formatTimestampCompact(meta3.modified) : "";
+  const relative5 = meta3.modified ? formatTimestampCompact(meta3.modified) : "";
   const title = sessionTitle(meta3);
   const truncTitle = title.length > 100 ? title.slice(0, 100) + "..." : title;
   const lines = [
-    `${index + 1}. [${date5}${relative3 ? ` - ${relative3}` : ""}] ${truncTitle}`,
+    `${index + 1}. [${date5}${relative5 ? ` - ${relative5}` : ""}] ${truncTitle}`,
     `   session_id: ${meta3.sessionId}`
   ];
   const first = firstPromptOf(meta3);
@@ -35537,7 +36563,9 @@ function formatSessionListEntry(meta3, index) {
     lines.push(`   First: "${first.length > 80 ? first.slice(0, 80) + "..." : first}"`);
   }
   const details = [];
-  details.push(`Entries: ${formatEntryCount(meta3.messageCount)}`);
+  details.push(formatEntryCount(meta3));
+  if (meta3.availability === "partial") details.push("PARTIAL (excerpts only)");
+  if (meta3.availability === "lost") details.push("LOST");
   if (meta3.gitBranch) details.push(`Branch: ${meta3.gitBranch}`);
   lines.push(`   ${details.join(" | ")}`);
   return lines.join("\n");
@@ -35714,7 +36742,7 @@ function formatToolsOutput(records) {
 }
 
 // src/config.ts
-import { existsSync as existsSync2 } from "fs";
+import { existsSync as existsSync4 } from "fs";
 import { join as join3 } from "path";
 var PROVIDER_DEFAULTS = {
   ollama: { url: "http://localhost:11434", model: "embeddinggemma" },
@@ -35724,7 +36752,7 @@ var _config = null;
 function resolvePathToProject(path) {
   const projectDir = cwdToProjectDir(path);
   const projectPath = join3(getProjectsDir(), projectDir);
-  if (existsSync2(projectPath)) {
+  if (existsSync4(projectPath)) {
     return projectDir;
   }
   return null;
@@ -35754,573 +36782,6 @@ function getConfig() {
     }
   };
   return _config;
-}
-
-// src/db/store.ts
-import { existsSync as existsSync4, statSync as fsStatSync } from "fs";
-
-// src/db/schema.ts
-var SCHEMA_VERSION = 2;
-var CREATE_TABLES = `
-  CREATE TABLE IF NOT EXISTS metadata (
-    key TEXT PRIMARY KEY,
-    value TEXT NOT NULL
-  );
-
-  CREATE TABLE IF NOT EXISTS chunks (
-    chunk_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    session_id TEXT NOT NULL,
-    project_dir TEXT NOT NULL,
-    entry_uuid TEXT,
-    role TEXT,
-    content_text TEXT NOT NULL,
-    embed_text TEXT NOT NULL,
-    timestamp TEXT,
-    line_number INTEGER,
-    UNIQUE(session_id, line_number)
-  );
-
-  CREATE TABLE IF NOT EXISTS index_state (
-    file_path TEXT PRIMARY KEY,
-    file_size INTEGER NOT NULL,
-    last_line INTEGER NOT NULL,
-    indexed_at TEXT NOT NULL
-  );
-
-  CREATE INDEX IF NOT EXISTS idx_chunks_session ON chunks(session_id);
-  CREATE INDEX IF NOT EXISTS idx_chunks_project ON chunks(project_dir);
-  CREATE INDEX IF NOT EXISTS idx_chunks_role ON chunks(role);
-  CREATE INDEX IF NOT EXISTS idx_chunks_timestamp ON chunks(timestamp);
-`;
-var LEGACY_VEC_TABLE = "vec_chunks";
-var CHUNK_VECTORS = "chunk_vectors";
-function createChunkVectorsTable(dimensions) {
-  return `CREATE VIRTUAL TABLE ${CHUNK_VECTORS} USING vec0 (
-    chunk_id INTEGER PRIMARY KEY,
-    project_dir TEXT PARTITION KEY,
-    session_id TEXT,
-    role TEXT,
-    has_user INTEGER,
-    has_assistant INTEGER,
-    timestamp TEXT,
-    embedding float[${dimensions}] distance_metric=cosine
-  );`;
-}
-
-// src/db/sqlite.ts
-import { createRequire } from "module";
-import { existsSync as existsSync3, mkdirSync } from "fs";
-import { dirname } from "path";
-import { fileURLToPath } from "url";
-var MIN_NODE = [22, 13];
-var VEC_BINARIES = {
-  "win32-x64": "windows-x64/vec0.dll",
-  "linux-x64": "linux-x64/vec0.so",
-  "darwin-x64": "darwin-x64/vec0.dylib",
-  "darwin-arm64": "darwin-arm64/vec0.dylib"
-};
-function assertNodeVersion() {
-  const [major, minor] = process.versions.node.split(".").map(Number);
-  if (major < MIN_NODE[0] || major === MIN_NODE[0] && minor < MIN_NODE[1]) {
-    throw new Error(
-      `souvenir requires Node.js >= ${MIN_NODE.join(".")} (built-in node:sqlite), found ${process.versions.node}`
-    );
-  }
-}
-function sqliteVecPath() {
-  const platform = `${process.platform}-${process.arch}`;
-  const relative3 = VEC_BINARIES[platform];
-  if (!relative3) {
-    throw new Error(
-      `souvenir: no sqlite-vec binary for ${platform} (supported: ${Object.keys(VEC_BINARIES).join(", ")})`
-    );
-  }
-  const path = fileURLToPath(new URL(`../vendor/sqlite-vec/bin/${relative3}`, import.meta.url));
-  if (!existsSync3(path)) {
-    throw new Error(`souvenir: sqlite-vec binary missing at ${path}`);
-  }
-  return path;
-}
-function openDatabase(dbPath, label) {
-  assertNodeVersion();
-  const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite");
-  const dir = dirname(dbPath);
-  if (!existsSync3(dir)) {
-    mkdirSync(dir, { recursive: true });
-  }
-  logger.info(`Opening ${label} database at ${dbPath}`);
-  const db = new DatabaseSync(dbPath, { allowExtension: true });
-  db.loadExtension(sqliteVecPath());
-  db.exec("PRAGMA journal_mode = WAL");
-  db.exec("PRAGMA busy_timeout = 5000");
-  db.exec("PRAGMA journal_size_limit = 67108864");
-  const { auto_vacuum: autoVacuum } = db.prepare("PRAGMA auto_vacuum").get();
-  if (autoVacuum !== 2) {
-    db.exec("PRAGMA auto_vacuum = INCREMENTAL");
-    db.exec("VACUUM");
-    logger.info(`${label} database: enabled incremental auto_vacuum (one-time migration)`);
-  }
-  return db;
-}
-function inTransaction(db, fn) {
-  db.exec("BEGIN");
-  try {
-    const result = fn();
-    db.exec("COMMIT");
-    return result;
-  } catch (err) {
-    db.exec("ROLLBACK");
-    throw err;
-  }
-}
-function getRow(db, sql, ...params) {
-  return db.prepare(sql).get(...params) ?? null;
-}
-function allRows(db, sql, ...params) {
-  return db.prepare(sql).all(...params);
-}
-function vectorBlob(vector) {
-  return new Uint8Array(vector.buffer, vector.byteOffset, vector.byteLength);
-}
-
-// src/embedding/models.ts
-var REPRESENT_QUERY = "Represent this sentence for searching relevant passages: ";
-var RETRIEVAL_TASK = "Given a web search query, retrieve relevant passages that answer the query";
-var KNOWN_MODELS = [
-  // google/embeddinggemma-2 and google/embeddinggemma-300m
-  { match: "embeddinggemma", documentPrefix: "title: none | text: ", queryPrefix: "task: search result | query: " },
-  // nomic-ai/nomic-embed-text-v1.5 and -v2-moe
-  { match: "nomic-embed-text", documentPrefix: "search_document: ", queryPrefix: "search_query: " },
-  // Snowflake/snowflake-arctic-embed-l-v2.0 (Ollama: snowflake-arctic-embed2)
-  { match: "snowflake-arctic-embed2", documentPrefix: "", queryPrefix: "query: " },
-  { match: "snowflake-arctic-embed-l-v2", documentPrefix: "", queryPrefix: "query: " },
-  { match: "snowflake-arctic-embed-m-v2", documentPrefix: "", queryPrefix: "query: " },
-  // Snowflake/snowflake-arctic-embed (v1), mixedbread-ai/mxbai-embed-large-v1, BAAI/bge-large-en-v1.5
-  { match: "snowflake-arctic-embed", documentPrefix: "", queryPrefix: REPRESENT_QUERY },
-  { match: "mxbai-embed-large", documentPrefix: "", queryPrefix: REPRESENT_QUERY },
-  { match: "bge-large", documentPrefix: "", queryPrefix: REPRESENT_QUERY },
-  // intfloat/multilingual-e5-large-instruct (space after "Query:")
-  { match: "e5-large-instruct", documentPrefix: "", queryPrefix: `Instruct: ${RETRIEVAL_TASK}
-Query: ` },
-  // intfloat/multilingual-e5-* and e5-*-v2
-  { match: "multilingual-e5", documentPrefix: "passage: ", queryPrefix: "query: " },
-  { match: "e5-small", documentPrefix: "passage: ", queryPrefix: "query: " },
-  { match: "e5-base", documentPrefix: "passage: ", queryPrefix: "query: " },
-  { match: "e5-large", documentPrefix: "passage: ", queryPrefix: "query: " },
-  // Qwen/Qwen3-Embedding-* (official template: no space after "Query:")
-  { match: "qwen3-embedding", documentPrefix: "", queryPrefix: `Instruct: ${RETRIEVAL_TASK}
-Query:` },
-  // No prefixes
-  { match: "bge-m3", documentPrefix: "", queryPrefix: "" },
-  { match: "all-minilm", documentPrefix: "", queryPrefix: "" },
-  { match: "granite-embedding", documentPrefix: "", queryPrefix: "" },
-  { match: "paraphrase-multilingual", documentPrefix: "", queryPrefix: "" },
-  { match: "text-embedding-3", documentPrefix: "", queryPrefix: "" }
-];
-function normalizeModelName(model) {
-  const withoutTag = model.trim().toLowerCase().replace(/:[^/]*$/, "");
-  return withoutTag.slice(withoutTag.lastIndexOf("/") + 1);
-}
-function findModelPrompts(model) {
-  const name = normalizeModelName(model);
-  return KNOWN_MODELS.find((m) => name.includes(m.match)) ?? null;
-}
-
-// src/embedding/provider.ts
-function sameIdentity(a, b) {
-  return a.provider === b.provider && a.model === b.model && a.dimensions === b.dimensions && a.documentPrefix === b.documentPrefix && a.queryPrefix === b.queryPrefix;
-}
-function describeIdentity(identity) {
-  return `${identity.provider} (${identity.model}, ${identity.dimensions} dimensions)`;
-}
-var BaseEmbeddingProvider = class {
-  constructor(settings, maxBatchSize) {
-    this.settings = settings;
-    this.maxBatchSize = maxBatchSize;
-    this.name = `${settings.provider} (${settings.model})`;
-    const prompts = findModelPrompts(settings.model);
-    if (!prompts) {
-      logger.warn(`No known input prefixes for model "${settings.model}": texts are embedded as is`);
-    }
-    this.documentPrefix = prompts?.documentPrefix ?? "";
-    this.queryPrefix = prompts?.queryPrefix ?? "";
-  }
-  settings;
-  maxBatchSize;
-  name;
-  ready = false;
-  _identity = null;
-  documentPrefix;
-  queryPrefix;
-  get identity() {
-    if (!this._identity) {
-      throw new Error(`Embedding provider ${this.name} is not initialized`);
-    }
-    return this._identity;
-  }
-  isReady() {
-    return this.ready;
-  }
-  async initialize() {
-    if (this.ready) return;
-    await this.prepare();
-    const [probe] = await this.request([this.queryPrefix + "dimension probe"]);
-    if (this.settings.dimensions !== void 0 && probe.length !== this.settings.dimensions) {
-      throw new Error(
-        `${this.name} returned ${probe.length}-dimension vectors although embedding_dimensions is ${this.settings.dimensions}: this model or server does not support shortened vectors. Clear the embedding_dimensions option to use the native size.`
-      );
-    }
-    this._identity = {
-      provider: this.settings.provider,
-      model: this.settings.model,
-      dimensions: probe.length,
-      documentPrefix: this.documentPrefix,
-      queryPrefix: this.queryPrefix
-    };
-    this.ready = true;
-    logger.info(`Embedding provider ready: ${describeIdentity(this._identity)}`);
-  }
-  async embed(texts) {
-    if (!this.ready) await this.initialize();
-    const results = [];
-    for (let i = 0; i < texts.length; i += this.maxBatchSize) {
-      const batch = texts.slice(i, i + this.maxBatchSize).map((t) => this.documentPrefix + t);
-      results.push(...(await this.request(batch)).map((v) => new Float32Array(v)));
-    }
-    return results;
-  }
-  async embedQuery(text) {
-    if (!this.ready) await this.initialize();
-    const [vector] = await this.request([this.queryPrefix + text]);
-    return new Float32Array(vector);
-  }
-  async dispose() {
-    this.ready = false;
-  }
-};
-
-// src/db/identity.ts
-var IDENTITY_KEY = "embedding_identity";
-var LEGACY_PREFIXES = {
-  ollama: { documentPrefix: "title: none | text: ", queryPrefix: "task: search result | query: " },
-  openai: { documentPrefix: "", queryPrefix: "" }
-};
-var IndexMismatchError = class extends Error {
-};
-function getStoredIdentity(db) {
-  const row = getRow(db, "SELECT value FROM metadata WHERE key = ?", IDENTITY_KEY);
-  return row ? JSON.parse(row.value) : null;
-}
-function setStoredIdentity(db, identity) {
-  db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)").run(IDENTITY_KEY, JSON.stringify(identity));
-}
-function migrateLegacyIdentity(db) {
-  if (!getStoredIdentity(db)) {
-    const name = getRow(db, "SELECT value FROM metadata WHERE key = ?", "embedding_provider")?.value;
-    const dims = getRow(db, "SELECT value FROM metadata WHERE key = ?", "embedding_dimensions")?.value;
-    const match = name?.match(/^(ollama|openai) \((.+)\)$/);
-    if (match && dims) {
-      const provider = match[1];
-      setStoredIdentity(db, { provider, model: match[2], dimensions: Number(dims), ...LEGACY_PREFIXES[provider] });
-    }
-  }
-  db.prepare("DELETE FROM metadata WHERE key IN ('embedding_provider', 'embedding_dimensions')").run();
-}
-function assertSameIdentity(stored, current, label, rebuildHint) {
-  if (!stored || sameIdentity(stored, current)) return;
-  throw new IndexMismatchError(
-    `The ${label} index was built with ${describeIdentity(stored)}, but the current embedding settings give ${describeIdentity(current)}. Vectors from different models cannot be compared. Either restore the previous embedding settings (/plugin configure asymptomatik-souvenir), or ${rebuildHint}.`
-  );
-}
-function tableExists(db, table) {
-  return getRow(db, "SELECT 1 AS found FROM sqlite_master WHERE name = ? AND type = 'table'", table) !== null;
-}
-function deleteOrphanVectors(db, vectorTable, chunkTable) {
-  const ids = db.prepare(`SELECT chunk_id FROM ${vectorTable}`).all();
-  const chunkExists = db.prepare(`SELECT 1 FROM ${chunkTable} WHERE chunk_id = ?`);
-  const remove = db.prepare(`DELETE FROM ${vectorTable} WHERE chunk_id = ?`);
-  let removed = 0;
-  for (const { chunk_id } of ids) {
-    if (!chunkExists.get(chunk_id)) {
-      remove.run(BigInt(chunk_id));
-      removed++;
-    }
-  }
-  return removed;
-}
-function vectorTableDimensions(db, table) {
-  const sql = getRow(db, "SELECT sql FROM sqlite_master WHERE name = ? AND type = 'table'", table)?.sql;
-  const match = sql?.match(/float\[(\d+)\]/i);
-  if (!match) {
-    throw new Error(`Cannot read the vector size of table ${table}`);
-  }
-  return Number(match[1]);
-}
-
-// src/db/store.ts
-var _db = null;
-var REBUILD_HINT = 'rebuild it with souvenir_index action="rebuild" project="all" (re-embeds every indexed chunk)';
-function getDb() {
-  if (_db) return _db;
-  const db = openDatabase(getDbPath(), "transcripts");
-  try {
-    db.exec(CREATE_TABLES);
-    migrateLegacyIdentity(db);
-    migrateLegacyVectors(db);
-    db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)").run(
-      "schema_version",
-      String(SCHEMA_VERSION)
-    );
-  } catch (err) {
-    db.close();
-    throw err;
-  }
-  _db = db;
-  logger.info("Database initialized");
-  return db;
-}
-function chunkSpeakers(role, contentText) {
-  if (role === "turn") return { hasUser: 1n, hasAssistant: contentText.includes("\nASSISTANT: ") ? 1n : 0n };
-  if (role === "assistant") return { hasUser: 0n, hasAssistant: 1n };
-  return { hasUser: 0n, hasAssistant: 0n };
-}
-function migrateLegacyVectors(db) {
-  if (!tableExists(db, LEGACY_VEC_TABLE)) return;
-  const legacyDims = vectorTableDimensions(db, LEGACY_VEC_TABLE);
-  const currentDims = tableExists(db, CHUNK_VECTORS) ? vectorTableDimensions(db, CHUNK_VECTORS) : null;
-  const started = Date.now();
-  let moved = 0;
-  inTransaction(db, () => {
-    if (currentDims !== null && currentDims !== legacyDims) {
-      logger.warn(`Dropping ${LEGACY_VEC_TABLE} (${legacyDims}d): incompatible with ${CHUNK_VECTORS} (${currentDims}d)`);
-    } else {
-      if (currentDims === null) db.exec(createChunkVectorsTable(legacyDims));
-      const page = db.prepare("SELECT chunk_id, project_dir, session_id, role, timestamp, content_text FROM chunks WHERE chunk_id > ? ORDER BY chunk_id LIMIT 5000");
-      const legacyVector = db.prepare(`SELECT embedding FROM ${LEGACY_VEC_TABLE} WHERE chunk_id = ?`);
-      const alreadyMoved = db.prepare(`SELECT chunk_id FROM ${CHUNK_VECTORS} WHERE chunk_id = ?`);
-      const insert = db.prepare(`INSERT INTO ${CHUNK_VECTORS} (chunk_id, project_dir, session_id, role, has_user, has_assistant, timestamp, embedding) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
-      for (let last = 0; ; ) {
-        const rows = page.all(last);
-        if (rows.length === 0) break;
-        for (const r of rows) {
-          const id = BigInt(r.chunk_id);
-          const vector = legacyVector.get(id);
-          if (!vector || alreadyMoved.get(id)) continue;
-          const { hasUser, hasAssistant } = chunkSpeakers(r.role, r.content_text);
-          insert.run(id, r.project_dir, r.session_id, r.role ?? "", hasUser, hasAssistant, r.timestamp ?? "", vector.embedding);
-          moved++;
-        }
-        last = rows[rows.length - 1].chunk_id;
-      }
-      const orphans = deleteOrphanVectors(db, CHUNK_VECTORS, "chunks");
-      if (orphans > 0) logger.info(`Deleted ${orphans} vectors of chunks that no longer exist`);
-    }
-    db.exec(`DROP TABLE ${LEGACY_VEC_TABLE}`);
-  });
-  db.exec("PRAGMA incremental_vacuum");
-  db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
-  logger.info(`Moved ${moved} vectors from ${LEGACY_VEC_TABLE} to ${CHUNK_VECTORS} in ${Date.now() - started} ms`);
-}
-function prepareVectorIndex(identity, options = {}) {
-  const db = getDb();
-  const stored = getStoredIdentity(db);
-  if (!options.resetAll) {
-    assertSameIdentity(stored, identity, "transcript", REBUILD_HINT);
-  }
-  inTransaction(db, () => {
-    if (options.resetAll) {
-      if (tableExists(db, CHUNK_VECTORS)) db.exec(`DROP TABLE ${CHUNK_VECTORS}`);
-      db.prepare("DELETE FROM chunks").run();
-      db.prepare("DELETE FROM index_state").run();
-    }
-    if (!tableExists(db, CHUNK_VECTORS)) db.exec(createChunkVectorsTable(identity.dimensions));
-    setStoredIdentity(db, identity);
-  });
-}
-function assertSearchable(identity) {
-  const db = getDb();
-  const stored = getStoredIdentity(db);
-  if (!stored || !tableExists(db, CHUNK_VECTORS)) {
-    throw new IndexMismatchError('No semantic index found. Run souvenir_index with action="build" first to create the index.');
-  }
-  assertSameIdentity(stored, identity, "transcript", REBUILD_HINT);
-}
-function getIndexIdentity() {
-  return getStoredIdentity(getDb());
-}
-function closeDb() {
-  if (_db) {
-    _db.close();
-    _db = null;
-  }
-}
-function insertChunks(chunks, embeddings) {
-  const db = getDb();
-  if (chunks.length !== embeddings.length) {
-    throw new Error(`Chunk count (${chunks.length}) doesn't match embedding count (${embeddings.length})`);
-  }
-  const insertChunk = db.prepare(`
-    INSERT OR IGNORE INTO chunks (session_id, project_dir, entry_uuid, role, content_text, embed_text, timestamp, line_number)
-    VALUES (@session_id, @project_dir, @entry_uuid, @role, @content_text, @embed_text, @timestamp, @line_number)
-  `);
-  const insertVec = db.prepare(`
-    INSERT INTO ${CHUNK_VECTORS} (chunk_id, project_dir, session_id, role, has_user, has_assistant, timestamp, embedding)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `);
-  let inserted = 0;
-  inTransaction(db, () => {
-    for (let i = 0; i < chunks.length; i++) {
-      const chunk = chunks[i];
-      const result = insertChunk.run({
-        session_id: chunk.session_id,
-        project_dir: chunk.project_dir,
-        entry_uuid: chunk.entry_uuid || null,
-        role: chunk.role || null,
-        content_text: chunk.content_text,
-        embed_text: chunk.embed_text,
-        timestamp: chunk.timestamp || null,
-        line_number: chunk.line_number ?? null
-      });
-      if (result.changes > 0) {
-        const { hasUser, hasAssistant } = chunkSpeakers(chunk.role ?? null, chunk.content_text);
-        insertVec.run(
-          BigInt(result.lastInsertRowid),
-          chunk.project_dir,
-          chunk.session_id,
-          chunk.role ?? "",
-          hasUser,
-          hasAssistant,
-          chunk.timestamp ?? "",
-          vectorBlob(embeddings[i])
-        );
-        inserted++;
-      }
-    }
-  });
-  return inserted;
-}
-function searchSemantic(identity, queryEmbedding, options = {}) {
-  assertSearchable(identity);
-  const db = getDb();
-  const filters = [];
-  const params = [vectorBlob(queryEmbedding), options.topK || 10];
-  if (options.projectDir) {
-    filters.push("project_dir = ?");
-    params.push(options.projectDir);
-  }
-  if (options.sessionId) {
-    filters.push("session_id = ?");
-    params.push(options.sessionId);
-  }
-  if (options.speaker === "user") filters.push("has_user = 1");
-  if (options.speaker === "assistant") filters.push("has_assistant = 1");
-  if (options.dateFrom || options.dateTo) filters.push("timestamp != ''");
-  if (options.dateFrom) {
-    filters.push("timestamp >= ?");
-    params.push(options.dateFrom);
-  }
-  if (options.dateTo) {
-    filters.push("timestamp <= ?");
-    params.push(options.dateTo);
-  }
-  return db.prepare(`
-    SELECT c.*, v.distance
-    FROM (
-      SELECT chunk_id, distance FROM ${CHUNK_VECTORS}
-      WHERE embedding MATCH ? AND k = ?${filters.map((f) => ` AND ${f}`).join("")}
-    ) v
-    JOIN chunks c ON c.chunk_id = v.chunk_id
-    ORDER BY v.distance
-  `).all(...params);
-}
-function getIndexState(filePath) {
-  const db = getDb();
-  return getRow(db, "SELECT * FROM index_state WHERE file_path = ?", filePath);
-}
-function setIndexState(filePath, fileSize, lastLine) {
-  const db = getDb();
-  db.prepare(`
-    INSERT OR REPLACE INTO index_state (file_path, file_size, last_line, indexed_at)
-    VALUES (?, ?, ?, ?)
-  `).run(filePath, fileSize, lastLine, (/* @__PURE__ */ new Date()).toISOString());
-}
-function getIndexStatus(projectDir) {
-  const db = getDb();
-  const projectFilter = projectDir ? "WHERE project_dir = ?" : "";
-  const params = projectDir ? [projectDir] : [];
-  const chunkStats = db.prepare(`
-    SELECT project_dir, COUNT(*) as chunk_count
-    FROM chunks ${projectFilter}
-    GROUP BY project_dir
-  `).all(...params);
-  const fileStats = db.prepare(`
-    SELECT COUNT(*) as total FROM index_state
-  `).get();
-  const projects = chunkStats.map((row) => {
-    const lastIndexed = db.prepare(`
-      SELECT MAX(indexed_at) as last
-      FROM index_state
-      WHERE file_path LIKE ?
-    `).get(`%${row.project_dir}%`);
-    return {
-      projectDir: row.project_dir,
-      chunkCount: row.chunk_count,
-      fileCount: 0,
-      // computed below
-      lastIndexed: lastIndexed?.last || null
-    };
-  });
-  const totalChunks = chunkStats.reduce((sum, r) => sum + r.chunk_count, 0);
-  const dbPath = getDbPath();
-  let dbSizeBytes = 0;
-  try {
-    dbSizeBytes = fsStatSync(dbPath).size;
-  } catch {
-  }
-  return {
-    totalChunks,
-    totalFiles: fileStats.total,
-    projects,
-    dbSizeBytes
-  };
-}
-function clearProject(projectDir) {
-  const db = getDb();
-  inTransaction(db, () => {
-    const chunkIds = db.prepare("SELECT chunk_id FROM chunks WHERE project_dir = ?").all(projectDir);
-    if (tableExists(db, CHUNK_VECTORS)) {
-      const deleteVector = db.prepare(`DELETE FROM ${CHUNK_VECTORS} WHERE chunk_id = ?`);
-      for (const { chunk_id } of chunkIds) {
-        deleteVector.run(BigInt(chunk_id));
-      }
-    }
-    db.prepare("DELETE FROM chunks WHERE project_dir = ?").run(projectDir);
-    db.prepare("DELETE FROM index_state WHERE file_path LIKE ?").run(`%${projectDir}%`);
-  });
-  incrementalVacuum();
-}
-function incrementalVacuum() {
-  try {
-    const db = getDb();
-    db.exec("PRAGMA incremental_vacuum");
-  } catch (err) {
-    logger.error("Incremental vacuum error:", err);
-  }
-}
-function fullVacuum() {
-  const db = getDb();
-  db.exec("VACUUM");
-}
-function getProjectChunkCount(projectDir) {
-  try {
-    const dbPath = getDbPath();
-    if (!existsSync4(dbPath)) return 0;
-    const db = getDb();
-    const row = db.prepare("SELECT COUNT(*) as cnt FROM chunks WHERE project_dir = ?").get(projectDir);
-    return row?.cnt ?? 0;
-  } catch {
-    return 0;
-  }
 }
 
 // src/embedding/ollama.ts
@@ -36529,117 +36990,104 @@ async function disposeSingletonProvider() {
   }
 }
 
-// src/db/indexer.ts
-import { statSync as statSync3 } from "fs";
-import { basename as basename3 } from "path";
-
-// src/utils/serial.ts
-function serialized(fn) {
-  let queue = Promise.resolve();
-  return (...args) => {
-    const run = queue.then(() => fn(...args));
-    queue = run.catch(() => {
-    });
-    return run;
-  };
-}
-
 // src/embedding/chunker.ts
-var MAX_EMBED_CHARS = 1600;
-var MAX_CONTENT_CHARS = 2e3;
-function truncateForEmbed(text, maxChars) {
-  if (text.length <= maxChars) return text;
-  const truncated = text.slice(0, maxChars);
-  const lastSpace = truncated.lastIndexOf(" ");
-  return lastSpace > maxChars * 0.7 ? truncated.slice(0, lastSpace) : truncated;
-}
-async function chunkTranscript(filePath, sessionId, projectDir, options = {}) {
-  const chunks = [];
-  let lastLine = 0;
-  const entries = [];
-  const stream = parseTranscript(filePath, {
-    includeTypes: ["user", "assistant", "summary"],
-    fromLine: options.fromLine
-  });
-  for await (const parsed of stream) {
-    entries.push(parsed);
-    lastLine = Math.max(lastLine, parsed.lineNumber);
+var EMBED_WINDOW_CHARS = 1600;
+var WINDOW_OVERLAP_CHARS = 200;
+function windows(text2) {
+  if (text2.length <= EMBED_WINDOW_CHARS) return [{ start: 0, end: text2.length }];
+  const parts = [];
+  let start = 0;
+  for (; ; ) {
+    let end = Math.min(start + EMBED_WINDOW_CHARS, text2.length);
+    if (end < text2.length) {
+      const space = text2.lastIndexOf(" ", end);
+      if (space > start + EMBED_WINDOW_CHARS * 0.7) end = space;
+    }
+    parts.push({ start, end });
+    if (end >= text2.length) return parts;
+    start = Math.max(end - WINDOW_OVERLAP_CHARS, start + 1);
   }
+}
+async function chunkTranscript(file2, fromLine) {
+  const toLine = file2.line_count;
+  const entries = [];
+  for await (const parsed of parseTranscript(file2.file_key, { includeTypes: ["user", "assistant", "summary"], fromLine, toLine })) {
+    entries.push(parsed);
+  }
+  const chunks = [];
+  const base = { session_id: file2.session_id, project_dir: file2.project_dir };
+  const addText = (text2, start, role, userEnd, hasAssistant, firstPartOnly = false) => {
+    const parts = windows(text2);
+    (firstPartOnly ? parts.slice(0, 1) : parts).forEach(({ start: s, end: e }, part) => {
+      chunks.push({
+        ...base,
+        entry_uuid: start.entry.uuid,
+        role,
+        content_text: text2.slice(s, e),
+        timestamp: start.entry.timestamp,
+        line_number: start.lineNumber,
+        part,
+        hasUser: s < userEnd,
+        hasAssistant: hasAssistant && e > userEnd
+      });
+    });
+  };
   let i = 0;
   while (i < entries.length) {
     const current = entries[i];
-    const entry = current.entry;
+    const { entry } = current;
     if (entry.type === "summary") {
-      const text = entry.summary || "";
-      if (text.trim()) {
-        chunks.push({
-          session_id: sessionId,
-          project_dir: projectDir,
-          entry_uuid: entry.uuid,
-          role: "summary",
-          content_text: truncateForEmbed(text, MAX_CONTENT_CHARS),
-          embed_text: truncateForEmbed(text, MAX_EMBED_CHARS),
-          timestamp: entry.timestamp,
-          line_number: current.lineNumber
-        });
-      }
+      const text3 = extractText(entry);
+      if (text3.trim()) addText(text3, current, "summary", 0, false);
+      i++;
+      continue;
+    }
+    if (entry.type === "user" && isToolResultEntry(entry)) {
+      const text3 = extractText(entry);
+      if (text3.trim()) addText(`TOOL RESULT: ${text3}`, current, "tool_result", 0, false, true);
       i++;
       continue;
     }
     if (entry.type === "user") {
-      const userText2 = extractText(entry);
-      let turnText = userText2;
-      let contentParts = [`USER: ${userText2}`];
-      if (i + 1 < entries.length && entries[i + 1].entry.type === "assistant") {
-        const assistantEntry = entries[i + 1].entry;
-        const assistantText = extractText(assistantEntry);
-        turnText += "\n" + assistantText;
-        contentParts.push(`ASSISTANT: ${assistantText}`);
+      const userPart = `USER: ${extractText(entry)}`;
+      const replies = [];
+      i++;
+      while (i < entries.length) {
+        const next = entries[i];
+        if (next.entry.type === "assistant") {
+          const text4 = extractText(next.entry);
+          if (text4.trim()) replies.push(text4);
+        } else if (next.entry.type === "user" && isToolResultEntry(next.entry)) {
+          const text4 = extractText(next.entry);
+          if (text4.trim()) addText(`TOOL RESULT: ${text4}`, next, "tool_result", 0, false, true);
+        } else if (next.entry.type === "summary") {
+          const text4 = extractText(next.entry);
+          if (text4.trim()) addText(text4, next, "summary", 0, false);
+        } else {
+          break;
+        }
         i++;
       }
-      if (turnText.trim()) {
-        chunks.push({
-          session_id: sessionId,
-          project_dir: projectDir,
-          entry_uuid: entry.uuid,
-          role: "turn",
-          content_text: truncateForEmbed(contentParts.join("\n"), MAX_CONTENT_CHARS),
-          embed_text: truncateForEmbed(turnText, MAX_EMBED_CHARS),
-          timestamp: entry.timestamp,
-          line_number: current.lineNumber
-        });
-      }
-      i++;
+      const text3 = replies.length > 0 ? `${userPart}
+ASSISTANT: ${replies.join("\n")}` : userPart;
+      if (text3.trim() !== "USER:") addText(text3, current, "turn", userPart.length, replies.length > 0);
       continue;
     }
-    if (entry.type === "assistant") {
-      const text = extractText(entry);
-      if (text.trim()) {
-        chunks.push({
-          session_id: sessionId,
-          project_dir: projectDir,
-          entry_uuid: entry.uuid,
-          role: "assistant",
-          content_text: truncateForEmbed(`ASSISTANT: ${text}`, MAX_CONTENT_CHARS),
-          embed_text: truncateForEmbed(text, MAX_EMBED_CHARS),
-          timestamp: entry.timestamp,
-          line_number: current.lineNumber
-        });
-      }
-      i++;
-      continue;
-    }
+    const text2 = extractText(entry);
+    if (text2.trim()) addText(`ASSISTANT: ${text2}`, current, "assistant", 0, true);
     i++;
   }
-  logger.debug(`Chunked ${filePath}: ${entries.length} entries -> ${chunks.length} chunks`);
-  return { chunks, lastLine };
+  logger.debug(`Chunked ${file2.file_key} from line ${fromLine}: ${entries.length} entries -> ${chunks.length} chunks`);
+  return { chunks, lastLine: toLine };
 }
 
 // src/db/indexer.ts
 var EMBED_BATCH_SIZE = 32;
+var PENDING_PAGE_SIZE = 2e3;
 var buildIndex = serialized(runBuildIndex);
 async function runBuildIndex(provider, projectDirs, options = {}) {
   const { sessionId, includeSubagents = true, rebuild = false, onProgress, signal } = options;
+  const archive = await archiveProjects(projectDirs, { onProgress, signal });
   if (!provider.isReady()) {
     onProgress?.({ phase: "Initializing embedding model", current: 0, total: 1 });
     await provider.initialize();
@@ -36647,13 +37095,13 @@ async function runBuildIndex(provider, projectDirs, options = {}) {
   const stored = getIndexIdentity();
   const resetAll = rebuild && stored !== null && !sameIdentity(stored, provider.identity);
   if (resetAll) {
-    logger.info("Embedding model changed: resetting the whole index");
+    logger.info("Embedding model changed: resetting the vectors of every project");
   }
   prepareVectorIndex(provider.identity, { resetAll });
   if (rebuild && !resetAll) {
-    logger.info("Rebuilding index from scratch...");
+    logger.info("Rebuilding index from the archive...");
     for (const dir of projectDirs) {
-      clearProject(dir);
+      clearArchivedChunks(dir, sessionId);
     }
   }
   let totalChunks = 0;
@@ -36662,67 +37110,75 @@ async function runBuildIndex(provider, projectDirs, options = {}) {
   let skipped = 0;
   const errors = [];
   for (const projectDir of projectDirs) {
-    let files = listTranscriptFiles(projectDir, {
-      includeSubagents,
-      sessionId
+    const files = getArchivedFiles(projectDir).filter((f) => {
+      if (f.parent_session_id !== null && !includeSubagents) return false;
+      return !sessionId || f.session_id === sessionId || f.parent_session_id === sessionId;
     });
-    if (sessionId && !includeSubagents) {
-      files = files.filter((f) => basename3(f, ".jsonl") === sessionId);
-    }
     const totalFiles = files.length;
-    onProgress?.({ phase: `Processing ${projectDir}`, current: 0, total: totalFiles });
+    onProgress?.({ phase: `Indexing ${projectDir}`, current: 0, total: totalFiles });
     for (let fi = 0; fi < files.length; fi++) {
       if (signal?.aborted) break;
-      const filePath = files[fi];
-      const fileSessionId = basename3(filePath, ".jsonl");
+      const file2 = files[fi];
       onProgress?.({
-        phase: `Processing ${projectDir}`,
+        phase: `Indexing ${projectDir}`,
         current: fi + 1,
         total: totalFiles,
-        detail: `Session ${fileSessionId.slice(0, 8)}...`
+        detail: `Session ${file2.session_id.slice(0, 8)}...`
       });
       try {
-        const stat = statSync3(filePath);
-        const indexState = getIndexState(filePath);
-        if (indexState && !rebuild) {
-          if (indexState.file_size === stat.size) {
-            skipped++;
-            continue;
-          }
-        }
-        const fromLine = !rebuild && indexState ? indexState.last_line + 1 : 1;
-        const { chunks, lastLine } = await chunkTranscript(
-          filePath,
-          fileSessionId,
-          projectDir,
-          { fromLine }
-        );
-        if (chunks.length === 0) {
-          setIndexState(filePath, stat.size, lastLine || fromLine);
+        const indexState = getIndexState(file2.file_key);
+        if (indexState && indexState.last_line >= file2.line_count) {
           skipped++;
           continue;
         }
-        totalChunks += chunks.length;
+        const fromLine = indexState ? indexState.last_line + 1 : 1;
+        const { chunks, lastLine } = await chunkTranscript(file2, fromLine);
         for (let i = 0; i < chunks.length; i += EMBED_BATCH_SIZE) {
           const batch = chunks.slice(i, i + EMBED_BATCH_SIZE);
-          const texts = batch.map((c) => c.embed_text);
-          const embeddings = await provider.embed(texts);
-          const inserted = insertChunks(batch, embeddings);
-          totalEmbedded += inserted;
+          const embeddings = await provider.embed(batch.map((c) => c.content_text));
+          totalEmbedded += insertChunks(batch, embeddings);
         }
-        setIndexState(filePath, stat.size, lastLine);
-        filesProcessed++;
+        totalChunks += chunks.length;
+        setIndexState(file2.file_key, file2.archived_bytes, lastLine);
+        if (chunks.length > 0) filesProcessed++;
+        else skipped++;
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        logger.error(`Error processing ${filePath}:`, msg);
+        logger.error(`Error indexing ${file2.file_key}:`, msg);
         if (errors.length < 5) {
-          errors.push(`${basename3(filePath, ".jsonl").slice(0, 8)}...: ${msg.slice(0, 200)}`);
+          errors.push(`${file2.session_id.slice(0, 8)}...: ${msg.slice(0, 200)}`);
         }
+      }
+    }
+    if (!signal?.aborted && hasPendingVectors(projectDir)) {
+      try {
+        totalEmbedded += await embedPendingChunks(provider, projectDir, onProgress, signal);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logger.error(`Error re-embedding the kept chunks of ${projectDir}:`, msg);
+        if (errors.length < 5) errors.push(`${projectDir} (kept chunks): ${msg.slice(0, 200)}`);
       }
     }
   }
   logger.info(`Indexing complete: ${totalChunks} chunks, ${totalEmbedded} embedded, ${filesProcessed} files, ${skipped} skipped`);
-  return { totalChunks, totalEmbedded, filesProcessed, skipped, errors, resetAll };
+  return { totalChunks, totalEmbedded, filesProcessed, skipped, errors, resetAll, archive };
+}
+async function embedPendingChunks(provider, projectDir, onProgress, signal) {
+  let embedded = 0;
+  for (let after = 0; ; ) {
+    if (signal?.aborted) return embedded;
+    const { missing, lastChunkId } = getChunksWithoutVectors(projectDir, after, PENDING_PAGE_SIZE);
+    if (lastChunkId === null) break;
+    for (let i = 0; i < missing.length; i += EMBED_BATCH_SIZE) {
+      const batch = missing.slice(i, i + EMBED_BATCH_SIZE);
+      insertVectors(batch, await provider.embed(batch.map((c) => c.content_text)));
+      embedded += batch.length;
+    }
+    onProgress?.({ phase: `Re-embedding kept excerpts of ${projectDir}`, current: embedded, total: 0 });
+    after = lastChunkId;
+  }
+  clearPendingVectors(projectDir);
+  return embedded;
 }
 
 // src/search/density-boost.ts
@@ -37230,16 +37686,16 @@ function pageFooter(endIndex, maxResults, total, more, nextScore) {
 }
 async function indexBeforeSemanticSearch(provider, projectDirs, ctx) {
   if (projectDirs.length !== 1) {
-    return 'Note: across several projects, only messages already indexed are searched: recent sessions of other projects may be missing (souvenir_index action="build" project="all" indexes them; text mode reads the transcripts directly).';
+    return 'Note: across several projects, only messages already indexed are searched: recent sessions of other projects may be missing (souvenir_index action="build" project="all" indexes them; text mode searches the whole archive).';
   }
   try {
     const result = await buildIndex(provider, projectDirs, { rebuild: false, onProgress: createProgressNotifier(ctx) });
     if (result.errors.length === 0) return null;
     const count = result.errors.length >= 5 ? "5 or more" : String(result.errors.length);
-    return `Note: ${count} transcript(s) could not be indexed, so their newest messages may be missing from semantic results (first error: ${result.errors[0]}). Text mode reads the transcripts directly.`;
+    return `Note: ${count} transcript(s) could not be indexed, so their newest messages may be missing from semantic results (first error: ${result.errors[0]}). Text mode searches the whole archive.`;
   } catch (err) {
     logger.warn("Indexing before search failed:", err);
-    return `Note: indexing new messages failed (${errorMessage(err)}), so the latest messages may be missing from semantic results. Text mode reads the transcripts directly.`;
+    return `Note: indexing new messages failed (${errorMessage(err)}), so the latest messages may be missing from semantic results. Text mode searches the whole archive.`;
   }
 }
 function unreadableNote(unreadable) {
@@ -37249,7 +37705,7 @@ function unreadableNote(unreadable) {
 function sessionMetadataLookup() {
   const cache = /* @__PURE__ */ new Map();
   return (sessionId, projectDir) => {
-    if (!cache.has(sessionId)) cache.set(sessionId, getSessionMetadata(sessionId, projectDir));
+    if (!cache.has(sessionId)) cache.set(sessionId, findSession(sessionId, projectDir));
     return cache.get(sessionId) ?? null;
   };
 }
@@ -37285,14 +37741,6 @@ async function handleSouvenirSearch(params, ctx) {
   if (searchDocs && !searchTranscripts) {
     return await performDocsSearch(params, config2, source, mode);
   }
-  if (params.session_id === "current") {
-    const projectDir = config2.currentProject || void 0;
-    const resolved = resolveCurrentSession(projectDir);
-    if (!resolved) {
-      return "Error: Could not determine current session.";
-    }
-    params = { ...params, session_id: resolved };
-  }
   let projectDirs;
   if (params.project === "all") {
     projectDirs = listProjectDirs();
@@ -37302,6 +37750,14 @@ async function handleSouvenirSearch(params, ctx) {
     projectDirs = [config2.currentProject];
   } else {
     return 'Error: No project specified and could not detect current project. Use the "project" parameter or set "all" to search all projects.';
+  }
+  const archiveNote = archiveErrorNote(await ensureArchived(projectDirs, createProgressNotifier(ctx)));
+  if (params.session_id === "current") {
+    const resolved = resolveCurrentSession(config2.currentProject || void 0);
+    if (!resolved) {
+      return "Error: Could not determine current session.";
+    }
+    params = { ...params, session_id: resolved };
   }
   const maxResults = Math.min(params.max_results || 10, 50);
   let result;
@@ -37321,7 +37777,9 @@ async function handleSouvenirSearch(params, ctx) {
 ${docsHint}`;
     }
   }
-  return result;
+  return archiveNote ? `${archiveNote}
+
+${result}` : result;
 }
 async function performTextSearch(params, projectDirs, maxResults) {
   const result = await textSearch({
@@ -37350,7 +37808,7 @@ async function performTextSearch(params, projectDirs, maxResults) {
   const total = boostedResults.length;
   const endIndex = offset + sliced.length;
   if (sliced.length === 0) return `${noteBlock}No results after offset ${offset} for "${params.query}" (${total} in all).`;
-  const header = `${noteBlock}Found ${total} result(s) for "${params.query}" (showing ${offset + 1}-${endIndex}, searched ${result.filesSearched} files):
+  const header2 = `${noteBlock}Found ${total} result(s) for "${params.query}" (showing ${offset + 1}-${endIndex}, searched ${result.filesSearched} files):
 `;
   const formatted = sliced.map(
     (r, i) => formatSearchResult(r, offset + i, sessionHitCounts.get(r.sessionId))
@@ -37361,7 +37819,7 @@ async function performTextSearch(params, projectDirs, maxResults) {
     footer += `
 ${hint}`;
   }
-  return header + "\n" + formatted.join("\n\n") + footer;
+  return header2 + "\n" + formatted.join("\n\n") + footer;
 }
 async function performSemanticSearch(params, projectDirs, maxResults, ctx) {
   const config2 = getConfig();
@@ -37391,7 +37849,14 @@ async function performSemanticSearch(params, projectDirs, maxResults, ctx) {
       return `${noteBlock}No semantic results found for "${params.query}". The index may be empty for the specified project. Run souvenir_index with action="status" to check.`;
     }
     const metadataOf = sessionMetadataLookup();
-    const allResults = vecResults.map((vr) => {
+    const seen = /* @__PURE__ */ new Set();
+    const distinct = vecResults.filter((vr) => {
+      const key = `${vr.session_id}:${vr.line_number}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    const allResults = distinct.map((vr) => {
       const meta3 = metadataOf(vr.session_id, vr.project_dir);
       return {
         sessionId: vr.session_id,
@@ -37404,8 +37869,8 @@ async function performSemanticSearch(params, projectDirs, maxResults, ctx) {
         lineNumber: vr.line_number || 0,
         score: 1 - vr.distance,
         // Convert cosine distance to similarity
-        sessionSummary: meta3?.entry.summary,
-        sessionFirstPrompt: meta3?.entry.firstPrompt
+        sessionSummary: meta3?.summary,
+        sessionFirstPrompt: meta3?.firstPrompt
       };
     });
     const { results: boostedResults, sessionHitCounts } = applySessionDensityBoost(allResults);
@@ -37413,10 +37878,10 @@ async function performSemanticSearch(params, projectDirs, maxResults, ctx) {
     const total = boostedResults.length;
     const endIndex = offset + sliced.length;
     if (sliced.length === 0) return `${noteBlock}No semantic results after offset ${offset} for "${params.query}" (${total} in all).`;
-    const header = `${noteBlock}Found ${resultCount(total, more)} semantic result(s) for "${params.query}" (showing ${offset + 1}-${endIndex}):
+    const header2 = `${noteBlock}Found ${resultCount(total, more)} semantic result(s) for "${params.query}" (showing ${offset + 1}-${endIndex}):
 `;
     const formatted = sliced.map((r, i) => formatSearchResult(r, offset + i, sessionHitCounts.get(r.sessionId)));
-    return header + "\n" + formatted.join("\n\n") + pageFooter(endIndex, maxResults, total, more, boostedResults[endIndex]?.score);
+    return header2 + "\n" + formatted.join("\n\n") + pageFooter(endIndex, maxResults, total, more, boostedResults[endIndex]?.score);
   } catch (err) {
     return `Semantic search error: ${err instanceof Error ? err.message : String(err)}`;
   }
@@ -37484,9 +37949,12 @@ async function performHybridSearch(params, projectDirs, maxResults, ctx) {
     merged.set(key, { ...r, score: r.score * 0.4 });
   }
   const metadataOf = sessionMetadataLookup();
+  const semanticKeys = /* @__PURE__ */ new Set();
   for (const vr of vecResults) {
-    const meta3 = metadataOf(vr.session_id, vr.project_dir);
     const key = `${vr.session_id}:${vr.line_number}`;
+    if (semanticKeys.has(key)) continue;
+    semanticKeys.add(key);
+    const meta3 = metadataOf(vr.session_id, vr.project_dir);
     const similarity = 1 - vr.distance;
     const semanticScore = similarity * 0.6;
     const existing = merged.get(key);
@@ -37503,8 +37971,8 @@ async function performHybridSearch(params, projectDirs, maxResults, ctx) {
         timestamp: vr.timestamp || void 0,
         lineNumber: vr.line_number || 0,
         score: semanticScore,
-        sessionSummary: meta3?.entry.summary,
-        sessionFirstPrompt: meta3?.entry.firstPrompt
+        sessionSummary: meta3?.summary,
+        sessionFirstPrompt: meta3?.firstPrompt
       });
     }
   }
@@ -37517,11 +37985,11 @@ async function performHybridSearch(params, projectDirs, maxResults, ctx) {
   }
   const more = textResult.totalMatches > textResult.results.length || vecResults.length === depth;
   const endIndex = offset + sliced.length;
-  const header = `${noticeBlock}Found ${resultCount(total, more)} hybrid result(s) for "${params.query}" (showing ${offset + 1}-${endIndex}):
+  const header2 = `${noticeBlock}Found ${resultCount(total, more)} hybrid result(s) for "${params.query}" (showing ${offset + 1}-${endIndex}):
 `;
   const formatted = sliced.map((r, i) => formatSearchResult(r, offset + i, sessionHitCounts.get(r.sessionId)));
   const footer = pageFooter(endIndex, maxResults, total, more, boostedResults[endIndex]?.score);
-  return header + "\n" + formatted.join("\n\n") + footer;
+  return header2 + "\n" + formatted.join("\n\n") + footer;
 }
 async function getSemanticHint(query, projectDirs) {
   try {
@@ -37607,7 +38075,7 @@ async function performDocsSearch(params, config2, source, mode) {
   const endIndex = offset + sliced.length;
   if (sliced.length === 0) return `No results after offset ${offset} for "${params.query}" (${total} in all).`;
   const sourceLabel = categoryFilter || "project";
-  const header = `Found ${resultCount(total, more)} result(s) in ${sourceLabel} files for "${params.query}" (showing ${offset + 1}-${endIndex}):
+  const header2 = `Found ${resultCount(total, more)} result(s) in ${sourceLabel} files for "${params.query}" (showing ${offset + 1}-${endIndex}):
 `;
   const formatted = sliced.map((r, i) => formatDocResult(r, offset + i));
   const next = vecResults[endIndex];
@@ -37617,7 +38085,7 @@ async function performDocsSearch(params, config2, source, mode) {
     footer += `
 ${xrefHint}`;
   }
-  return header + "\n" + formatted.join("\n\n") + footer;
+  return header2 + "\n" + formatted.join("\n\n") + footer;
 }
 async function getDocsXrefHint(query, config2) {
   try {
@@ -37666,103 +38134,117 @@ async function getTranscriptsXrefHint(query, config2) {
 }
 
 // src/tools/read.ts
-function headerMetadata(sessionId, projectDir) {
-  const meta3 = getSessionMetadata(sessionId, projectDir);
-  return meta3 && { ...meta3, entry: withEntryCount(meta3.entry, meta3.projectDir) };
-}
 var DIGEST_ENTRIES = 20;
+function withNote(note, text2) {
+  return note ? `${note}
+
+${text2}` : text2;
+}
 async function readSessionDigest(sessionId) {
   const config2 = getConfig();
-  const location = (config2.currentProject ? getSessionFilePath(sessionId, config2.currentProject) : null) ?? getSessionFilePath(sessionId);
-  if (!location) return null;
-  const meta3 = headerMetadata(sessionId, location.projectDir);
-  const files = await readAggregate(location.filePath, "files", null);
-  const lastEntries = await readPage(location.filePath, void 0, DIGEST_ENTRIES, DEFAULT_ENTRY_TYPES, "conversation", null);
-  return [
-    meta3 ? formatSessionHeader(meta3.entry) : `Session: ${sessionId}
-Project: ${location.projectDir}`,
-    `Read more: souvenir_read session_id="${sessionId}" project="${location.projectDir}" (from_line for earlier entries, around_uuid for one moment).`,
+  const note = config2.currentProject ? archiveErrorNote(await ensureArchived([config2.currentProject])) : null;
+  const session = (config2.currentProject ? findSession(sessionId, config2.currentProject) : null) ?? findSession(sessionId);
+  if (!session) return null;
+  const readMore = `Read more: souvenir_read session_id="${sessionId}" project="${session.projectDir}" (from_line for earlier entries, around_uuid for one moment).`;
+  if (session.availability !== "complete" || !session.fileKey) {
+    const body = session.availability === "partial" ? [`=== Last ${DIGEST_ENTRIES} excerpts ===`, readExcerptPage(session, void 0, DIGEST_ENTRIES)] : [];
+    return withNote(note, [formatSessionHeader(session), readMore, "", ...body].join("\n"));
+  }
+  const files = await readAggregate(session, "files", false);
+  const lastEntries = await readPage(session, void 0, DIGEST_ENTRIES, DEFAULT_ENTRY_TYPES, "conversation", false);
+  return withNote(note, [
+    formatSessionHeader(session),
+    readMore,
+    savedFilesLine(session),
     "",
     "=== Files touched ===",
     files,
     "",
     `=== Last ${DIGEST_ENTRIES} entries ===`,
     lastEntries
-  ].join("\n");
+  ].filter((line) => line !== null).join("\n"));
 }
 async function handleSouvenirRead(params) {
+  if (params.saved_file) return readSavedFile(params.saved_file);
+  if (!params.session_id) {
+    return text("Error: session_id is required (or saved_file to read a file Claude Code saved with a session).");
+  }
   const config2 = getConfig();
-  const projectDir = params.project && params.project !== "all" ? resolveProjectDir(params.project) : void 0;
-  const sessionId = params.session_id === "current" ? resolveCurrentSession(projectDir || config2.currentProject || void 0) : params.session_id;
-  if (!sessionId) {
-    return "Error: Could not determine current session. Use an explicit session_id.";
-  }
   const searchAllProjects = params.project === "all";
-  const searchDir = searchAllProjects ? void 0 : projectDir || config2.currentProject || void 0;
-  const location = getSessionFilePath(sessionId, searchDir);
-  if (!location) {
-    return `Error: Session "${sessionId}" not found in ${searchAllProjects ? "any project" : projectDir ? `project "${params.project}"` : "current project"}. Use souvenir_sessions to list valid session IDs, or specify the project parameter to search in a different project.`;
+  const projectDir = params.project && !searchAllProjects ? resolveProjectDir(params.project) : void 0;
+  const homeDir = projectDir || config2.currentProject || void 0;
+  const report = await ensureArchived(searchAllProjects ? listProjectDirs() : homeDir ? [homeDir] : []);
+  const note = archiveErrorNote(report);
+  const sessionId = params.session_id === "current" ? resolveCurrentSession(homeDir) : params.session_id;
+  if (!sessionId) {
+    return text("Error: Could not determine current session. Use an explicit session_id.");
   }
-  const meta3 = headerMetadata(sessionId, location.projectDir);
-  const entryTypes = params.entry_types ? params.entry_types.split(",").map((t) => t.trim()) : DEFAULT_ENTRY_TYPES;
+  const session = searchAllProjects ? findSession(sessionId) : (homeDir ? findSession(sessionId, homeDir) : null) ?? (projectDir ? null : findSession(sessionId));
+  if (!session) {
+    return text(withNote(note, `Error: Session "${sessionId}" not found in ${projectDir ? `project "${params.project}"` : "any project"}. Use souvenir_sessions to list valid session IDs.`));
+  }
   const maxEntries = Math.min(params.max_entries || 20, 200);
+  const beforeTurns = params.before_turns ?? params.context_turns ?? 3;
+  const afterTurns = params.after_turns ?? params.context_turns ?? 3;
+  if (session.availability === "lost") {
+    return text(withNote(note, formatSessionHeader(session)));
+  }
+  if (session.availability === "partial") {
+    if (params.detail_level === "files" || params.detail_level === "tools") {
+      return text(withNote(note, `${formatSessionHeader(session)}
+---
+(Not available: the excerpts kept of this session have no tool calls.)`));
+    }
+    const body = params.around_uuid ? readExcerptsAround(session, params.around_uuid, beforeTurns, afterTurns) : readExcerptPage(session, params.from_line, maxEntries);
+    return text(withNote(note, body));
+  }
+  const entryTypes = params.entry_types ? params.entry_types.split(",").map((t) => t.trim()) : DEFAULT_ENTRY_TYPES;
   const detailLevel = params.detail_level || "conversation";
   if (detailLevel === "files" || detailLevel === "tools") {
-    return await readAggregate(location.filePath, detailLevel, meta3);
+    return text(withNote(note, await readAggregate(session, detailLevel, true)));
   }
   if (params.around_uuid) {
-    const beforeTurns = params.before_turns ?? params.context_turns ?? 3;
-    const afterTurns = params.after_turns ?? params.context_turns ?? 3;
-    return await readAroundUuid(
-      location.filePath,
-      params.around_uuid,
-      beforeTurns,
-      afterTurns,
-      entryTypes,
-      detailLevel,
-      meta3
-    );
+    return text(withNote(note, await readAroundUuid(session, params.around_uuid, beforeTurns, afterTurns, entryTypes, detailLevel)));
   }
-  return await readPage(
-    location.filePath,
-    params.from_line,
-    maxEntries,
-    entryTypes,
-    detailLevel,
-    meta3
-  );
+  return text(withNote(note, await readPage(session, params.from_line, maxEntries, entryTypes, detailLevel, true)));
+}
+function text(value) {
+  return [{ type: "text", text: value }];
+}
+function header(session) {
+  return [formatSessionHeader(session), savedFilesLine(session)].filter((line) => line !== null).join("\n");
+}
+function savedFilesLine(session) {
+  const saved = getAttachments(session.projectDir, session.sessionId);
+  if (saved.length === 0) return null;
+  const shown = saved.slice(0, 5).map((a) => a.file_key.split("/").slice(2).join("/")).join(", ");
+  return `Saved files: ${saved.length} (${shown}${saved.length > 5 ? ", \u2026" : ""}). A tool result that names one: souvenir_read saved_file="<path as written>".`;
 }
 function formatSize(chars) {
   if (chars < 1e3) return `${chars}`;
   if (chars < 1e6) return `${(chars / 1e3).toFixed(1)}K`;
   return `${(chars / 1e6).toFixed(1)}M`;
 }
-async function readPage(filePath, fromLine, maxEntries, entryTypes, detailLevel, meta3) {
-  const allEntries = [];
-  const stream = parseTranscript(filePath, { includeTypes: entryTypes });
-  for await (const parsed of stream) {
-    allEntries.push(parsed);
+async function collectEntries(session, entryTypes) {
+  const entries = [];
+  for await (const parsed of parseTranscript(session.fileKey, { includeTypes: entryTypes })) {
+    entries.push(parsed);
   }
+  return entries;
+}
+async function readPage(session, fromLine, maxEntries, entryTypes, detailLevel, withHeader) {
+  const allEntries = await collectEntries(session, entryTypes);
   const totalEntries = allEntries.length;
   const output2 = [];
-  if (meta3) {
-    output2.push(formatSessionHeader(meta3.entry));
+  if (withHeader) {
+    output2.push(header(session));
     output2.push("---");
   }
   if (totalEntries === 0) {
     output2.push("(No matching entries found)");
     return output2.join("\n");
   }
-  let startIdx;
-  let endIdx;
-  if (fromLine === void 0) {
-    endIdx = totalEntries;
-    startIdx = Math.max(0, endIdx - maxEntries);
-  } else {
-    startIdx = allEntries.findIndex((e) => e.lineNumber >= fromLine);
-    if (startIdx === -1) startIdx = totalEntries;
-    endIdx = Math.min(startIdx + maxEntries, totalEntries);
-  }
+  const { startIdx, endIdx } = pageWindow(allEntries.map((e) => e.lineNumber), fromLine, maxEntries);
   const pageEntries = allEntries.slice(startIdx, endIdx);
   const singleEntry = maxEntries === 1;
   let count = 0;
@@ -37773,12 +38255,12 @@ async function readPage(filePath, fromLine, maxEntries, entryTypes, detailLevel,
     if (formatted) {
       if (firstLine === 0) firstLine = lineNumber;
       lastLine = lineNumber;
-      let text = `[L${lineNumber}] ${formatted}`;
-      if (!singleEntry && text.includes("[...truncated:") && entry.uuid) {
-        text += `
+      let line = `[L${lineNumber}] ${formatted}`;
+      if (!singleEntry && line.includes("[...truncated:") && entry.uuid) {
+        line += `
   >> Full entry: souvenir_read around_uuid="${entry.uuid}" max_entries=1 detail_level=full`;
       }
-      output2.push(text);
+      output2.push(line);
       output2.push("");
       count++;
     }
@@ -37787,58 +38269,47 @@ async function readPage(filePath, fromLine, maxEntries, entryTypes, detailLevel,
     output2.push("(No matching entries in this range)");
     return output2.join("\n");
   }
-  const totalPages = Math.ceil(totalEntries / maxEntries);
-  const currentPage = fromLine === void 0 ? totalPages : Math.min(totalPages, Math.floor(startIdx / maxEntries) + 1);
-  output2.push(
-    `--- Page ~${currentPage}/${totalPages} | Entries ${startIdx + 1}-${Math.min(endIdx, totalEntries)} of ${totalEntries} (L${firstLine}-L${lastLine}) ---`
-  );
-  if (startIdx > 0) {
-    const earlierEndIdx = startIdx;
-    const earlierStartIdx = Math.max(0, earlierEndIdx - maxEntries);
-    const earlierSlice = allEntries.slice(earlierStartIdx, earlierEndIdx);
-    const earlierFromLine = earlierSlice[0].lineNumber;
-    const earlierTotalChars = earlierSlice.reduce((sum, e) => sum + e.rawLength, 0);
-    const earlierMaxEntry = Math.max(...earlierSlice.map((e) => e.rawLength));
-    output2.push(
-      `--- Earlier: from_line=${earlierFromLine} | ${earlierSlice.length} entries, ~${formatSize(earlierTotalChars)} chars total, largest ~${formatSize(earlierMaxEntry)} chars ---`
-    );
-  }
-  if (endIdx < totalEntries) {
-    const laterStartIdx = endIdx;
-    const laterEndIdx = Math.min(laterStartIdx + maxEntries, totalEntries);
-    const laterSlice = allEntries.slice(laterStartIdx, laterEndIdx);
-    const laterFromLine = laterSlice[0].lineNumber;
-    const laterTotalChars = laterSlice.reduce((sum, e) => sum + e.rawLength, 0);
-    const laterMaxEntry = Math.max(...laterSlice.map((e) => e.rawLength));
-    output2.push(
-      `--- Later: from_line=${laterFromLine} | ${laterSlice.length} entries, ~${formatSize(laterTotalChars)} chars total, largest ~${formatSize(laterMaxEntry)} chars ---`
-    );
-  }
+  output2.push(...pageFooter2(allEntries.map((e) => ({ lineNumber: e.lineNumber, size: e.rawLength })), fromLine, maxEntries, startIdx, endIdx, firstLine, lastLine, "entries"));
   return output2.join("\n");
 }
-async function readAroundUuid(filePath, targetUuid, beforeTurns, afterTurns, entryTypes, detailLevel, meta3) {
-  const collectTypes = /* @__PURE__ */ new Set([...entryTypes, "user", "assistant"]);
-  const allEntries = [];
-  let targetIndex = -1;
-  const stream = parseTranscript(filePath, { includeTypes: [...collectTypes] });
-  for await (const parsed of stream) {
-    allEntries.push(parsed);
-    if (parsed.entry.uuid === targetUuid) {
-      targetIndex = allEntries.length - 1;
-    }
+function pageWindow(lineNumbers, fromLine, maxEntries) {
+  const total = lineNumbers.length;
+  if (fromLine === void 0) {
+    return { startIdx: Math.max(0, total - maxEntries), endIdx: total };
   }
+  let startIdx = lineNumbers.findIndex((line) => line >= fromLine);
+  if (startIdx === -1) startIdx = total;
+  return { startIdx, endIdx: Math.min(startIdx + maxEntries, total) };
+}
+function pageFooter2(items, fromLine, maxEntries, startIdx, endIdx, firstLine, lastLine, unit) {
+  const total = items.length;
+  const totalPages = Math.ceil(total / maxEntries);
+  const currentPage = fromLine === void 0 ? totalPages : Math.min(totalPages, Math.floor(startIdx / maxEntries) + 1);
+  const lines = [
+    `--- Page ~${currentPage}/${totalPages} | ${unit[0].toUpperCase()}${unit.slice(1)} ${startIdx + 1}-${Math.min(endIdx, total)} of ${total} (L${firstLine}-L${lastLine}) ---`
+  ];
+  const preview = (label, slice) => {
+    const totalChars = slice.reduce((sum, e) => sum + e.size, 0);
+    const largest = Math.max(...slice.map((e) => e.size));
+    lines.push(`--- ${label}: from_line=${slice[0].lineNumber} | ${slice.length} ${unit}, ~${formatSize(totalChars)} chars total, largest ~${formatSize(largest)} chars ---`);
+  };
+  if (startIdx > 0) preview("Earlier", items.slice(Math.max(0, startIdx - maxEntries), startIdx));
+  if (endIdx < total) preview("Later", items.slice(endIdx, Math.min(endIdx + maxEntries, total)));
+  return lines;
+}
+async function readAroundUuid(session, targetUuid, beforeTurns, afterTurns, entryTypes, detailLevel) {
+  const allEntries = await collectEntries(session, [.../* @__PURE__ */ new Set([...entryTypes, "user", "assistant"])]);
+  const targetIndex = allEntries.findIndex((e) => e.entry.uuid === targetUuid);
   if (targetIndex === -1) {
     return `Error: Entry with UUID "${targetUuid}" not found in this session.`;
   }
-  const totalMessages = allEntries.filter(
-    (e) => e.entry.type === "user" || e.entry.type === "assistant"
-  ).length;
-  const targetMessageIndex = allEntries.slice(0, targetIndex + 1).filter((e) => e.entry.type === "user" || e.entry.type === "assistant").length;
+  const isMessage = (e) => e.entry.type === "user" || e.entry.type === "assistant";
+  const totalMessages = allEntries.filter(isMessage).length;
+  const targetMessageIndex = allEntries.slice(0, targetIndex + 1).filter(isMessage).length;
   let startIndex = targetIndex;
   let messagesBefore = 0;
   for (let i = targetIndex - 1; i >= 0; i--) {
-    const type = allEntries[i].entry.type;
-    if (type === "user" || type === "assistant") {
+    if (isMessage(allEntries[i])) {
       messagesBefore++;
       if (messagesBefore > beforeTurns) break;
     }
@@ -37847,8 +38318,7 @@ async function readAroundUuid(filePath, targetUuid, beforeTurns, afterTurns, ent
   let endIndex = targetIndex;
   let messagesAfter = 0;
   for (let i = targetIndex + 1; i < allEntries.length; i++) {
-    const type = allEntries[i].entry.type;
-    if (type === "user" || type === "assistant") {
+    if (isMessage(allEntries[i])) {
       messagesAfter++;
       if (messagesAfter > afterTurns) break;
     }
@@ -37857,55 +38327,112 @@ async function readAroundUuid(filePath, targetUuid, beforeTurns, afterTurns, ent
   const entryTypesSet = new Set(entryTypes);
   const slice = allEntries.slice(startIndex, endIndex + 1).filter(({ entry }) => entryTypesSet.has(entry.type));
   const singleEntry = beforeTurns === 0 && afterTurns === 0;
-  const output2 = [];
-  if (meta3) {
-    output2.push(formatSessionHeader(meta3.entry));
-    output2.push("---");
-    output2.push(`(Target: message ${targetMessageIndex}/${totalMessages} | showing ${messagesBefore} before, ${messagesAfter} after)`);
-    output2.push("");
-  }
+  const output2 = [
+    header(session),
+    "---",
+    `(Target: message ${targetMessageIndex}/${totalMessages} | showing ${Math.min(messagesBefore, beforeTurns)} before, ${Math.min(messagesAfter, afterTurns)} after)`,
+    ""
+  ];
   for (const { entry, lineNumber } of slice) {
-    const isTarget = entry.uuid === targetUuid;
-    const marker = isTarget ? ">>> " : "    ";
+    const marker = entry.uuid === targetUuid ? ">>> " : "    ";
     const formatted = formatEntry(entry, { detailLevel, noTruncate: singleEntry });
     if (formatted) {
-      let text = `${marker}[L${lineNumber}] ${formatted}`;
-      if (!singleEntry && text.includes("[...truncated:") && entry.uuid) {
-        text += `
+      let line = `${marker}[L${lineNumber}] ${formatted}`;
+      if (!singleEntry && line.includes("[...truncated:") && entry.uuid) {
+        line += `
       >> Full entry: souvenir_read around_uuid="${entry.uuid}" max_entries=1 detail_level=full`;
       }
-      output2.push(text);
+      output2.push(line);
       output2.push("");
     }
   }
   return output2.join("\n");
 }
-async function readAggregate(filePath, mode, meta3) {
-  const allEntries = [];
-  const stream = parseTranscript(filePath, { includeTypes: ["user", "assistant"] });
-  for await (const parsed of stream) {
-    allEntries.push(parsed);
-  }
+async function readAggregate(session, mode, withHeader) {
+  const allEntries = await collectEntries(session, ["user", "assistant"]);
   const output2 = [];
-  if (meta3) {
-    output2.push(formatSessionHeader(meta3.entry));
+  if (withHeader) {
+    output2.push(header(session));
     output2.push("---");
   }
-  if (mode === "files") {
-    output2.push(formatFilesOutput(extractFileAccess(allEntries)));
-  } else {
-    output2.push(formatToolsOutput(extractToolUsage(allEntries)));
+  output2.push(mode === "files" ? formatFilesOutput(extractFileAccess(allEntries)) : formatToolsOutput(extractToolUsage(allEntries)));
+  return output2.join("\n");
+}
+function readExcerptPage(session, fromLine, maxEntries) {
+  const excerpts = getSessionChunks(session.projectDir, session.sessionId);
+  const output2 = [formatSessionHeader(session), "---"];
+  if (excerpts.length === 0) {
+    output2.push("(No excerpts found)");
+    return output2.join("\n");
+  }
+  const lineOf = (c) => c.line_number ?? 0;
+  const { startIdx, endIdx } = pageWindow(excerpts.map(lineOf), fromLine, maxEntries);
+  const page = excerpts.slice(startIdx, endIdx);
+  if (page.length === 0) {
+    output2.push("(No excerpts in this range)");
+    return output2.join("\n");
+  }
+  for (const c of page) {
+    output2.push(`[L${lineOf(c)}] ${formatExcerpt(c)}`, "");
+  }
+  output2.push(...pageFooter2(
+    excerpts.map((c) => ({ lineNumber: lineOf(c), size: c.content_text.length })),
+    fromLine,
+    maxEntries,
+    startIdx,
+    endIdx,
+    lineOf(page[0]),
+    lineOf(page[page.length - 1]),
+    "excerpts"
+  ));
+  return output2.join("\n");
+}
+function readExcerptsAround(session, targetUuid, before, after) {
+  const excerpts = getSessionChunks(session.projectDir, session.sessionId);
+  const target = excerpts.findIndex((c) => c.entry_uuid === targetUuid);
+  if (target === -1) return `${formatSessionHeader(session)}
+---
+Error: Entry with UUID "${targetUuid}" not found in the excerpts of this session.`;
+  const output2 = [formatSessionHeader(session), "---", `(Target: excerpt ${target + 1}/${excerpts.length})`, ""];
+  for (let i = Math.max(0, target - before); i <= Math.min(excerpts.length - 1, target + after); i++) {
+    const c = excerpts[i];
+    output2.push(`${i === target ? ">>> " : "    "}[L${c.line_number ?? 0}] ${formatExcerpt(c)}`, "");
   }
   return output2.join("\n");
 }
+var IMAGE_TYPES = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp" };
+function readSavedFile(path) {
+  const segments = path.replace(/\\/g, "/").split("/").filter(Boolean);
+  for (let i = 0; i < segments.length; i++) {
+    const saved = getAttachment(segments.slice(i).join("/"));
+    if (!saved) continue;
+    const data = decompress(saved.data);
+    const extension = saved.file_key.slice(saved.file_key.lastIndexOf(".") + 1).toLowerCase();
+    const label = `Saved file ${saved.file_key} (${saved.size} bytes, session ${saved.session_id})`;
+    const mimeType = IMAGE_TYPES[extension];
+    if (mimeType) {
+      return [{ type: "text", text: label }, { type: "image", data: data.toString("base64"), mimeType }];
+    }
+    if (data.includes(0)) {
+      return text(`${label}: binary file (.${extension}), not shown as text.`);
+    }
+    return text(`${label}:
+${data.toString("utf8")}`);
+  }
+  return text(`Error: no saved file matching "${path}" in souvenir's archive. Files are archived from the session folders (tool-results/, subagents/) of each project.`);
+}
 
 // src/tools/sessions.ts
-async function handleSouvenirSessions(params) {
+async function handleSouvenirSessions(params, ctx) {
   const config2 = getConfig();
   const projectDir = params.project ? resolveProjectDir(params.project) : config2.currentProject;
   if (!projectDir) {
     return 'Error: No project specified and could not detect current project. Use the "project" parameter.';
   }
+  const note = archiveErrorNote(await ensureArchived([projectDir], createProgressNotifier(ctx)));
+  const noteBlock = note ? `${note}
+
+` : "";
   const sessions = getSessions(projectDir, {
     search: params.search,
     dateFrom: params.date_from,
@@ -37917,20 +38444,23 @@ async function handleSouvenirSessions(params) {
   const offset = params.offset ?? 0;
   const displayed = sessions.slice(offset, offset + maxResults);
   if (displayed.length === 0) {
-    if (sessions.length > 0) return `No sessions after offset ${offset} (${sessions.length} in all).`;
-    return params.search ? `No sessions found matching "${params.search}" in project "${projectDir}".` : `No sessions found for project "${projectDir}".`;
+    if (sessions.length > 0) return `${noteBlock}No sessions after offset ${offset} (${sessions.length} in all).`;
+    return noteBlock + (params.search ? `No sessions found matching "${params.search}" in project "${projectDir}".` : `No sessions found for project "${projectDir}".`);
   }
-  const index = loadSessionIndex(projectDir);
-  const originalPath = index?.originalPath || projectDir;
   const total = sessions.length;
   const endIndex = offset + displayed.length;
-  const header = `Project: ${originalPath} (${total} session${total > 1 ? "s" : ""})
-`;
+  const partial2 = sessions.filter((s) => s.availability === "partial").length;
+  const lost = sessions.filter((s) => s.availability === "lost").length;
+  const header2 = [
+    `Project: ${getProjectInfo(projectDir)?.originalPath ?? projectDir} (${total} session${total > 1 ? "s" : ""})`,
+    partial2 > 0 ? `${partial2} PARTIAL: Claude Code deleted their transcripts before souvenir archived whole transcripts; only search excerpts remain.` : null,
+    lost > 0 ? `${lost} LOST: deleted before souvenir kept anything; only listed in Claude Code's old sessions-index.json.` : null
+  ].filter(Boolean).join("\n") + "\n";
   const entries = displayed.map((s, i) => formatSessionListEntry(s, offset + i));
   const footer = endIndex < total ? `
 --- Showing ${offset + 1}-${endIndex} of ${total} sessions | ${total - endIndex} more | Next page: offset=${endIndex} ---` : offset > 0 ? `
 --- Showing ${offset + 1}-${endIndex} of ${total} sessions (end) ---` : "";
-  return header + "\n" + entries.join("\n\n") + footer;
+  return noteBlock + header2 + "\n" + entries.join("\n\n") + footer;
 }
 
 // src/tools/projects.ts
@@ -37966,13 +38496,17 @@ function confirmFor(ctx, legacyCapabilities) {
 }
 
 // src/tools/projects.ts
-async function handleSouvenirProjects(params, confirm2) {
+async function handleSouvenirProjects(params, confirm2, ctx) {
+  const note = archiveErrorNote(await ensureArchived(listProjectDirsOnDisk(), createProgressNotifier(ctx)));
+  const noteBlock = note ? `${note}
+
+` : "";
   if (params.action === "clean") {
-    return handleClean(confirm2);
+    return noteBlock + handleClean(confirm2);
   }
   const config2 = getConfig();
-  const allDirs = listProjectDirs();
-  const projects = allDirs.map((dir) => getProjectInfo(dir)).filter((p) => p !== null && p.sessionCount > 0);
+  const onDisk = new Set(listProjectDirsOnDisk());
+  const projects = listProjectDirs().map((dir) => getProjectInfo(dir)).filter((p) => p !== null);
   let filtered = projects;
   if (params.search) {
     const term = params.search.toLowerCase();
@@ -37986,112 +38520,54 @@ async function handleSouvenirProjects(params, confirm2) {
     return dateB - dateA;
   });
   if (filtered.length === 0) {
-    return params.search ? `No projects found matching "${params.search}".` : "No projects with transcripts found.";
+    return noteBlock + (params.search ? `No projects found matching "${params.search}".` : "No projects with conversations found.");
   }
-  const lines = [`Found ${filtered.length} project(s):
+  const lines = [`${noteBlock}Found ${filtered.length} project(s):
 `];
   for (let i = 0; i < filtered.length; i++) {
     const p = filtered[i];
     const latest = p.latestDate ? p.latestDate.slice(0, 10) : "???";
     const oldest = p.oldestDate ? p.oldestDate.slice(0, 10) : "???";
-    const isCurrent = p.dirName === config2.currentProject;
-    const statusTag = isCurrent ? " [current]" : p.originalPath === null ? " [path unknown]" : existsSync6(p.originalPath) ? "" : " [orphan]";
-    lines.push(`${i + 1}. ${p.originalPath ?? p.dirName}${statusTag}`);
+    const tags = [];
+    if (p.dirName === config2.currentProject) tags.push("[current]");
+    else if (p.originalPath === null) tags.push("[path unknown]");
+    else if (!existsSync6(p.originalPath)) tags.push("[folder deleted]");
+    if (!onDisk.has(p.dirName)) tags.push("[transcripts deleted by Claude Code: read from the archive]");
+    lines.push(`${i + 1}. ${p.originalPath ?? p.dirName}${tags.length ? ` ${tags.join(" ")}` : ""}`);
     lines.push(`   Dir: ${p.dirName}`);
-    lines.push(`   Sessions: ${p.sessionCount} | Latest: ${latest} | Oldest: ${oldest}`);
+    lines.push(`   Sessions: ${p.sessionCount}${p.partialSessions ? ` (${p.partialSessions} partial)` : ""} | Latest: ${latest} | Oldest: ${oldest}`);
     lines.push("");
-  }
-  try {
-    const indexStatus = getIndexStatus();
-    const knownDirs = new Set(allDirs.map((d) => d.toLowerCase()));
-    const indexOnlyOrphans = indexStatus.projects.filter((p) => !knownDirs.has(p.projectDir.toLowerCase()));
-    if (indexOnlyOrphans.length > 0) {
-      lines.push(`--- Index-only orphans (${indexOnlyOrphans.length}) ---`);
-      lines.push("These projects have indexed data but no transcripts in ~/.claude/projects/:");
-      for (const p of indexOnlyOrphans) {
-        lines.push(`  - ${p.projectDir}: ${p.chunkCount} chunks`);
-      }
-      lines.push("");
-      lines.push('Use souvenir_projects action="clean" to remove orphaned index data.');
-    }
-  } catch (err) {
-    logger.debug("Could not check index for orphans:", err);
   }
   return lines.join("\n");
 }
-async function handleClean(confirm2) {
-  const allDirs = listProjectDirs();
-  const knownDirs = new Set(allDirs.map((d) => d.toLowerCase()));
-  let indexStatus;
-  try {
-    indexStatus = getIndexStatus();
-  } catch {
-    return "No index database found. Nothing to clean.";
-  }
-  const indexOrphans = indexStatus.projects.filter((p) => !knownDirs.has(p.projectDir.toLowerCase()));
-  const pathOrphans = [];
-  for (const dir of allDirs) {
-    const info = getProjectInfo(dir);
-    if (!info?.originalPath) continue;
-    if (!existsSync6(info.originalPath)) {
-      const dbProject = indexStatus.projects.find((p) => p.projectDir.toLowerCase() === dir.toLowerCase());
-      if (dbProject && dbProject.chunkCount > 0) {
-        pathOrphans.push({
-          dirName: dir,
-          originalPath: info.originalPath,
-          chunkCount: dbProject.chunkCount
-        });
-      }
-    }
-  }
-  if (indexOrphans.length === 0 && pathOrphans.length === 0) {
-    return "No orphaned project data found. Everything is clean.";
+function handleClean(confirm2) {
+  const deleted = listProjectDirs().map((dir) => getProjectInfo(dir)).filter((p) => p !== null && p.originalPath !== null && !existsSync6(p.originalPath));
+  if (deleted.length === 0) {
+    return "No project with a deleted folder: nothing to clean.";
   }
   const question = [
-    `souvenir: remove the search index data of ${indexOrphans.length + pathOrphans.length} orphaned project(s)?`
+    `souvenir: delete everything souvenir kept of ${deleted.length} project(s) whose folder no longer exists?`,
+    "This deletes their archived conversations, not only the search index. When Claude Code already deleted their transcripts, souvenir's archive is the only copy left: it cannot be undone.",
+    ...deleted.map((p) => `- ${p.originalPath} (${p.sessionCount} sessions, ${p.oldestDate?.slice(0, 10) ?? "???"} to ${p.latestDate?.slice(0, 10) ?? "???"})`)
   ];
-  if (indexOrphans.length > 0) {
-    question.push("", `No transcripts left (Claude Code deleted them): the index is the only remaining copy of these conversations.`);
-    question.push(...indexOrphans.map((p) => `- ${p.projectDir} (${p.chunkCount} chunks)`));
-  }
-  if (pathOrphans.length > 0) {
-    question.push("", "Folder deleted, transcripts kept (the index can be rebuilt from them):");
-    question.push(...pathOrphans.map((p) => `- ${p.originalPath} (${p.chunkCount} chunks)`));
-  }
   if (!confirm2(question.join("\n"))) {
     return DECLINED;
   }
   const lines = [];
-  let totalCleaned = 0;
-  for (const p of indexOrphans) {
+  for (const p of deleted) {
     try {
-      clearProject(p.projectDir);
-      totalCleaned += p.chunkCount;
-      lines.push(`Cleaned ${p.projectDir}: ${p.chunkCount} chunks removed (no transcript dir)`);
+      deleteProject(p.dirName);
+      lines.push(`Deleted ${p.originalPath}: ${p.sessionCount} sessions`);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      lines.push(`Error cleaning ${p.projectDir}: ${msg}`);
+      lines.push(`Error deleting ${p.originalPath}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
-  for (const p of pathOrphans) {
-    if (indexOrphans.some((io) => io.projectDir === p.dirName)) continue;
-    try {
-      clearProject(p.dirName);
-      totalCleaned += p.chunkCount;
-      lines.push(`Cleaned ${p.originalPath}: ${p.chunkCount} chunks removed (path no longer exists)`);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      lines.push(`Error cleaning ${p.dirName}: ${msg}`);
-    }
-  }
-  lines.push("");
-  lines.push(`Total: ${totalCleaned} chunks cleaned from ${indexOrphans.length + pathOrphans.length} orphaned project(s).`);
-  lines.push("Note: Transcript files in ~/.claude/projects/ are preserved (managed by Claude Code).");
+  lines.push("", "Transcript files still in ~/.claude/projects/ are left to Claude Code: souvenir archives them again while they exist.");
   return lines.join("\n");
 }
 
 // src/tools/index-mgmt.ts
-import { existsSync as existsSync7, statSync as statSync4 } from "fs";
+import { existsSync as existsSync7, statSync as statSync3 } from "fs";
 async function handleSouvenirIndex(params, ctx, confirm2) {
   let config2;
   try {
@@ -38116,21 +38592,29 @@ Fix it with /plugin configure asymptomatik-souvenir, then /reload-plugins.`;
 }
 function getStatusReport(projectFilter) {
   getDb();
+  const projectDir = projectFilter ? resolveProjectDir(projectFilter) : void 0;
   const identity = getIndexIdentity();
-  const status = getIndexStatus(projectFilter ? resolveProjectDir(projectFilter) : void 0);
-  const lines = ["Semantic Index Status:"];
+  const status = getIndexStatus(projectDir);
+  const archive = getArchiveStats(projectDir);
+  const lines = ["Archive (every line of every transcript, kept after Claude Code deletes its files):"];
+  lines.push(`  Sessions: ${archive.sessions} (${archive.files} transcripts with subagents) | Lines: ${archive.lines} | ${formatSize2(archive.storedBytes)} compressed`);
+  lines.push(`  Saved files (tool results, images \u2026): ${archive.attachments} | ${formatSize2(archive.attachmentBytes)} compressed`);
+  lines.push(`  Transcripts Claude Code deleted, read from the archive: ${archive.sourcesGone}`);
+  if (archive.errors > 0) lines.push(`  Transcripts that could not be archived further: ${archive.errors} (souvenir_sessions and souvenir_read report why)`);
+  lines.push("");
+  lines.push("Semantic Index Status:");
   lines.push(`  Built with: ${identity ? describeIdentity(identity) : "not built yet"}`);
   lines.push(`  Total chunks: ${status.totalChunks}`);
-  lines.push(`  Files indexed: ${status.totalFiles}`);
+  lines.push(`  Transcripts indexed: ${status.totalFiles}`);
   lines.push("");
   if (status.projects.length === 0) {
     lines.push('  No projects indexed yet. Run souvenir_index with action="build".');
   } else {
     for (const p of status.projects) {
-      const index = loadSessionIndex(p.projectDir);
-      const totalSessions = index ? index.entries.filter((e) => !e.isSidechain).length : "?";
+      const sessions = getSessions(p.projectDir);
+      const partial2 = sessions.filter((s) => s.availability === "partial").length;
       lines.push(`  ${p.projectDir}:`);
-      lines.push(`    Chunks: ${p.chunkCount} | Sessions available: ${totalSessions}`);
+      lines.push(`    Chunks: ${p.chunkCount} | Sessions: ${sessions.length}${partial2 ? ` (${partial2} partial: excerpts only)` : ""}`);
       if (p.lastIndexed) lines.push(`    Last indexed: ${p.lastIndexed}`);
       lines.push("");
     }
@@ -38205,7 +38689,7 @@ async function runBuild(config2, params, ctx, confirm2) {
   if (isRebuild) {
     const target = params.project === "all" ? `all ${projectDirs.length} projects` : projectDirs[0];
     if (!confirm2(
-      `souvenir: drop and re-index the search index of ${target}? Re-embedding can take several minutes. If the embedding model changed since the index was built, the index of every project is reset.`
+      `souvenir: re-create the search index of ${target} from the archive? Re-embedding can take a long time (minutes to hours for large histories). The archived conversations are not touched, nor the excerpts of partial sessions. If the embedding model changed since the index was built, the vectors of every project are reset.`
     )) {
       return DECLINED;
     }
@@ -38218,6 +38702,7 @@ async function runBuild(config2, params, ctx, confirm2) {
     });
     const lines = [
       `Indexing ${isRebuild ? "(rebuild) " : ""}complete!`,
+      `  Archived first: ${result.archive.linesAdded} new lines in ${result.archive.filesUpdated} transcripts, ${result.archive.attachmentsUpdated} saved files`,
       `  Chunks processed: ${result.totalChunks}`,
       `  Chunks embedded: ${result.totalEmbedded}`,
       `  Files processed: ${result.filesProcessed}`,
@@ -38225,10 +38710,16 @@ async function runBuild(config2, params, ctx, confirm2) {
     ];
     if (result.resetAll) {
       lines.push("");
-      lines.push(`  The embedding model changed, so the whole index was reset and rebuilt with ${describeIdentity(provider.identity)}.`);
+      lines.push(`  The embedding model changed, so the vectors of every project were reset and rebuilt with ${describeIdentity(provider.identity)}.`);
+      lines.push("  The archive and the excerpts of partial sessions were kept; those excerpts are embedded again with each project.");
       if (params.project !== "all") {
         lines.push('  Other projects are re-indexed on their next search, or now with project="all".');
       }
+    }
+    if (result.archive.errors.length > 0) {
+      lines.push("");
+      lines.push(`  Archiving errors (${result.archive.errors.length}):`);
+      for (const err of result.archive.errors) lines.push(`    - ${err}`);
     }
     if (result.errors.length > 0) {
       lines.push("");
@@ -38243,7 +38734,7 @@ async function runBuild(config2, params, ctx, confirm2) {
   }
 }
 function databaseSize(dbPath) {
-  const size = (path) => existsSync7(path) ? statSync4(path).size : 0;
+  const size = (path) => existsSync7(path) ? statSync3(path).size : 0;
   return size(dbPath) + size(`${dbPath}-wal`);
 }
 function formatSize2(bytes) {
@@ -38263,17 +38754,17 @@ function runVacuum() {
 }
 
 // src/tools/docs.ts
-import { existsSync as existsSync8, statSync as statSync6, readFileSync as readFileSync4, writeFileSync } from "fs";
-import { resolve as resolve2, relative as relative2 } from "path";
+import { existsSync as existsSync8, statSync as statSync5, readFileSync as readFileSync5, writeFileSync } from "fs";
+import { resolve as resolve2, relative as relative4 } from "path";
 import { createHash as createHash2 } from "crypto";
 
 // src/docs/indexer.ts
-import { statSync as statSync5, readdirSync as readdirSync2, readFileSync as readFileSync3 } from "fs";
-import { join as join5, relative, resolve } from "path";
+import { statSync as statSync4, readdirSync as readdirSync2, readFileSync as readFileSync4 } from "fs";
+import { join as join5, relative as relative3, resolve } from "path";
 import { createHash } from "crypto";
 
 // src/docs/chunker.ts
-import { readFileSync as readFileSync2 } from "fs";
+import { readFileSync as readFileSync3 } from "fs";
 import { extname } from "path";
 var CATEGORY_MAP = {
   // doc
@@ -38333,13 +38824,13 @@ function detectCategory(filePath) {
 function isSupportedExtension(filePath) {
   return detectCategory(filePath) !== null;
 }
-var MAX_EMBED_CHARS2 = 1600;
-var MAX_CONTENT_CHARS2 = 2e3;
+var MAX_EMBED_CHARS = 1600;
+var MAX_CONTENT_CHARS = 2e3;
 var MAX_CHUNK_LINES = 80;
 var MIN_CHUNK_LINES = 5;
-function truncateForEmbed2(text, maxChars) {
-  if (text.length <= maxChars) return text;
-  const truncated = text.slice(0, maxChars);
+function truncateForEmbed(text2, maxChars) {
+  if (text2.length <= maxChars) return text2;
+  const truncated = text2.slice(0, maxChars);
   const lastSpace = truncated.lastIndexOf(" ");
   return lastSpace > maxChars * 0.7 ? truncated.slice(0, lastSpace) : truncated;
 }
@@ -38388,9 +38879,9 @@ function chunkMarkdown(lines, relativePath) {
       chunks.push({
         file_path: relativePath,
         category: "doc",
-        content_text: truncateForEmbed2(content, MAX_CONTENT_CHARS2),
-        embed_text: truncateForEmbed2(`[${relativePath}]
-${content}`, MAX_EMBED_CHARS2),
+        content_text: truncateForEmbed(content, MAX_CONTENT_CHARS),
+        embed_text: truncateForEmbed(`[${relativePath}]
+${content}`, MAX_EMBED_CHARS),
         start_line: 1,
         end_line: lines.length,
         section_path: null
@@ -38404,9 +38895,9 @@ ${content}`, MAX_EMBED_CHARS2),
       chunks.push({
         file_path: relativePath,
         category: "doc",
-        content_text: truncateForEmbed2(preContent, MAX_CONTENT_CHARS2),
-        embed_text: truncateForEmbed2(`[${relativePath}]
-${preContent}`, MAX_EMBED_CHARS2),
+        content_text: truncateForEmbed(preContent, MAX_CONTENT_CHARS),
+        embed_text: truncateForEmbed(`[${relativePath}]
+${preContent}`, MAX_EMBED_CHARS),
         start_line: 1,
         end_line: headers[0].lineIndex,
         section_path: null
@@ -38414,32 +38905,32 @@ ${preContent}`, MAX_EMBED_CHARS2),
     }
   }
   for (let hi = 0; hi < headers.length; hi++) {
-    const header = headers[hi];
-    const startLine = header.lineIndex;
+    const header2 = headers[hi];
+    const startLine = header2.lineIndex;
     const endLine = hi + 1 < headers.length ? headers[hi + 1].lineIndex : lines.length;
     const sectionLines = lines.slice(startLine, endLine);
     const sectionContent = sectionLines.join("\n");
     const sectionPath = buildSectionPath(headers, hi);
     sections.push({
       file_path: relativePath,
-      heading: header.text,
-      level: header.level,
+      heading: header2.text,
+      level: header2.level,
       start_line: startLine + 1,
       // 1-based for user display
       end_line: endLine < lines.length ? endLine : null,
       section_path: sectionPath
     });
     if (!sectionContent.trim()) continue;
-    if (sectionContent.length > MAX_CONTENT_CHARS2) {
+    if (sectionContent.length > MAX_CONTENT_CHARS) {
       const subChunks = splitAtParagraphs(sectionLines, startLine, relativePath, "doc", sectionPath);
       chunks.push(...subChunks);
     } else {
       chunks.push({
         file_path: relativePath,
         category: "doc",
-        content_text: truncateForEmbed2(sectionContent, MAX_CONTENT_CHARS2),
-        embed_text: truncateForEmbed2(`[${sectionPath}]
-${sectionContent}`, MAX_EMBED_CHARS2),
+        content_text: truncateForEmbed(sectionContent, MAX_CONTENT_CHARS),
+        embed_text: truncateForEmbed(`[${sectionPath}]
+${sectionContent}`, MAX_EMBED_CHARS),
         start_line: startLine + 1,
         end_line: endLine,
         section_path: sectionPath
@@ -38456,9 +38947,9 @@ function chunkCode(lines, relativePath) {
       chunks.push({
         file_path: relativePath,
         category: "code",
-        content_text: truncateForEmbed2(content, MAX_CONTENT_CHARS2),
-        embed_text: truncateForEmbed2(`[${relativePath}]
-${content}`, MAX_EMBED_CHARS2),
+        content_text: truncateForEmbed(content, MAX_CONTENT_CHARS),
+        embed_text: truncateForEmbed(`[${relativePath}]
+${content}`, MAX_EMBED_CHARS),
         start_line: 1,
         end_line: lines.length,
         section_path: null
@@ -38492,9 +38983,9 @@ ${content}`, MAX_EMBED_CHARS2),
       chunks.push({
         file_path: relativePath,
         category: "code",
-        content_text: truncateForEmbed2(content, MAX_CONTENT_CHARS2),
-        embed_text: truncateForEmbed2(`[${relativePath}:${chunkStart + 1}-${chunkEnd}]
-${content}`, MAX_EMBED_CHARS2),
+        content_text: truncateForEmbed(content, MAX_CONTENT_CHARS),
+        embed_text: truncateForEmbed(`[${relativePath}:${chunkStart + 1}-${chunkEnd}]
+${content}`, MAX_EMBED_CHARS),
         start_line: chunkStart + 1,
         end_line: chunkEnd,
         section_path: null
@@ -38508,13 +38999,13 @@ function chunkConfig(lines, relativePath) {
   const content = lines.join("\n");
   const chunks = [];
   if (!content.trim()) return { chunks, sections: [] };
-  if (content.length <= MAX_CONTENT_CHARS2) {
+  if (content.length <= MAX_CONTENT_CHARS) {
     chunks.push({
       file_path: relativePath,
       category: "config",
-      content_text: truncateForEmbed2(content, MAX_CONTENT_CHARS2),
-      embed_text: truncateForEmbed2(`[config: ${relativePath}]
-${content}`, MAX_EMBED_CHARS2),
+      content_text: truncateForEmbed(content, MAX_CONTENT_CHARS),
+      embed_text: truncateForEmbed(`[config: ${relativePath}]
+${content}`, MAX_EMBED_CHARS),
       start_line: 1,
       end_line: lines.length,
       section_path: null
@@ -38535,17 +39026,17 @@ function splitAtParagraphs(lines, baseLineIndex, relativePath, category, section
   for (let i = 0; i < lines.length; i++) {
     currentBlock.push(lines[i]);
     const blockContent = currentBlock.join("\n");
-    if (blockContent.length >= MAX_CONTENT_CHARS2 * 0.8 && lines[i].trim() === "") {
+    if (blockContent.length >= MAX_CONTENT_CHARS * 0.8 && lines[i].trim() === "") {
       if (blockContent.trim()) {
         chunks.push({
           file_path: relativePath,
           category,
-          content_text: truncateForEmbed2(blockContent, MAX_CONTENT_CHARS2),
-          embed_text: truncateForEmbed2(
+          content_text: truncateForEmbed(blockContent, MAX_CONTENT_CHARS),
+          embed_text: truncateForEmbed(
             sectionPath ? `[${sectionPath}]
 ${blockContent}` : `[${relativePath}]
 ${blockContent}`,
-            MAX_EMBED_CHARS2
+            MAX_EMBED_CHARS
           ),
           start_line: baseLineIndex + blockStart + 1,
           end_line: baseLineIndex + i + 1,
@@ -38562,12 +39053,12 @@ ${blockContent}`,
       chunks.push({
         file_path: relativePath,
         category,
-        content_text: truncateForEmbed2(remaining, MAX_CONTENT_CHARS2),
-        embed_text: truncateForEmbed2(
+        content_text: truncateForEmbed(remaining, MAX_CONTENT_CHARS),
+        embed_text: truncateForEmbed(
           sectionPath ? `[${sectionPath}]
 ${remaining}` : `[${relativePath}]
 ${remaining}`,
-          MAX_EMBED_CHARS2
+          MAX_EMBED_CHARS
         ),
         start_line: baseLineIndex + blockStart + 1,
         end_line: baseLineIndex + lines.length,
@@ -38582,7 +39073,7 @@ function chunkFile(filePath, relativePath, category) {
   if (!resolvedCategory) {
     return { chunks: [], sections: [] };
   }
-  const content = readFileSync2(filePath, "utf-8");
+  const content = readFileSync3(filePath, "utf-8");
   const lines = content.split("\n");
   switch (resolvedCategory) {
     case "doc":
@@ -38677,14 +39168,14 @@ function resolveSourceFiles(projectRoot) {
       if (!isSupportedExtension(absoluteSource)) continue;
       const cat = source.category || detectCategory(absoluteSource);
       if (!cat) continue;
-      const rel = relative(projectRoot, absoluteSource).replace(/\\/g, "/");
+      const rel = relative3(projectRoot, absoluteSource).replace(/\\/g, "/");
       fileSet.set(rel, { absolutePath: absoluteSource, relativePath: rel, category: cat });
     } else {
       const files = listFilesRecursive(absoluteSource, source.pattern, source.recursive !== 0);
       for (const filePath of files) {
         const cat = source.category || detectCategory(filePath);
         if (!cat) continue;
-        const rel = relative(projectRoot, filePath).replace(/\\/g, "/");
+        const rel = relative3(projectRoot, filePath).replace(/\\/g, "/");
         if (!fileSet.has(rel)) {
           fileSet.set(rel, { absolutePath: filePath, relativePath: rel, category: cat });
         }
@@ -38722,7 +39213,7 @@ async function runBuildDocsIndex(projectRoot, provider, options = {}) {
       detail: relativePath
     });
     try {
-      const stat = statSync5(absolutePath);
+      const stat = statSync4(absolutePath);
       if (stat.size > MAX_FILE_SIZE) {
         skipped++;
         continue;
@@ -38736,7 +39227,7 @@ async function runBuildDocsIndex(projectRoot, provider, options = {}) {
         }
       }
       try {
-        const content = readFileSync3(absolutePath, "utf-8");
+        const content = readFileSync4(absolutePath, "utf-8");
         const contentHash = createHash("sha256").update(content).digest("hex");
         insertSnapshot(projectRoot, relativePath, content, contentHash, stat.size);
       } catch (snapErr) {
@@ -38960,11 +39451,11 @@ async function handleAdd(projectRoot, params) {
     return 'Error: "path" parameter is required for "add" action. Provide a file or directory path (relative to project root).';
   }
   const absolutePath = resolve2(projectRoot, params.path);
-  const relativePath = relative2(projectRoot, absolutePath).replace(/\\/g, "/");
+  const relativePath = relative4(projectRoot, absolutePath).replace(/\\/g, "/");
   if (!existsSync8(absolutePath)) {
     return `Error: Path "${params.path}" does not exist (resolved to ${absolutePath}).`;
   }
-  const stat = statSync6(absolutePath);
+  const stat = statSync5(absolutePath);
   const type = stat.isDirectory() ? "directory" : "file";
   if (type === "file" && !params.category) {
     const detected = detectCategory(absolutePath);
@@ -39029,7 +39520,7 @@ async function handleRemove(projectRoot, params) {
     return `Removed source ID ${params.source_id}. Existing indexed chunks remain until you run "build" with rebuild or "clear".`;
   }
   const sources = getDocSources(projectRoot);
-  const relativePath = relative2(projectRoot, resolve2(projectRoot, params.path)).replace(/\\/g, "/");
+  const relativePath = relative4(projectRoot, resolve2(projectRoot, params.path)).replace(/\\/g, "/");
   const match = sources.find((s) => s.path === relativePath);
   if (!match) {
     return `Error: No source found matching path "${params.path}". Use "list" to see all sources.`;
@@ -39103,7 +39594,7 @@ async function handleStatus(projectRoot) {
   let pendingCount = 0;
   for (const f of files) {
     try {
-      const stat = statSync6(f.absolutePath);
+      const stat = statSync5(f.absolutePath);
       const indexState = getDocIndexState(projectRoot, f.relativePath);
       if (!indexState || indexState.file_size !== stat.size || indexState.file_mtime !== stat.mtime.toISOString()) {
         pendingCount++;
@@ -39175,7 +39666,7 @@ async function handleSections(projectRoot, params) {
   if (!docsDbExists(projectRoot)) {
     return 'No docs database found. Index the file first with souvenir_docs action="add" then action="build".';
   }
-  const relativePath = relative2(projectRoot, resolve2(projectRoot, params.path)).replace(/\\/g, "/");
+  const relativePath = relative4(projectRoot, resolve2(projectRoot, params.path)).replace(/\\/g, "/");
   const sections = getDocSections(projectRoot, relativePath);
   if (sections.length === 0) {
     return `No sections found for "${relativePath}". The file may not be indexed or may not contain markdown headers. Run souvenir_docs action="build" if needed.`;
@@ -39196,7 +39687,7 @@ async function handleHistory(projectRoot, params) {
     return "No docs database found. Index files first to start capturing versions.";
   }
   if (params.path) {
-    const relativePath = relative2(projectRoot, resolve2(projectRoot, params.path)).replace(/\\/g, "/");
+    const relativePath = relative4(projectRoot, resolve2(projectRoot, params.path)).replace(/\\/g, "/");
     const snapshots = getSnapshotsForFile(projectRoot, relativePath);
     if (snapshots.length === 0) {
       return `No version history for "${relativePath}". The file must be indexed and modified at least once to have snapshots.`;
@@ -39234,7 +39725,7 @@ async function handleFileDiff(projectRoot, params) {
   if (!docsDbExists(projectRoot)) {
     return "No docs database found. Index files first.";
   }
-  const relativePath = relative2(projectRoot, resolve2(projectRoot, params.path)).replace(/\\/g, "/");
+  const relativePath = relative4(projectRoot, resolve2(projectRoot, params.path)).replace(/\\/g, "/");
   const absolutePath = resolve2(projectRoot, params.path);
   let snapshotContent;
   let snapshotLabel;
@@ -39265,7 +39756,7 @@ async function handleFileDiff(projectRoot, params) {
   }
   let currentContent;
   try {
-    currentContent = readFileSync4(absolutePath, "utf-8");
+    currentContent = readFileSync5(absolutePath, "utf-8");
   } catch (err) {
     return `Error reading current file: ${err instanceof Error ? err.message : String(err)}`;
   }
@@ -39285,7 +39776,7 @@ async function handleRestore(projectRoot, params, confirm2) {
   if (!docsDbExists(projectRoot)) {
     return "No docs database found.";
   }
-  const relativePath = relative2(projectRoot, resolve2(projectRoot, params.path)).replace(/\\/g, "/");
+  const relativePath = relative4(projectRoot, resolve2(projectRoot, params.path)).replace(/\\/g, "/");
   const absolutePath = resolve2(projectRoot, params.path);
   const snapshot = getSnapshotContent(projectRoot, params.snapshot_id);
   if (!snapshot) {
@@ -39302,9 +39793,9 @@ async function handleRestore(projectRoot, params, confirm2) {
   let backupSnapshotCreated = null;
   if (existsSync8(absolutePath)) {
     try {
-      const currentContent = readFileSync4(absolutePath, "utf-8");
+      const currentContent = readFileSync5(absolutePath, "utf-8");
       const currentHash = createHash2("sha256").update(currentContent).digest("hex");
-      const currentStat = statSync6(absolutePath);
+      const currentStat = statSync5(absolutePath);
       backupSnapshotCreated = insertSnapshot(
         projectRoot,
         relativePath,
@@ -39350,10 +39841,10 @@ async function handleVacuum(projectRoot) {
 }
 
 // src/tools/tree.ts
-import { readdirSync as readdirSync3, statSync as statSync7 } from "fs";
+import { readdirSync as readdirSync3, statSync as statSync6 } from "fs";
 import { join as join6, resolve as resolve3, extname as extname2 } from "path";
-import { createReadStream as createReadStream2 } from "fs";
-import { createInterface as createInterface2 } from "readline";
+import { createReadStream } from "fs";
+import { createInterface } from "readline";
 var SKIP_DIRS2 = /* @__PURE__ */ new Set([
   "node_modules",
   ".git",
@@ -39471,8 +39962,8 @@ function isBinaryExtension(ext) {
 function countLines(filePath) {
   return new Promise((resolve4) => {
     let count = 0;
-    const rl = createInterface2({
-      input: createReadStream2(filePath),
+    const rl = createInterface({
+      input: createReadStream(filePath),
       crlfDelay: Infinity
     });
     rl.on("line", () => {
@@ -39569,7 +40060,7 @@ function walkTree(dir, currentDepth, opts, parentPrefixes) {
       entry.ext = extname2(item.name).toLowerCase() || "(no ext)";
       if (opts.showModified) {
         try {
-          entry.mtimeMs = statSync7(fullPath).mtimeMs;
+          entry.mtimeMs = statSync6(fullPath).mtimeMs;
         } catch {
         }
       }
@@ -39595,9 +40086,9 @@ async function populateLineCounts(entries) {
   const BATCH = 50;
   for (let i = 0; i < fileEntries.length; i += BATCH) {
     const batch = fileEntries.slice(i, i + BATCH);
-    const counts2 = await Promise.all(batch.map((e) => countLines(e.fullPath)));
+    const counts = await Promise.all(batch.map((e) => countLines(e.fullPath)));
     for (let j = 0; j < batch.length; j++) {
-      batch[j].lineCount = counts2[j];
+      batch[j].lineCount = counts[j];
     }
   }
 }
@@ -39768,26 +40259,35 @@ async function waitForIndexing(timeoutMs = 5e3) {
   } catch {
   }
 }
+async function archiveAll(signal) {
+  try {
+    const report = await archiveProjects(listProjectDirsOnDisk(), { signal });
+    for (const err of report.errors) logger.error(`Archive: ${err}`);
+  } catch (err) {
+    if (!signal.aborted) logger.error("Archiving failed:", err);
+  }
+}
 function scheduleBackgroundIndex() {
   const now = Date.now();
   if (_indexing || now - _lastIndexTime < MIN_INTERVAL_MS || _abortController.signal.aborted) {
     return;
   }
-  let config2;
-  try {
-    config2 = getConfig();
-  } catch (err) {
-    logger.warn("Background index skipped:", err);
-    return;
-  }
-  const projectDir = config2.currentProject;
-  if (!projectDir) return;
   _indexing = true;
   _lastIndexTime = now;
   const signal = _abortController.signal;
   _indexingPromise = (async () => {
     try {
+      await archiveAll(signal);
       if (signal.aborted) return;
+      let config2;
+      try {
+        config2 = getConfig();
+      } catch (err) {
+        logger.warn("Background index skipped:", err);
+        return;
+      }
+      const projectDir = config2.currentProject;
+      if (!projectDir) return;
       const provider = getOrCreateProvider(config2);
       if (!provider.isReady()) {
         await provider.initialize();
@@ -39841,7 +40341,8 @@ function sessionDescription(session) {
   if (session.summary && first && first !== session.summary) {
     parts.push(`First prompt: "${first.length > 100 ? first.slice(0, 100) + "\u2026" : first}"`);
   }
-  parts.push(`${formatEntryCount(session.messageCount)} entries`);
+  parts.push(formatEntryCount(session));
+  if (session.availability !== "complete") parts.push(session.availability.toUpperCase());
   if (session.gitBranch) parts.push(`branch ${session.gitBranch}`);
   parts.push(`session_id ${session.sessionId}`);
   return parts.join(" \xB7 ");
@@ -39850,9 +40351,10 @@ function registerSessionResources(server2) {
   server2.registerResource(
     "session",
     new ResourceTemplate("souvenir://session/{sessionId}", {
-      list: () => {
+      list: async () => {
         const project = getConfig().currentProject;
         if (!project) return { resources: [] };
+        await ensureArchived([project]);
         const sessions = getSessions(project, { sort: "newest" }).slice(0, LISTED_SESSIONS);
         return {
           // title and description per session, or the SDK repeats the template's on every entry
@@ -39873,9 +40375,9 @@ function registerSessionResources(server2) {
     },
     async (uri, { sessionId }) => {
       const id = Array.isArray(sessionId) ? sessionId[0] : sessionId;
-      const text = id ? await readSessionDigest(id) : null;
-      if (text === null) throw new ResourceNotFoundError(uri.href, `No session "${id}" in any project`);
-      return { contents: [{ uri: uri.href, mimeType: "text/plain", text }] };
+      const text2 = id ? await readSessionDigest(id) : null;
+      if (text2 === null) throw new ResourceNotFoundError(uri.href, `No session "${id}" in any project`);
+      return { contents: [{ uri: uri.href, mimeType: "text/plain", text: text2 }] };
     }
   );
 }
@@ -39892,8 +40394,8 @@ Read more of the session with souvenir_read when the digest is not enough to ans
 function invalidArgument(message) {
   return new ProtocolError(ProtocolErrorCode.InvalidParams, message);
 }
-function userText(text) {
-  return { role: "user", content: { type: "text", text } };
+function userText(text2) {
+  return { role: "user", content: { type: "text", text: text2 } };
 }
 function registerPrompts(server2) {
   server2.registerPrompt(
@@ -39918,6 +40420,7 @@ function registerPrompts(server2) {
       }
       const project = getConfig().currentProject;
       if (!project) throw invalidArgument('This directory has no Claude Code history: give a session id (souvenir_sessions project="all" lists them).');
+      await ensureArchived([project]);
       const recent = getSessions(project, { sort: "newest" }).slice(0, RECAP_CANDIDATES);
       if (recent.length === 0) throw invalidArgument("No past session in this project.");
       const list = recent.map((s, i) => `${i + 1}. ${sessionLabel(s)} \u2014 session_id: ${s.sessionId}`).join("\n");
@@ -39966,7 +40469,7 @@ ${matches}`
 }
 
 // src/index.ts
-var INSTRUCTIONS = `souvenir searches this user's past Claude Code conversations and the project's indexed files.
+var INSTRUCTIONS = `souvenir searches this user's past Claude Code conversations and the project's indexed files. It archives every session in full, so sessions stay searchable and readable after Claude Code deletes its own transcripts (after 30 days by default).
 
 - When the user refers to earlier work ("like we did for X", "as decided last time", "the previous version"), search with souvenir_search before asking them or looking elsewhere, then souvenir_read around_uuid for the full context.
 - After a context compaction, when the summary lacks a detail (a decision, an error message, a value), find it in the current session (souvenir_search with session_id "current") instead of asking the user to repeat it.
@@ -39975,14 +40478,14 @@ var INSTRUCTIONS = `souvenir searches this user's past Claude Code conversations
 - For work done in another project, search with project "all" (souvenir_projects lists them).
 - To learn why some code or a commit changed, search the commit hash or the file name in the conversations: the session that made the change holds the reason.
 - Past sessions are also resources (souvenir://session/<session_id>) that the user can cite with @; the @ list holds the 50 most recent of the project, souvenir_sessions lists them all, page by page.`;
-var server = new McpServer({ name: "souvenir", version: "0.5.1" }, { instructions: INSTRUCTIONS });
+var server = new McpServer({ name: "souvenir", version: "0.6.0" }, { instructions: INSTRUCTIONS });
 var READ_ONLY = { readOnlyHint: true };
 var LARGE_RESULT_META = { "anthropic/maxResultSizeChars": 1e5 };
 function toolHandler(name, handler) {
   return async (params, ctx) => {
     try {
-      const text = await handler(params, ctx);
-      return { content: [{ type: "text", text }] };
+      const result = await handler(params, ctx);
+      return { content: typeof result === "string" ? [{ type: "text", text: result }] : result };
     } catch (err) {
       if (err instanceof ConfirmationNeeded) return err.toInputRequired();
       const msg = errorMessage(err);
@@ -40034,7 +40537,7 @@ Workflow: souvenir_search \u2192 souvenir_read around_uuid for full context.`,
 server.registerTool(
   "souvenir_read",
   {
-    description: `Read a Claude Code session transcript. Returns clean, formatted messages \u2014 internal noise (file snapshots, thinking blocks) is automatically filtered out, and tool calls are condensed into readable summaries.
+    description: `Read a Claude Code session from souvenir's archive (every line kept, even after Claude Code deleted the transcript). Returns clean, formatted messages \u2014 internal noise (file snapshots, thinking blocks) is automatically filtered out, and tool calls are condensed into readable summaries. Sessions Claude Code deleted before souvenir archived whole transcripts (souvenir 0.6.0) are PARTIAL: only their search excerpts remain, shown as such.
 
 IMPORTANT: session_id must be "current" (this session) or come from souvenir_search or souvenir_sessions. Do NOT guess session IDs.
 
@@ -40044,12 +40547,14 @@ Reading modes:
 - around_uuid=<uuid>: centers on a search result. Use before_turns/after_turns to control how much context to include (e.g. before_turns=0, after_turns=5 to read only what follows).
 - detail_level="files": extracts all unique file paths accessed during the session, grouped by action (modified/read/searched). One-call answer to "what files did this session touch?"
 - detail_level="tools": tool usage summary with call counts and error indicators.
+- saved_file=<path>: a file Claude Code saved with a session (a large tool output, an image) that a tool result names, read from the archive (the original may be deleted). No session_id needed.
 
 Pagination: footer shows page position and navigation hints. Use max_entries=1 with around_uuid to read a single full entry without truncation.`,
     annotations: READ_ONLY,
     _meta: LARGE_RESULT_META,
     inputSchema: external_exports.object({
-      session_id: external_exports.string().describe('Session UUID to read from. Use "current" for the most recent session.'),
+      session_id: external_exports.string().optional().describe('Session UUID to read from. Use "current" for the most recent session. Required unless saved_file is given.'),
+      saved_file: external_exports.string().optional().describe("Path of a file Claude Code saved with a session (tool-results/\u2026), as a tool result wrote it. Returns its content (images as images)."),
       project: external_exports.string().optional().describe("Project directory name. Default: current project (also searches other projects if not found)."),
       around_uuid: external_exports.string().optional().describe("Center output around this entry UUID (from a search result). Use max_entries=1 to read the full entry without truncation."),
       from_line: external_exports.number().int().min(1).optional().describe("Start reading from this JSONL line number (1-based). When omitted, reads from the END of the session (most recent entries). Use values from pagination hints (Earlier/Later) to navigate."),
@@ -40066,7 +40571,7 @@ Pagination: footer shows page position and navigation hints. Use max_entries=1 w
 server.registerTool(
   "souvenir_sessions",
   {
-    description: `List all conversation sessions for a project with their metadata (first prompt, summary, dates, entry count as souvenir_read pages them). Use this to find which session to search or read. Results are sorted by most recent first by default. Includes orphan sessions (transcript files not in the index).
+    description: `List all conversation sessions for a project with their metadata (title, first prompt, dates, entry count as souvenir_read pages them). Use this to find which session to search or read. Results are sorted by most recent first by default. Lists every archived session, including those whose transcript Claude Code deleted; older ones marked PARTIAL (only search excerpts were kept) or LOST (nothing kept).
 
 Typical workflow: souvenir_projects \u2192 souvenir_sessions (pick a session) \u2192 souvenir_read or souvenir_search with session_id.
 
@@ -40083,36 +40588,36 @@ Pagination: the footer shows "Showing A-B of N sessions" and the offset of the n
       include_sidechains: external_exports.boolean().optional().describe("Include sidechain/subagent sessions. Default: false.")
     })
   },
-  toolHandler("souvenir_sessions", (params, _ctx) => handleSouvenirSessions(params))
+  toolHandler("souvenir_sessions", (params, ctx) => handleSouvenirSessions(params, ctx))
 );
 server.registerTool(
   "souvenir_projects",
   {
-    description: `List all Claude Code projects that have conversation history. Shows project path, directory name (used as identifier in other tools), number of sessions, and date range. The current project is marked with [current]. Projects whose original path no longer exists are marked [orphan].
+    description: `List all Claude Code projects that have conversation history, including those whose transcripts Claude Code deleted (read from souvenir's archive). Shows project path, directory name (used as identifier in other tools), number of sessions, and date range. The current project is marked with [current]; projects whose folder no longer exists with [folder deleted].
 
 Actions:
-- "list" (default): Show all projects with status. Also detects orphaned index data (projects in the semantic index but no longer on disk).
-- "clean": Remove index data for orphaned projects. Frees space in the semantic search database. Transcript files in ~/.claude/projects/ are preserved, but for a project whose transcripts Claude Code already deleted, the index is the last copy of its conversations. Asks the user to confirm when the client supports it.
+- "list" (default): Show all projects with status.
+- "clean": Delete everything souvenir kept of projects whose folder no longer exists: their archived conversations, not only the search index. When Claude Code already deleted their transcripts, the archive is the only copy left. Only on the user's explicit request; asks the user to confirm when the client supports it.
 
 Typical workflow: souvenir_projects \u2192 souvenir_sessions project="<dir_name>" \u2192 souvenir_read or souvenir_search.`,
     inputSchema: external_exports.object({
-      action: external_exports.enum(["list", "clean"]).optional().describe('Default: "list". Use "clean" to remove orphaned project data from the semantic index.'),
+      action: external_exports.enum(["list", "clean"]).optional().describe('Default: "list". "clean" deletes the archived conversations of projects whose folder no longer exists (user request only).'),
       search: external_exports.string().optional().describe("Filter projects whose path contains this text.")
     })
   },
-  toolHandler("souvenir_projects", (params, ctx) => handleSouvenirProjects(params, confirm(ctx)))
+  toolHandler("souvenir_projects", (params, ctx) => handleSouvenirProjects(params, confirm(ctx), ctx))
 );
 server.registerTool(
   "souvenir_index",
   {
     description: `Manage the semantic search index that powers hybrid and semantic search modes. Without this index, only text mode works.
 
-Indexing runs automatically in the background after each interaction. Use this tool to check status, force immediate indexing, or rebuild from scratch.
+The index is built from souvenir's archive of every transcript, which is kept up to date automatically (archiving needs no embedding server). Indexing runs automatically in the background after each interaction. Use this tool to check status, force immediate indexing, or rebuild.
 
-- "status": show what's indexed and which embedding model built it.
+- "status": show the archive (sessions, lines, size, transcripts Claude Code deleted) and what's indexed with which embedding model.
 - "check": verify the configuration end to end (settings, embedding server, a test embedding, index compatibility). Use it when semantic search fails or after changing settings.
 - "build": index new/updated sessions now (incremental).
-- "rebuild": drop and re-index from scratch. After an embedding model change it resets the whole index (use project="all" to re-index every project now). First-time indexing may take several minutes. Asks the user to confirm when the client supports it.
+- "rebuild": re-create the index from the archive (archived conversations and the excerpts of partial sessions are never deleted). After an embedding model change it resets the vectors of every project (use project="all" to re-index every project now). Can take a long time on a large history. Asks the user to confirm when the client supports it.
 - "vacuum": compact the database file to reclaim disk space from deleted data.`,
     inputSchema: external_exports.object({
       action: external_exports.enum(["status", "check", "build", "rebuild", "vacuum"]).describe('"status": show indexing state. "check": verify configuration and embedding server. "build": incrementally index new content. "rebuild": drop and re-index everything. "vacuum": compact database file.'),
@@ -40187,6 +40692,7 @@ async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
   logger.info("souvenir MCP server running on stdio");
+  scheduleBackgroundIndex();
 }
 var _shuttingDown = false;
 async function gracefulShutdown(signal) {

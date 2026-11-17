@@ -1,7 +1,8 @@
 import { existsSync, statSync } from 'fs';
 import { getConfig } from '../config.js';
 import { resolveProjectDir, getDbPath } from '../utils/paths.js';
-import { listProjectDirs, loadSessionIndex } from '../transcript/discovery.js';
+import { getSessions, listProjectDirs } from '../archive/catalog.js';
+import { getArchiveStats } from '../archive/store.js';
 import { buildIndex } from '../db/indexer.js';
 import { getDb, getIndexStatus, getIndexIdentity, fullVacuum } from '../db/store.js';
 import { docsDbExists, getDocsIndexIdentity, getDocsChunkCount } from '../docs/store.js';
@@ -45,23 +46,31 @@ export async function handleSouvenirIndex(params: {
 function getStatusReport(projectFilter?: string): string {
   // Opening the DB reads the status without loading any embedding provider
   getDb();
+  const projectDir = projectFilter ? resolveProjectDir(projectFilter) : undefined;
   const identity = getIndexIdentity();
-  const status = getIndexStatus(projectFilter ? resolveProjectDir(projectFilter) : undefined);
+  const status = getIndexStatus(projectDir);
+  const archive = getArchiveStats(projectDir);
 
-  const lines = ['Semantic Index Status:'];
+  const lines = ['Archive (every line of every transcript, kept after Claude Code deletes its files):'];
+  lines.push(`  Sessions: ${archive.sessions} (${archive.files} transcripts with subagents) | Lines: ${archive.lines} | ${formatSize(archive.storedBytes)} compressed`);
+  lines.push(`  Saved files (tool results, images …): ${archive.attachments} | ${formatSize(archive.attachmentBytes)} compressed`);
+  lines.push(`  Transcripts Claude Code deleted, read from the archive: ${archive.sourcesGone}`);
+  if (archive.errors > 0) lines.push(`  Transcripts that could not be archived further: ${archive.errors} (souvenir_sessions and souvenir_read report why)`);
+  lines.push('');
+  lines.push('Semantic Index Status:');
   lines.push(`  Built with: ${identity ? describeIdentity(identity) : 'not built yet'}`);
   lines.push(`  Total chunks: ${status.totalChunks}`);
-  lines.push(`  Files indexed: ${status.totalFiles}`);
+  lines.push(`  Transcripts indexed: ${status.totalFiles}`);
   lines.push('');
 
   if (status.projects.length === 0) {
     lines.push('  No projects indexed yet. Run souvenir_index with action="build".');
   } else {
     for (const p of status.projects) {
-      const index = loadSessionIndex(p.projectDir);
-      const totalSessions = index ? index.entries.filter((e) => !e.isSidechain).length : '?';
+      const sessions = getSessions(p.projectDir);
+      const partial = sessions.filter((s) => s.availability === 'partial').length;
       lines.push(`  ${p.projectDir}:`);
-      lines.push(`    Chunks: ${p.chunkCount} | Sessions available: ${totalSessions}`);
+      lines.push(`    Chunks: ${p.chunkCount} | Sessions: ${sessions.length}${partial ? ` (${partial} partial: excerpts only)` : ''}`);
       if (p.lastIndexed) lines.push(`    Last indexed: ${p.lastIndexed}`);
       lines.push('');
     }
@@ -158,8 +167,9 @@ async function runBuild(
   if (isRebuild) {
     const target = params.project === 'all' ? `all ${projectDirs.length} projects` : projectDirs[0];
     if (!confirm(
-      `souvenir: drop and re-index the search index of ${target}? Re-embedding can take several minutes. ` +
-      'If the embedding model changed since the index was built, the index of every project is reset.',
+      `souvenir: re-create the search index of ${target} from the archive? Re-embedding can take a long time (minutes to hours for large histories). ` +
+      'The archived conversations are not touched, nor the excerpts of partial sessions. ' +
+      'If the embedding model changed since the index was built, the vectors of every project are reset.',
     )) {
       return DECLINED;
     }
@@ -174,6 +184,7 @@ async function runBuild(
 
     const lines = [
       `Indexing ${isRebuild ? '(rebuild) ' : ''}complete!`,
+      `  Archived first: ${result.archive.linesAdded} new lines in ${result.archive.filesUpdated} transcripts, ${result.archive.attachmentsUpdated} saved files`,
       `  Chunks processed: ${result.totalChunks}`,
       `  Chunks embedded: ${result.totalEmbedded}`,
       `  Files processed: ${result.filesProcessed}`,
@@ -182,10 +193,17 @@ async function runBuild(
 
     if (result.resetAll) {
       lines.push('');
-      lines.push(`  The embedding model changed, so the whole index was reset and rebuilt with ${describeIdentity(provider.identity)}.`);
+      lines.push(`  The embedding model changed, so the vectors of every project were reset and rebuilt with ${describeIdentity(provider.identity)}.`);
+      lines.push('  The archive and the excerpts of partial sessions were kept; those excerpts are embedded again with each project.');
       if (params.project !== 'all') {
         lines.push('  Other projects are re-indexed on their next search, or now with project="all".');
       }
+    }
+
+    if (result.archive.errors.length > 0) {
+      lines.push('');
+      lines.push(`  Archiving errors (${result.archive.errors.length}):`);
+      for (const err of result.archive.errors) lines.push(`    - ${err}`);
     }
 
     if (result.errors.length > 0) {

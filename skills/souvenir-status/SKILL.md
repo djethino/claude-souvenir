@@ -7,10 +7,11 @@ user-invocable: true
 # /souvenir-status — Semantic search state
 
 1. Call `souvenir_index action="check"` (settings, server, test embedding, index compatibility).
-2. Call `souvenir_index action="status"` (chunks per project, last indexing).
+2. Call `souvenir_index action="status"` (archive, chunks per project, last indexing).
 
 Summarize for the user in their language, in a few lines:
 
+- Archive: sessions and size kept, how many transcripts Claude Code deleted that are read from the archive, and any transcript that could not be archived (a problem to report).
 - Embedding: provider, model, server URL, OK or failing (with the reason).
 - Transcript index: chunks, projects indexed, built with which model, compatible or not.
 - Docs index of this project, if any.

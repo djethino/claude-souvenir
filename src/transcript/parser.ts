@@ -1,6 +1,5 @@
-import { createReadStream } from 'fs';
-import { createInterface } from 'readline';
 import { logger } from '../utils/logger.js';
+import { archivedLines } from '../archive/store.js';
 import type { TranscriptEntry, UserEntry, AssistantEntry, ContentBlock, TextBlock, ToolUseBlock } from './types.js';
 
 export interface ParseOptions {
@@ -8,6 +7,8 @@ export interface ParseOptions {
   includeTypes?: string[];
   /** Skip lines before this line number (1-based) */
   fromLine?: number;
+  /** Stop after this line number (lines archived meanwhile are left for the next read) */
+  toLine?: number;
   /** Maximum entries to yield */
   maxEntries?: number;
   /** Raw string pre-filter: only parse lines containing this text */
@@ -23,76 +24,72 @@ export interface ParsedLine {
 }
 
 /** Lines never read: file-history-snapshot, the dominant type, never useful. */
-export const SKIPPED_LINE_MARKER = '"file-history-snapshot"';
+const SKIPPED_LINE_MARKER = '"file-history-snapshot"';
 
 /** Entry types read when the caller names none. */
 export const DEFAULT_ENTRY_TYPES = ['user', 'assistant', 'summary'];
 
 /**
- * Stream-parse a JSONL transcript file, yielding entries one at a time.
+ * Parse an archived transcript (see archive/store.ts), yielding entries one at a time.
  * Applies pre-filters on raw strings before JSON.parse for performance.
  */
 export async function* parseTranscript(
-  filePath: string,
+  fileKey: string,
   options: ParseOptions = {},
 ): AsyncGenerator<ParsedLine> {
   const {
     includeTypes = DEFAULT_ENTRY_TYPES,
     fromLine = 1,
+    toLine,
     maxEntries,
     containsText,
     caseInsensitive = true,
   } = options;
 
   const searchText = containsText && caseInsensitive ? containsText.toLowerCase() : containsText;
-
-  let lineNumber = 0;
   let yielded = 0;
 
-  const stream = createReadStream(filePath, { encoding: 'utf-8' });
-  const rl = createInterface({ input: stream, crlfDelay: Infinity });
+  for (const { lineNumber, text: line } of archivedLines(fileKey, fromLine)) {
+    if (toLine !== undefined && lineNumber > toLine) break;
+    if (maxEntries && yielded >= maxEntries) break;
 
-  try {
-    for await (const line of rl) {
-      lineNumber++;
+    // Skip empty lines
+    if (!line.trim()) continue;
 
-      // Skip lines before fromLine
-      if (lineNumber < fromLine) continue;
+    // Pre-filter 1: Skip file-history-snapshot (dominant type, never useful for search)
+    if (line.includes(SKIPPED_LINE_MARKER)) continue;
 
-      // Check max entries
-      if (maxEntries && yielded >= maxEntries) break;
-
-      // Skip empty lines
-      if (!line.trim()) continue;
-
-      // Pre-filter 1: Skip file-history-snapshot (dominant type, never useful for search)
-      if (line.includes(SKIPPED_LINE_MARKER)) continue;
-
-      // Pre-filter 2: If searching for text, skip lines that don't contain it
-      if (searchText) {
-        const haystack = caseInsensitive ? line.toLowerCase() : line;
-        if (!haystack.includes(searchText)) continue;
-      }
-
-      // Parse JSON
-      let entry: TranscriptEntry;
-      try {
-        entry = JSON.parse(line) as TranscriptEntry;
-      } catch {
-        logger.debug(`Skipping corrupt line ${lineNumber} in ${filePath}`);
-        continue;
-      }
-
-      // Type filter
-      if (!includeTypes.includes(entry.type)) continue;
-
-      yielded++;
-      yield { entry, lineNumber, rawLength: line.length };
+    // Pre-filter 2: If searching for text, skip lines that don't contain it
+    if (searchText) {
+      const haystack = caseInsensitive ? line.toLowerCase() : line;
+      if (!haystack.includes(searchText)) continue;
     }
-  } finally {
-    rl.close();
-    stream.destroy();
+
+    let entry: TranscriptEntry;
+    try {
+      entry = JSON.parse(line) as TranscriptEntry;
+    } catch {
+      logger.debug(`Skipping corrupt line ${lineNumber} in ${fileKey}`);
+      continue;
+    }
+
+    if (!includeTypes.includes(entry.type)) continue;
+
+    yielded++;
+    yield { entry, lineNumber, rawLength: line.length };
   }
+}
+
+/** Text of a tool result's content: a string, or text blocks (images and other blocks have none). */
+export function toolResultText(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content
+      .map((b: { type?: string; text?: unknown }) => (b?.type === 'text' && typeof b.text === 'string' ? b.text : ''))
+      .filter(Boolean)
+      .join('\n');
+  }
+  return '';
 }
 
 /**
@@ -108,8 +105,8 @@ export function extractText(entry: TranscriptEntry): string {
       // Array content (tool results etc.)
       return user.message.content
         .map((block) => {
-          if ('text' in block) return (block as TextBlock).text;
-          if ('content' in block) return block.content;
+          if (block.type === 'text') return (block as TextBlock).text;
+          if (block.type === 'tool_result') return toolResultText(block.content);
           return '';
         })
         .filter(Boolean)
@@ -139,19 +136,9 @@ export function extractText(entry: TranscriptEntry): string {
   }
 }
 
-/**
- * Count total lines in a JSONL file quickly (for progress).
- */
-export async function countLines(filePath: string): Promise<number> {
-  let count = 0;
-  const stream = createReadStream(filePath, { encoding: 'utf-8' });
-  const rl = createInterface({ input: stream, crlfDelay: Infinity });
-
-  for await (const _line of rl) {
-    count++;
-  }
-
-  rl.close();
-  stream.destroy();
-  return count;
+/** Whether a user entry is a tool result (Claude Code records them as user entries), not something the user wrote. */
+export function isToolResultEntry(entry: TranscriptEntry): boolean {
+  if (entry.type !== 'user') return false;
+  const content = (entry as UserEntry).message.content;
+  return Array.isArray(content) && content.length > 0 && content.every((b) => b.type === 'tool_result');
 }

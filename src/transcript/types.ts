@@ -23,7 +23,8 @@ export interface ToolUseBlock {
 
 export interface ToolResultBlock {
   type: 'tool_result';
-  content: string;
+  /** A string, or blocks (text, image …) for results that are not plain text */
+  content: string | Array<{ type: string; text?: string }>;
   tool_use_id: string;
   is_error?: boolean;
 }
@@ -100,7 +101,38 @@ export type TranscriptEntry =
   | ProgressEntry
   | FileHistorySnapshotEntry;
 
-// --- Session index ---
+// --- Sessions as souvenir knows them (archive/catalog.ts) ---
+
+/**
+ * What souvenir kept of a session:
+ * - complete: every line, in the archive (whether Claude Code still has the transcript or not)
+ * - partial: Claude Code deleted the transcript before souvenir archived transcripts (before
+ *   0.6.0): only the search index excerpts remain (first 2,000 characters of each exchange)
+ * - lost: listed in Claude Code's old sessions-index.json, but nothing of it was kept
+ */
+export type SessionAvailability = 'complete' | 'partial' | 'lost';
+
+export interface SessionInfo {
+  sessionId: string;
+  projectDir: string;
+  /** Archived transcript, null when the session is not archived */
+  fileKey: string | null;
+  firstPrompt: string;
+  /** Title: the one the user gave, else the generated one or an old summary ('' when none) */
+  summary: string;
+  /** Entries souvenir_read pages through (excerpts for a partial session) */
+  messageCount: number;
+  created: string;
+  modified: string;
+  gitBranch: string;
+  projectPath: string;
+  isSidechain: boolean;
+  availability: SessionAvailability;
+  /** Claude Code deleted the transcript file (the archive still has it when complete) */
+  sourceDeleted: boolean;
+}
+
+// --- Session index (Claude Code's sessions-index.json, no longer written) ---
 
 export interface SessionIndexEntry {
   sessionId: string;

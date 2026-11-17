@@ -8,9 +8,10 @@ import type {
   TextBlock,
   ToolUseBlock,
   ToolResultBlock,
-  SessionIndexEntry,
+  SessionInfo,
   DetailLevel,
 } from './types.js';
+import { toolResultText } from './parser.js';
 
 // Truncation limits per detail level
 const TEXT_LIMITS: Record<string, number> = {
@@ -123,7 +124,9 @@ function formatContentBlock(block: ContentBlock, detailLevel: DetailLevel, noTru
       if (detailLevel === 'compact') return ''; // Compact hides results
       const resultLimit = noTruncate ? Infinity : (TOOL_RESULT_LIMITS[detailLevel] ?? 10000);
       const result = block as ToolResultBlock;
-      return `  [Result${result.is_error ? ' ERROR' : ''}]: ${truncate(result.content, resultLimit)}`;
+      const images = Array.isArray(result.content) ? result.content.filter((b) => b.type === 'image').length : 0;
+      const imageNote = images > 0 ? ` [${images} image${images > 1 ? 's' : ''}]` : '';
+      return `  [Result${result.is_error ? ' ERROR' : ''}]:${imageNote} ${truncate(toolResultText(result.content), resultLimit)}`;
     }
 
     case 'thinking':
@@ -221,8 +224,13 @@ export function formatEntry(
 }
 
 /**
- * Format a session header.
+ * Format a search index excerpt of a partial session (see availabilityNote): "USER: …\nASSISTANT: …"
+ * as indexed, without tool calls.
  */
+export function formatExcerpt(excerpt: { role: string | null; content_text: string; timestamp: string | null }): string {
+  return `[${formatTimestamp(excerpt.timestamp ?? undefined)}] EXCERPT (${excerpt.role ?? 'turn'}):\n${excerpt.content_text}`;
+}
+
 /**
  * A prompt as the user typed it: a slash command is recorded as
  * <command-name>/x</command-name><command-message>…</command-message><command-args>a</command-args>.
@@ -236,38 +244,56 @@ export function readablePrompt(text: string): string {
   return text;
 }
 
-/** A session's entry count for display (negative = its transcript could not be counted). */
-export function formatEntryCount(count: number): string {
-  return count < 0 ? 'unknown' : String(count);
+/** A session's size for display: entries, or excerpts when only those were kept. */
+export function formatEntryCount(meta: Pick<SessionInfo, 'messageCount' | 'availability'>): string {
+  switch (meta.availability) {
+    case 'complete': return `${meta.messageCount} entries`;
+    case 'partial': return `${meta.messageCount} excerpts`;
+    case 'lost': return 'no content kept';
+  }
+}
+
+/**
+ * What souvenir kept of a session, when it is not the whole transcript (null when it is).
+ */
+export function availabilityNote(meta: Pick<SessionInfo, 'availability'>): string | null {
+  switch (meta.availability) {
+    case 'complete': return null;
+    case 'partial': return 'PARTIAL: Claude Code deleted this transcript before souvenir archived whole transcripts (souvenir 0.6.0). Only the search index excerpts remain: the first 2,000 characters of each exchange, without tool calls or results.';
+    case 'lost': return 'LOST: Claude Code deleted this transcript before souvenir kept anything of it. Only its listing in Claude Code\'s old sessions-index.json remains.';
+  }
 }
 
 /** A session's first prompt as typed, or '' when it has none (sessions-index.json records "No prompt"). */
-export function firstPromptOf(meta: Pick<SessionIndexEntry, 'firstPrompt'>): string {
+export function firstPromptOf(meta: Pick<SessionInfo, 'firstPrompt'>): string {
   return meta.firstPrompt && meta.firstPrompt !== 'No prompt' ? readablePrompt(meta.firstPrompt) : '';
 }
 
 /** Title of a session: its summary, else its first prompt as typed. */
-export function sessionTitle(meta: SessionIndexEntry): string {
+export function sessionTitle(meta: Pick<SessionInfo, 'summary' | 'firstPrompt'>): string {
   return meta.summary ? readablePrompt(meta.summary) : firstPromptOf(meta) || 'No summary';
 }
 
-export function formatSessionHeader(meta: SessionIndexEntry): string {
+export function formatSessionHeader(meta: SessionInfo): string {
   const created = formatTimestamp(meta.created);
   const modified = formatTimestamp(meta.modified);
   const lines = [
     `Session: ${sessionTitle(meta)}`,
     `ID: ${meta.sessionId}`,
-    `Project: ${meta.projectPath || 'Unknown'}`,
+    `Project: ${meta.projectPath || meta.projectDir}`,
     `Date: ${created} - ${modified}`,
-    `Entries: ${formatEntryCount(meta.messageCount)}${meta.gitBranch ? ` | Branch: ${meta.gitBranch}` : ''}`,
+    `Size: ${formatEntryCount(meta)}${meta.gitBranch ? ` | Branch: ${meta.gitBranch}` : ''}`,
   ];
+  const note = availabilityNote(meta);
+  if (note) lines.push(note);
+  else if (meta.sourceDeleted) lines.push('Read from souvenir\'s archive (Claude Code deleted its transcript file).');
   return lines.join('\n');
 }
 
 /**
  * Format a session list entry (compact).
  */
-export function formatSessionListEntry(meta: SessionIndexEntry, index: number): string {
+export function formatSessionListEntry(meta: SessionInfo, index: number): string {
   const date = meta.created ? meta.created.slice(0, 10) : '???';
   const relative = meta.modified ? formatTimestampCompact(meta.modified) : '';
   const title = sessionTitle(meta);
@@ -284,7 +310,9 @@ export function formatSessionListEntry(meta: SessionIndexEntry, index: number): 
   }
 
   const details: string[] = [];
-  details.push(`Entries: ${formatEntryCount(meta.messageCount)}`);
+  details.push(formatEntryCount(meta));
+  if (meta.availability === 'partial') details.push('PARTIAL (excerpts only)');
+  if (meta.availability === 'lost') details.push('LOST');
   if (meta.gitBranch) details.push(`Branch: ${meta.gitBranch}`);
   lines.push(`   ${details.join(' | ')}`);
 

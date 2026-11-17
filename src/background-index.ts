@@ -1,5 +1,6 @@
 /**
- * Background indexation entry point for souvenir hooks.
+ * Background archiving and indexation entry point for souvenir hooks: archives every project's
+ * transcripts (see archive/archiver.ts), then indexes the current project.
  * Called async by Stop, PostToolUse, UserPromptSubmit, PreCompact hooks.
  *
  * Each hook is a new process, so coordination is file-based:
@@ -21,6 +22,8 @@ import { createEmbeddingProvider } from './tools/helpers.js';
 import { buildIndex } from './db/indexer.js';
 import { buildDocsIndex } from './docs/indexer.js';
 import { docsDbExists, getDocSources } from './docs/store.js';
+import { archiveProjects } from './archive/archiver.js';
+import { listProjectDirsOnDisk } from './transcript/discovery.js';
 
 const SOUVENIR_DIR = getSouvenirDir();
 const LOCK_FILE = join(SOUVENIR_DIR, 'bg-index.lock');
@@ -77,6 +80,14 @@ if (!acquireLock()) {
 // The project comes from CLAUDE_PROJECT_DIR (see getConfig), not from the hook input's `cwd`,
 // which follows Claude's `cd` and would miss the project (and its docs index) in a subfolder.
 async function run(): Promise<void> {
+  // 0. Archive every project's transcripts first: needs no embedding server, so the archive
+  //    stays complete when it is down (and a project not opened for a month keeps its sessions)
+  const archive = await archiveProjects(listProjectDirsOnDisk());
+  for (const err of archive.errors) {
+    process.stderr.write(`[souvenir] Archive error: ${err}\n`);
+  }
+  if (archive.errors.length > 0) process.exitCode = 1;
+
   const config = getConfig();
   if (!config.currentProject) {
     return; // The project has no Claude Code history yet

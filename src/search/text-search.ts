@@ -1,8 +1,9 @@
 import { parseTranscript, extractText } from '../transcript/parser.js';
-import { listTranscriptFiles, getSessionMetadata } from '../transcript/discovery.js';
+import { getSessions } from '../archive/catalog.js';
+import { getArchivedFiles } from '../archive/store.js';
+import { escapeLike, iteratePartialSessionChunks } from '../db/store.js';
 import { logger } from '../utils/logger.js';
-import type { SearchResult } from '../transcript/types.js';
-import { basename } from 'path';
+import type { SearchResult, SessionInfo } from '../transcript/types.js';
 
 export interface TextSearchOptions {
   query: string;
@@ -68,7 +69,8 @@ function escapeRegex(str: string): string {
 }
 
 /**
- * Perform text search across transcript files.
+ * Perform text search in the archived transcripts, and in the excerpts of partial sessions
+ * (transcripts Claude Code deleted before souvenir archived them).
  */
 export async function textSearch(options: TextSearchOptions): Promise<{
   results: SearchResult[];
@@ -94,10 +96,7 @@ export async function textSearch(options: TextSearchOptions): Promise<{
   let filesSearched = 0;
   // Transcripts that failed mid-read: reported with the results, which lack their matches
   const unreadable: string[] = [];
-  // Metadata of each matched session, read once per search (a session can match thousands of times)
-  const sessionMeta = new Map<string, ReturnType<typeof getSessionMetadata>>();
 
-  // Compile regex if needed
   let regexPattern: RegExp | null = null;
   if (regex) {
     try {
@@ -107,95 +106,98 @@ export async function textSearch(options: TextSearchOptions): Promise<{
     }
   }
 
-  const includeSubagents = options.includeSubagents ?? false;
+  /** Whether a text matches, with its snippet and score. */
+  const match = (text: string): { snippet: string; score: number } | null => {
+    if (regexPattern) {
+      regexPattern.lastIndex = 0;
+      const m = regexPattern.exec(text);
+      return m ? { snippet: extractSnippet(text, m[0], caseSensitive), score: 0.7 } : null;
+    }
+    const found = caseSensitive ? text.includes(query) : text.toLowerCase().includes(query.toLowerCase());
+    return found ? { snippet: extractSnippet(text, query, caseSensitive), score: scoreMatch(text, query, caseSensitive) } : null;
+  };
 
-  // Determine which files to search
+  const includeSubagents = options.includeSubagents ?? false;
+  const includeTypes: string[] = ['summary'];
+  if (role === 'both' || role === 'user') includeTypes.push('user');
+  if (role === 'both' || role === 'assistant') includeTypes.push('assistant');
+
   for (const projectDir of projectDirs) {
-    const files = listTranscriptFiles(projectDir, {
-      includeSubagents,
-      sessionId,
+    // Session titles for the results, read once per project (a session can match thousands of times)
+    const sessions = new Map<string, SessionInfo>(getSessions(projectDir, { includeSidechains: true }).map((s) => [s.sessionId, s]));
+
+    const files = getArchivedFiles(projectDir).filter((f) => {
+      if (f.parent_session_id !== null && !includeSubagents) return false;
+      return !sessionId || f.session_id === sessionId || (includeSubagents && f.parent_session_id === sessionId);
     });
 
-    for (const filePath of files) {
-      // If filtering by session (and not using subagent discovery which already filters), check filename
-      if (sessionId && !includeSubagents) {
-        const fileName = basename(filePath, '.jsonl');
-        if (fileName !== sessionId) continue;
-      }
-
+    for (const file of files) {
       filesSearched++;
-
-      // Determine include types based on role
-      const includeTypes: string[] = ['summary'];
-      if (role === 'both' || role === 'user') includeTypes.push('user');
-      if (role === 'both' || role === 'assistant') includeTypes.push('assistant');
-
+      const meta = sessions.get(file.session_id);
       try {
-        const stream = parseTranscript(filePath, {
+        const stream = parseTranscript(file.file_key, {
           includeTypes,
           containsText: regex ? undefined : query,
           caseInsensitive: !caseSensitive,
         });
 
         for await (const { entry, lineNumber } of stream) {
-          // Date filters
           if (dateFrom && entry.timestamp && entry.timestamp < dateFrom) continue;
           if (dateTo && entry.timestamp && entry.timestamp > dateTo) continue;
 
           const text = extractText(entry);
           if (!text) continue;
+          const found = match(text);
+          if (!found) continue;
 
-          // Match check
-          let matched = false;
-          let snippet = '';
-          let score = 0;
-
-          if (regex && regexPattern) {
-            regexPattern.lastIndex = 0;
-            matched = regexPattern.test(text);
-            if (matched) {
-              regexPattern.lastIndex = 0;
-              const m = regexPattern.exec(text);
-              snippet = m ? extractSnippet(text, m[0], caseSensitive) : text.slice(0, 200);
-              score = 0.7;
-            }
-          } else {
-            const textLower = caseSensitive ? text : text.toLowerCase();
-            const queryLower = caseSensitive ? query : query.toLowerCase();
-            matched = textLower.includes(queryLower);
-            if (matched) {
-              snippet = extractSnippet(text, query, caseSensitive);
-              score = scoreMatch(text, query, caseSensitive);
-            }
-          }
-
-          if (matched) {
-            const entrySessionId = entry.sessionId || basename(filePath, '.jsonl');
-            let meta = sessionMeta.get(entrySessionId);
-            if (meta === undefined) {
-              meta = getSessionMetadata(entrySessionId, projectDir);
-              sessionMeta.set(entrySessionId, meta);
-            }
-
-            allResults.push({
-              sessionId: entrySessionId,
-              projectDir,
-              entryUuid: entry.uuid,
-              role: entry.type === 'user' ? 'user' : entry.type === 'assistant' ? 'assistant' : 'summary',
-              content: text.slice(0, 500),
-              snippet,
-              timestamp: entry.timestamp,
-              lineNumber,
-              score,
-              sessionSummary: meta?.entry.summary,
-              sessionFirstPrompt: meta?.entry.firstPrompt,
-            });
-          }
+          allResults.push({
+            sessionId: file.session_id,
+            projectDir,
+            entryUuid: entry.uuid,
+            role: entry.type === 'user' ? 'user' : entry.type === 'assistant' ? 'assistant' : 'summary',
+            content: text.slice(0, 500),
+            snippet: found.snippet,
+            timestamp: entry.timestamp,
+            lineNumber,
+            score: found.score,
+            sessionSummary: meta?.summary,
+            sessionFirstPrompt: meta?.firstPrompt,
+          });
         }
       } catch (err) {
-        logger.warn(`Error searching ${filePath}:`, err);
-        unreadable.push(`${basename(filePath, '.jsonl')}: ${err instanceof Error ? err.message : String(err)}`);
+        logger.warn(`Error searching ${file.file_key}:`, err);
+        unreadable.push(`${file.session_id}: ${err instanceof Error ? err.message : String(err)}`);
       }
+    }
+
+    // Partial sessions: only their excerpts remain ("USER: …\nASSISTANT: …"), searched as a whole
+    // LIKE ignores case for ASCII letters only: other queries are matched in JS on every excerpt
+    const likeIsSafe = !regex && (caseSensitive || !/[^\x00-\x7f]/.test(query));
+    const like = likeIsSafe ? `%${escapeLike(query)}%` : null;
+    for (const chunk of iteratePartialSessionChunks(projectDir, like)) {
+      if (sessionId && chunk.session_id !== sessionId) continue;
+      if (!includeSubagents && sessions.get(chunk.session_id)?.isSidechain) continue;
+      if (dateFrom && chunk.timestamp && chunk.timestamp < dateFrom) continue;
+      if (dateTo && chunk.timestamp && chunk.timestamp > dateTo) continue;
+      if (role === 'user' && chunk.role !== 'turn') continue;
+      if (role === 'assistant' && chunk.role !== 'assistant' && !chunk.content_text.includes('\nASSISTANT: ')) continue;
+      const found = match(chunk.content_text);
+      if (!found) continue;
+
+      const meta = sessions.get(chunk.session_id);
+      allResults.push({
+        sessionId: chunk.session_id,
+        projectDir,
+        entryUuid: chunk.entry_uuid ?? undefined,
+        role: `${chunk.role ?? 'turn'} (partial session excerpt)`,
+        content: chunk.content_text.slice(0, 500),
+        snippet: found.snippet,
+        timestamp: chunk.timestamp ?? undefined,
+        lineNumber: chunk.line_number ?? 0,
+        score: found.score,
+        sessionSummary: meta?.summary,
+        sessionFirstPrompt: meta?.firstPrompt,
+      });
     }
   }
 

@@ -1,7 +1,7 @@
 import { ResourceNotFoundError, ResourceTemplate, type McpServer } from '@modelcontextprotocol/server';
 import { getConfig } from './config.js';
-import { getSessions } from './transcript/discovery.js';
-import type { SessionIndexEntry } from './transcript/types.js';
+import { ensureArchived, getSessions } from './archive/catalog.js';
+import type { SessionInfo } from './transcript/types.js';
 import { firstPromptOf, formatEntryCount, sessionTitle } from './transcript/formatter.js';
 import { readSessionDigest } from './tools/read.js';
 
@@ -13,20 +13,21 @@ export function sessionUri(sessionId: string): string {
 }
 
 /** Short label of a session: its date and summary (or first prompt). */
-export function sessionLabel(session: SessionIndexEntry): string {
+export function sessionLabel(session: SessionInfo): string {
   const date = session.created ? session.created.slice(0, 10) : '????-??-??';
   const title = sessionTitle(session).replace(/\s+/g, ' ').trim();
   return `${date} ${title.length > 70 ? title.slice(0, 70) + '…' : title}`;
 }
 
 /** One line about a session beyond its label: first prompt (when the label shows a summary), size, branch, id. */
-function sessionDescription(session: SessionIndexEntry): string {
+function sessionDescription(session: SessionInfo): string {
   const parts: string[] = [];
   const first = firstPromptOf(session).replace(/\s+/g, ' ').trim();
   if (session.summary && first && first !== session.summary) {
     parts.push(`First prompt: "${first.length > 100 ? first.slice(0, 100) + '…' : first}"`);
   }
-  parts.push(`${formatEntryCount(session.messageCount)} entries`);
+  parts.push(formatEntryCount(session));
+  if (session.availability !== 'complete') parts.push(session.availability.toUpperCase());
   if (session.gitBranch) parts.push(`branch ${session.gitBranch}`);
   parts.push(`session_id ${session.sessionId}`);
   return parts.join(' · ');
@@ -40,9 +41,10 @@ export function registerSessionResources(server: McpServer): void {
   server.registerResource(
     'session',
     new ResourceTemplate('souvenir://session/{sessionId}', {
-      list: () => {
+      list: async () => {
         const project = getConfig().currentProject;
         if (!project) return { resources: [] };
+        await ensureArchived([project]);
         const sessions = getSessions(project, { sort: 'newest' }).slice(0, LISTED_SESSIONS);
         return {
           // title and description per session, or the SDK repeats the template's on every entry

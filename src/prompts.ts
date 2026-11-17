@@ -1,7 +1,7 @@
 import { ProtocolError, ProtocolErrorCode, type GetPromptResult, type McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { getConfig } from './config.js';
-import { getSessions } from './transcript/discovery.js';
+import { ensureArchived, getSessions } from './archive/catalog.js';
 import { readSessionDigest } from './tools/read.js';
 import { handleSouvenirSearch } from './tools/search.js';
 import { sessionLabel, sessionUri } from './resources.js';
@@ -57,6 +57,7 @@ export function registerPrompts(server: McpServer): void {
 
       const project = getConfig().currentProject;
       if (!project) throw invalidArgument('This directory has no Claude Code history: give a session id (souvenir_sessions project="all" lists them).');
+      await ensureArchived([project]);
       const recent = getSessions(project, { sort: 'newest' }).slice(0, RECAP_CANDIDATES);
       if (recent.length === 0) throw invalidArgument('No past session in this project.');
       const list = recent.map((s, i) => `${i + 1}. ${sessionLabel(s)} — session_id: ${s.sessionId}`).join('\n');

@@ -102,6 +102,24 @@ export function allRows<T>(db: Db, sql: string, ...params: SQLInputValue[]): T[]
   return db.prepare(sql).all(...params) as unknown as T[];
 }
 
+/** Statements being iterated, held here so that garbage collection cannot finalize them mid-read. */
+const statementsInUse = new Set<unknown>();
+
+/**
+ * The rows of a query one at a time, without holding them all in memory. The statement is kept
+ * alive until the iteration ends: an iterator does not keep its statement alive, and a statement
+ * collected mid-read is finalized ("statement has been finalized").
+ */
+export function* iterateRows<T>(db: Db, sql: string, ...params: SQLInputValue[]): Generator<T> {
+  const statement = db.prepare(sql);
+  statementsInUse.add(statement);
+  try {
+    for (const row of statement.iterate(...params)) yield row as unknown as T;
+  } finally {
+    statementsInUse.delete(statement);
+  }
+}
+
 /** Raw bytes of a vector as sqlite-vec expects them (respects views into a larger buffer). */
 export function vectorBlob(vector: Float32Array): Uint8Array {
   return new Uint8Array(vector.buffer, vector.byteOffset, vector.byteLength);
