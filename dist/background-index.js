@@ -442,25 +442,32 @@ import { deflateRawSync, inflateRawSync } from "zlib";
 import { isAbsolute as isAbsolute2, relative, sep } from "path";
 
 // src/db/schema.ts
-var SCHEMA_VERSION = 3;
+var SCHEMA_VERSION = 4;
+function chunksTableSql(name) {
+  return `CREATE TABLE IF NOT EXISTS ${name} (
+    chunk_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL,
+    project_dir TEXT NOT NULL,
+    entry_uuid TEXT,
+    role TEXT,
+    content_text TEXT,
+    timestamp TEXT,
+    line_number INTEGER,
+    part INTEGER NOT NULL DEFAULT 0,
+    end_line INTEGER,
+    text_start INTEGER,
+    text_end INTEGER,
+    text_format INTEGER,
+    UNIQUE(session_id, line_number, part)
+  );`;
+}
 var CREATE_TABLES = `
   CREATE TABLE IF NOT EXISTS metadata (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
   );
 
-  CREATE TABLE IF NOT EXISTS chunks (
-    chunk_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    session_id TEXT NOT NULL,
-    project_dir TEXT NOT NULL,
-    entry_uuid TEXT,
-    role TEXT,
-    content_text TEXT NOT NULL,
-    timestamp TEXT,
-    line_number INTEGER,
-    part INTEGER NOT NULL DEFAULT 0,
-    UNIQUE(session_id, line_number, part)
-  );
+  ${chunksTableSql("chunks")}
 
   CREATE TABLE IF NOT EXISTS index_state (
     file_path TEXT PRIMARY KEY,
@@ -744,26 +751,16 @@ function migrateLegacyVectors(db) {
 }
 function migrateChunksTable(db) {
   const columns = allRows(db, "PRAGMA table_info(chunks)").map((c) => c.name);
-  if (!columns.includes("embed_text")) return;
+  if (columns.includes("text_format")) return;
   const started = Date.now();
+  const part = columns.includes("part") ? "part" : "0";
   inTransaction(db, () => {
     db.exec(`
-      CREATE TABLE chunks_v3 (
-        chunk_id INTEGER PRIMARY KEY AUTOINCREMENT,
-        session_id TEXT NOT NULL,
-        project_dir TEXT NOT NULL,
-        entry_uuid TEXT,
-        role TEXT,
-        content_text TEXT NOT NULL,
-        timestamp TEXT,
-        line_number INTEGER,
-        part INTEGER NOT NULL DEFAULT 0,
-        UNIQUE(session_id, line_number, part)
-      );
-      INSERT INTO chunks_v3 (chunk_id, session_id, project_dir, entry_uuid, role, content_text, timestamp, line_number, part)
-        SELECT chunk_id, session_id, project_dir, entry_uuid, role, content_text, timestamp, line_number, 0 FROM chunks;
+      ${chunksTableSql("chunks_new")}
+      INSERT INTO chunks_new (chunk_id, session_id, project_dir, entry_uuid, role, content_text, timestamp, line_number, part)
+        SELECT chunk_id, session_id, project_dir, entry_uuid, role, content_text, timestamp, line_number, ${part} FROM chunks;
       DROP TABLE chunks;
-      ALTER TABLE chunks_v3 RENAME TO chunks;
+      ALTER TABLE chunks_new RENAME TO chunks;
     `);
     if (tableExists(db, CHUNK_VECTORS)) {
       const orphans = deleteOrphanVectors(db, CHUNK_VECTORS, "chunks");
@@ -772,7 +769,7 @@ function migrateChunksTable(db) {
   });
   db.exec("PRAGMA incremental_vacuum");
   db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
-  logger.info(`Chunks table migrated to schema 3 in ${Date.now() - started} ms`);
+  logger.info(`Chunks table migrated to schema ${SCHEMA_VERSION} in ${Date.now() - started} ms`);
 }
 function migrateIndexStateKeys(db) {
   const rows = allRows(db, "SELECT file_path FROM index_state").filter((r) => isAbsolute2(r.file_path));
@@ -815,8 +812,8 @@ function insertChunks(chunks, embeddings) {
     throw new Error(`Chunk count (${chunks.length}) doesn't match embedding count (${embeddings.length})`);
   }
   const insertChunk = db.prepare(`
-    INSERT OR IGNORE INTO chunks (session_id, project_dir, entry_uuid, role, content_text, timestamp, line_number, part)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT OR IGNORE INTO chunks (session_id, project_dir, entry_uuid, role, timestamp, line_number, part, end_line, text_start, text_end, text_format)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   let inserted = 0;
   inTransaction(db, () => {
@@ -827,10 +824,13 @@ function insertChunks(chunks, embeddings) {
         chunk.project_dir,
         chunk.entry_uuid || null,
         chunk.role,
-        chunk.content_text,
         chunk.timestamp || null,
         chunk.line_number,
-        chunk.part
+        chunk.part,
+        chunk.end_line,
+        chunk.text_start,
+        chunk.text_end,
+        chunk.text_format
       );
       if (result.changes > 0) {
         insertVector(db, BigInt(result.lastInsertRowid), chunk, chunk.hasUser, chunk.hasAssistant, embeddings[i]);
@@ -932,6 +932,9 @@ function getArchivedFile(fileKey) {
 function getArchivedFiles(projectDir) {
   return allRows(getDb(), "SELECT * FROM transcript_files WHERE project_dir = ?", projectDir);
 }
+function findArchivedFiles(sessionId, projectDir) {
+  return projectDir ? allRows(getDb(), "SELECT * FROM transcript_files WHERE session_id = ? AND project_dir = ? ORDER BY parent_session_id IS NOT NULL", sessionId, projectDir) : allRows(getDb(), "SELECT * FROM transcript_files WHERE session_id = ? ORDER BY parent_session_id IS NOT NULL", sessionId);
+}
 function* archivedLines(fileKey, fromLine = 1) {
   const rows = iterateRows(
     getDb(),
@@ -947,7 +950,7 @@ function* archivedLines(fileKey, fromLine = 1) {
 // src/transcript/parser.ts
 var SKIPPED_LINE_MARKER = '"file-history-snapshot"';
 var DEFAULT_ENTRY_TYPES = ["user", "assistant", "summary"];
-async function* parseTranscript(fileKey, options = {}) {
+function* readTranscript(fileKey, options = {}) {
   const {
     includeTypes = DEFAULT_ENTRY_TYPES,
     fromLine = 1,
@@ -1025,44 +1028,30 @@ function isToolResultEntry(entry) {
 // src/embedding/chunker.ts
 var EMBED_WINDOW_CHARS = 1600;
 var WINDOW_OVERLAP_CHARS = 200;
-function windows(text) {
-  if (text.length <= EMBED_WINDOW_CHARS) return [{ start: 0, end: text.length }];
+var CHUNK_TEXT_FORMAT = 1;
+function windows(text, size = EMBED_WINDOW_CHARS) {
+  if (text.length <= size) return [{ start: 0, end: text.length }];
   const parts = [];
   let start = 0;
   for (; ; ) {
-    let end = Math.min(start + EMBED_WINDOW_CHARS, text.length);
+    let end = Math.min(start + size, text.length);
     if (end < text.length) {
       const space = text.lastIndexOf(" ", end);
-      if (space > start + EMBED_WINDOW_CHARS * 0.7) end = space;
+      if (space > start + size * 0.7) end = space;
     }
     parts.push({ start, end });
     if (end >= text.length) return parts;
     start = Math.max(end - WINDOW_OVERLAP_CHARS, start + 1);
   }
 }
-async function chunkTranscript(file, fromLine) {
-  const toLine = file.line_count;
+function chunkSources(fileKey, fromLine, toLine) {
   const entries = [];
-  for await (const parsed of parseTranscript(file.file_key, { includeTypes: ["user", "assistant", "summary"], fromLine, toLine })) {
+  for (const parsed of readTranscript(fileKey, { includeTypes: ["user", "assistant", "summary"], fromLine, toLine })) {
     entries.push(parsed);
   }
-  const chunks = [];
-  const base = { session_id: file.session_id, project_dir: file.project_dir };
-  const addText = (text, start, role, userEnd, hasAssistant, firstPartOnly = false) => {
-    const parts = windows(text);
-    (firstPartOnly ? parts.slice(0, 1) : parts).forEach(({ start: s, end: e }, part) => {
-      chunks.push({
-        ...base,
-        entry_uuid: start.entry.uuid,
-        role,
-        content_text: text.slice(s, e),
-        timestamp: start.entry.timestamp,
-        line_number: start.lineNumber,
-        part,
-        hasUser: s < userEnd,
-        hasAssistant: hasAssistant && e > userEnd
-      });
-    });
+  const sources = [];
+  const single = (at, role, text, hasAssistant = false) => {
+    sources.push({ ...at, endLine: at.lineNumber, role, text, userEnd: 0, hasAssistant, firstPartOnly: role === "tool_result" });
   };
   let i = 0;
   while (i < entries.length) {
@@ -1070,19 +1059,21 @@ async function chunkTranscript(file, fromLine) {
     const { entry } = current;
     if (entry.type === "summary") {
       const text2 = extractText(entry);
-      if (text2.trim()) addText(text2, current, "summary", 0, false);
+      if (text2.trim()) single(current, "summary", text2);
       i++;
       continue;
     }
     if (entry.type === "user" && isToolResultEntry(entry)) {
       const text2 = extractText(entry);
-      if (text2.trim()) addText(`TOOL RESULT: ${text2}`, current, "tool_result", 0, false, true);
+      if (text2.trim()) single(current, "tool_result", `TOOL RESULT: ${text2}`);
       i++;
       continue;
     }
     if (entry.type === "user") {
       const userPart = `USER: ${extractText(entry)}`;
       const replies = [];
+      let endLine = current.lineNumber;
+      const inside = [];
       i++;
       while (i < entries.length) {
         const next = entries[i];
@@ -1091,26 +1082,95 @@ async function chunkTranscript(file, fromLine) {
           if (text3.trim()) replies.push(text3);
         } else if (next.entry.type === "user" && isToolResultEntry(next.entry)) {
           const text3 = extractText(next.entry);
-          if (text3.trim()) addText(`TOOL RESULT: ${text3}`, next, "tool_result", 0, false, true);
+          if (text3.trim()) inside.push({ ...next, endLine: next.lineNumber, role: "tool_result", text: `TOOL RESULT: ${text3}`, userEnd: 0, hasAssistant: false, firstPartOnly: true });
         } else if (next.entry.type === "summary") {
           const text3 = extractText(next.entry);
-          if (text3.trim()) addText(text3, next, "summary", 0, false);
+          if (text3.trim()) inside.push({ ...next, endLine: next.lineNumber, role: "summary", text: text3, userEnd: 0, hasAssistant: false, firstPartOnly: false });
         } else {
           break;
         }
+        endLine = next.lineNumber;
         i++;
       }
       const text2 = replies.length > 0 ? `${userPart}
 ASSISTANT: ${replies.join("\n")}` : userPart;
-      if (text2.trim() !== "USER:") addText(text2, current, "turn", userPart.length, replies.length > 0);
+      if (text2.trim() !== "USER:") {
+        sources.push({ ...current, endLine, role: "turn", text: text2, userEnd: userPart.length, hasAssistant: replies.length > 0, firstPartOnly: false });
+      }
+      sources.push(...inside);
       continue;
     }
     const text = extractText(entry);
-    if (text.trim()) addText(`ASSISTANT: ${text}`, current, "assistant", 0, true);
+    if (text.trim()) single(current, "assistant", `ASSISTANT: ${text}`, true);
     i++;
   }
-  logger.debug(`Chunked ${file.file_key} from line ${fromLine}: ${entries.length} entries -> ${chunks.length} chunks`);
+  return sources;
+}
+function sourceParts(source) {
+  const parts = windows(source.text);
+  return source.firstPartOnly ? parts.slice(0, 1) : parts;
+}
+function chunkTranscript(file, fromLine) {
+  const toLine = file.line_count;
+  const sources = chunkSources(file.file_key, fromLine, toLine);
+  const chunks = [];
+  for (const source of sources) {
+    sourceParts(source).forEach(({ start, end }, part) => {
+      chunks.push({
+        session_id: file.session_id,
+        project_dir: file.project_dir,
+        entry_uuid: source.entry.uuid,
+        role: source.role,
+        content_text: source.text.slice(start, end),
+        timestamp: source.entry.timestamp,
+        line_number: source.lineNumber,
+        part,
+        end_line: source.endLine,
+        text_start: start,
+        text_end: end,
+        text_format: CHUNK_TEXT_FORMAT,
+        hasUser: start < source.userEnd,
+        hasAssistant: source.hasAssistant && end > source.userEnd
+      });
+    });
+  }
+  logger.debug(`Chunked ${file.file_key} from line ${fromLine}: ${sources.length} texts -> ${chunks.length} chunks`);
   return { chunks, lastLine: toLine };
+}
+
+// src/embedding/chunk-text.ts
+var ChunkTextError = class extends Error {
+};
+function withChunkText(chunks) {
+  const sources = /* @__PURE__ */ new Map();
+  return chunks.map((chunk) => {
+    if (chunk.content_text !== null) return chunk;
+    return { ...chunk, content_text: rebuildText(chunk, sources) };
+  });
+}
+function rebuildText(chunk, cache) {
+  const rebuildHint = `rebuild the index of this project (souvenir_index action="rebuild" project="${chunk.project_dir}")`;
+  if (chunk.text_format !== CHUNK_TEXT_FORMAT) {
+    throw new ChunkTextError(`A chunk of session ${chunk.session_id} was cut by another version of souvenir (format ${chunk.text_format}, now ${CHUNK_TEXT_FORMAT}): ${rebuildHint}.`);
+  }
+  if (chunk.line_number === null || chunk.end_line === null || chunk.text_start === null || chunk.text_end === null) {
+    throw new ChunkTextError(`A chunk of session ${chunk.session_id} records no position in the archive: ${rebuildHint}.`);
+  }
+  const file = findArchivedFiles(chunk.session_id, chunk.project_dir)[0];
+  if (!file) {
+    throw new ChunkTextError(`Session ${chunk.session_id} is indexed but not archived in ${chunk.project_dir}: ${rebuildHint}.`);
+  }
+  const key = `${file.file_key}\0${chunk.line_number}\0${chunk.end_line}`;
+  let sources = cache.get(key);
+  if (!sources) {
+    sources = chunkSources(file.file_key, chunk.line_number, chunk.end_line);
+    cache.set(key, sources);
+  }
+  const source = sources.find((s) => s.lineNumber === chunk.line_number && s.role === chunk.role);
+  if (!source || chunk.text_end > source.text.length) {
+    throw new ChunkTextError(`The text of a chunk of session ${chunk.session_id} (line ${chunk.line_number}) no longer matches the archive: ${rebuildHint}.`);
+  }
+  return source.text.slice(chunk.text_start, chunk.text_end);
 }
 
 // src/archive/archiver.ts
@@ -1168,7 +1228,21 @@ var FIRST_PROMPT_LABEL_CHARS = 1e3;
 var COUNTED_TYPES = /* @__PURE__ */ new Set(["user", "assistant", "summary"]);
 var NEWLINE = 10;
 var archiveProjects = serialized(runArchive);
+var running = null;
 async function runArchive(projectDirs, options = {}) {
+  try {
+    return await copyProjects(projectDirs, {
+      ...options,
+      onProgress: (progress) => {
+        running = progress;
+        options.onProgress?.(progress);
+      }
+    });
+  } finally {
+    running = null;
+  }
+}
+async function copyProjects(projectDirs, options) {
   const report = { filesUpdated: 0, linesAdded: 0, attachmentsUpdated: 0, sourcesGone: 0, errors: [] };
   for (const projectDir of projectDirs) {
     if (options.signal?.aborted) break;
@@ -1469,7 +1543,7 @@ async function runBuildIndex(provider, projectDirs, options = {}) {
           continue;
         }
         const fromLine = indexState ? indexState.last_line + 1 : 1;
-        const { chunks, lastLine } = await chunkTranscript(file, fromLine);
+        const { chunks, lastLine } = chunkTranscript(file, fromLine);
         for (let i = 0; i < chunks.length; i += EMBED_BATCH_SIZE) {
           const batch = chunks.slice(i, i + EMBED_BATCH_SIZE);
           const embeddings = await provider.embed(batch.map((c) => c.content_text));
@@ -1507,7 +1581,7 @@ async function embedPendingChunks(provider, projectDir, onProgress, signal) {
     const { missing, lastChunkId } = getChunksWithoutVectors(projectDir, after, PENDING_PAGE_SIZE);
     if (lastChunkId === null) break;
     for (let i = 0; i < missing.length; i += EMBED_BATCH_SIZE) {
-      const batch = missing.slice(i, i + EMBED_BATCH_SIZE);
+      const batch = withChunkText(missing.slice(i, i + EMBED_BATCH_SIZE));
       insertVectors(batch, await provider.embed(batch.map((c) => c.content_text)));
       embedded += batch.length;
     }
@@ -1584,15 +1658,53 @@ function detectCategory(filePath) {
 function isSupportedExtension(filePath) {
   return detectCategory(filePath) !== null;
 }
-var MAX_EMBED_CHARS = 1600;
-var MAX_CONTENT_CHARS = 2e3;
-var MAX_CHUNK_LINES = 80;
-var MIN_CHUNK_LINES = 5;
-function truncateForEmbed(text, maxChars) {
-  if (text.length <= maxChars) return text;
-  const truncated = text.slice(0, maxChars);
-  const lastSpace = truncated.lastIndexOf(" ");
-  return lastSpace > maxChars * 0.7 ? truncated.slice(0, lastSpace) : truncated;
+function blockChunks(lines, first, base, location) {
+  const last = first + lines.length - 1;
+  const budget = Math.max(EMBED_WINDOW_CHARS - location(last, last).length - 1, EMBED_WINDOW_CHARS / 2);
+  const chunks = [];
+  const push = (text, startLine, endLine, part) => {
+    if (!text.trim()) return;
+    chunks.push({ ...base, content_text: text, embed_text: `${location(startLine, endLine)}
+${text}`, start_line: startLine, end_line: endLine, part });
+  };
+  let start = 0;
+  while (start < lines.length) {
+    if (lines[start].length > budget) {
+      const line = lines[start];
+      windows(line, budget).forEach(({ start: s, end: e }, part) => push(line.slice(s, e), first + start, first + start, part));
+      start++;
+      continue;
+    }
+    let end = start;
+    let length = -1;
+    while (end < lines.length && lines[end].length <= budget && length + 1 + lines[end].length <= budget) {
+      length += 1 + lines[end].length;
+      end++;
+    }
+    if (end < lines.length) {
+      let upTo = length;
+      for (let k = end - 1; k > start; k--) {
+        upTo -= 1 + lines[k].length;
+        if (upTo < budget * 0.7) break;
+        if (lines[k - 1].trim() === "") {
+          end = k;
+          break;
+        }
+      }
+    }
+    push(lines.slice(start, end).join("\n"), first + start, first + end - 1, 0);
+    if (end >= lines.length) break;
+    let next = end;
+    if (lines[end].length <= budget) {
+      let shared = 0;
+      while (next - 1 > start && shared + lines[next - 1].length + 1 <= WINDOW_OVERLAP_CHARS) {
+        next--;
+        shared += lines[next].length + 1;
+      }
+    }
+    start = next;
+  }
+  return chunks;
 }
 function parseMarkdownHeaders(lines) {
   const headers = [];
@@ -1633,43 +1745,15 @@ function chunkMarkdown(lines, relativePath) {
   const headers = parseMarkdownHeaders(lines);
   const chunks = [];
   const sections = [];
-  if (headers.length === 0) {
-    const content = lines.join("\n");
-    if (content.trim()) {
-      chunks.push({
-        file_path: relativePath,
-        category: "doc",
-        content_text: truncateForEmbed(content, MAX_CONTENT_CHARS),
-        embed_text: truncateForEmbed(`[${relativePath}]
-${content}`, MAX_EMBED_CHARS),
-        start_line: 1,
-        end_line: lines.length,
-        section_path: null
-      });
-    }
-    return { chunks, sections };
-  }
-  if (headers[0].lineIndex > 0) {
-    const preContent = lines.slice(0, headers[0].lineIndex).join("\n");
-    if (preContent.trim()) {
-      chunks.push({
-        file_path: relativePath,
-        category: "doc",
-        content_text: truncateForEmbed(preContent, MAX_CONTENT_CHARS),
-        embed_text: truncateForEmbed(`[${relativePath}]
-${preContent}`, MAX_EMBED_CHARS),
-        start_line: 1,
-        end_line: headers[0].lineIndex,
-        section_path: null
-      });
-    }
+  const inFile = () => `[${relativePath}]`;
+  const preEnd = headers.length > 0 ? headers[0].lineIndex : lines.length;
+  if (preEnd > 0) {
+    chunks.push(...blockChunks(lines.slice(0, preEnd), 1, { file_path: relativePath, category: "doc", section_path: null }, inFile));
   }
   for (let hi = 0; hi < headers.length; hi++) {
     const header = headers[hi];
     const startLine = header.lineIndex;
     const endLine = hi + 1 < headers.length ? headers[hi + 1].lineIndex : lines.length;
-    const sectionLines = lines.slice(startLine, endLine);
-    const sectionContent = sectionLines.join("\n");
     const sectionPath = buildSectionPath(headers, hi);
     sections.push({
       file_path: relativePath,
@@ -1680,153 +1764,32 @@ ${preContent}`, MAX_EMBED_CHARS),
       end_line: endLine < lines.length ? endLine : null,
       section_path: sectionPath
     });
-    if (!sectionContent.trim()) continue;
-    if (sectionContent.length > MAX_CONTENT_CHARS) {
-      const subChunks = splitAtParagraphs(sectionLines, startLine, relativePath, "doc", sectionPath);
-      chunks.push(...subChunks);
-    } else {
-      chunks.push({
-        file_path: relativePath,
-        category: "doc",
-        content_text: truncateForEmbed(sectionContent, MAX_CONTENT_CHARS),
-        embed_text: truncateForEmbed(`[${sectionPath}]
-${sectionContent}`, MAX_EMBED_CHARS),
-        start_line: startLine + 1,
-        end_line: endLine,
-        section_path: sectionPath
-      });
-    }
+    chunks.push(...blockChunks(
+      lines.slice(startLine, endLine),
+      startLine + 1,
+      { file_path: relativePath, category: "doc", section_path: sectionPath },
+      () => `[${sectionPath}]`
+    ));
   }
   return { chunks, sections };
 }
 function chunkCode(lines, relativePath) {
-  const chunks = [];
-  if (lines.length <= MAX_CHUNK_LINES) {
-    const content = lines.join("\n");
-    if (content.trim()) {
-      chunks.push({
-        file_path: relativePath,
-        category: "code",
-        content_text: truncateForEmbed(content, MAX_CONTENT_CHARS),
-        embed_text: truncateForEmbed(`[${relativePath}]
-${content}`, MAX_EMBED_CHARS),
-        start_line: 1,
-        end_line: lines.length,
-        section_path: null
-      });
-    }
-    return { chunks, sections: [] };
-  }
-  const splitPoints = [];
-  for (let i = 0; i < lines.length; i++) {
-    if (lines[i].trim() === "") {
-      splitPoints.push(i);
-    }
-  }
-  let chunkStart = 0;
-  while (chunkStart < lines.length) {
-    let chunkEnd = Math.min(chunkStart + MAX_CHUNK_LINES, lines.length);
-    if (chunkEnd < lines.length) {
-      const nearestBlank = splitPoints.find(
-        (p) => p >= chunkStart + MIN_CHUNK_LINES && p <= chunkEnd
-      );
-      const candidates = splitPoints.filter(
-        (p) => p >= chunkStart + MIN_CHUNK_LINES && p <= chunkEnd
-      );
-      if (candidates.length > 0) {
-        chunkEnd = candidates[candidates.length - 1] + 1;
-      }
-    }
-    const chunkLines = lines.slice(chunkStart, chunkEnd);
-    const content = chunkLines.join("\n");
-    if (content.trim()) {
-      chunks.push({
-        file_path: relativePath,
-        category: "code",
-        content_text: truncateForEmbed(content, MAX_CONTENT_CHARS),
-        embed_text: truncateForEmbed(`[${relativePath}:${chunkStart + 1}-${chunkEnd}]
-${content}`, MAX_EMBED_CHARS),
-        start_line: chunkStart + 1,
-        end_line: chunkEnd,
-        section_path: null
-      });
-    }
-    chunkStart = chunkEnd;
-  }
+  const chunks = blockChunks(
+    lines,
+    1,
+    { file_path: relativePath, category: "code", section_path: null },
+    (start, end) => `[${relativePath}:${start}-${end}]`
+  );
   return { chunks, sections: [] };
 }
 function chunkConfig(lines, relativePath) {
-  const content = lines.join("\n");
-  const chunks = [];
-  if (!content.trim()) return { chunks, sections: [] };
-  if (content.length <= MAX_CONTENT_CHARS) {
-    chunks.push({
-      file_path: relativePath,
-      category: "config",
-      content_text: truncateForEmbed(content, MAX_CONTENT_CHARS),
-      embed_text: truncateForEmbed(`[config: ${relativePath}]
-${content}`, MAX_EMBED_CHARS),
-      start_line: 1,
-      end_line: lines.length,
-      section_path: null
-    });
-  } else {
-    const codeResult = chunkCode(lines, relativePath);
-    for (const chunk of codeResult.chunks) {
-      chunk.category = "config";
-    }
-    chunks.push(...codeResult.chunks);
-  }
+  const chunks = blockChunks(
+    lines,
+    1,
+    { file_path: relativePath, category: "config", section_path: null },
+    () => `[config: ${relativePath}]`
+  );
   return { chunks, sections: [] };
-}
-function splitAtParagraphs(lines, baseLineIndex, relativePath, category, sectionPath) {
-  const chunks = [];
-  let blockStart = 0;
-  let currentBlock = [];
-  for (let i = 0; i < lines.length; i++) {
-    currentBlock.push(lines[i]);
-    const blockContent = currentBlock.join("\n");
-    if (blockContent.length >= MAX_CONTENT_CHARS * 0.8 && lines[i].trim() === "") {
-      if (blockContent.trim()) {
-        chunks.push({
-          file_path: relativePath,
-          category,
-          content_text: truncateForEmbed(blockContent, MAX_CONTENT_CHARS),
-          embed_text: truncateForEmbed(
-            sectionPath ? `[${sectionPath}]
-${blockContent}` : `[${relativePath}]
-${blockContent}`,
-            MAX_EMBED_CHARS
-          ),
-          start_line: baseLineIndex + blockStart + 1,
-          end_line: baseLineIndex + i + 1,
-          section_path: sectionPath
-        });
-      }
-      blockStart = i + 1;
-      currentBlock = [];
-    }
-  }
-  if (currentBlock.length > 0) {
-    const remaining = currentBlock.join("\n");
-    if (remaining.trim()) {
-      chunks.push({
-        file_path: relativePath,
-        category,
-        content_text: truncateForEmbed(remaining, MAX_CONTENT_CHARS),
-        embed_text: truncateForEmbed(
-          sectionPath ? `[${sectionPath}]
-${remaining}` : `[${relativePath}]
-${remaining}`,
-          MAX_EMBED_CHARS
-        ),
-        start_line: baseLineIndex + blockStart + 1,
-        end_line: baseLineIndex + lines.length,
-        section_path: sectionPath
-      });
-    }
-  }
-  return chunks;
 }
 function chunkFile(filePath, relativePath, category) {
   const resolvedCategory = category || detectCategory(filePath);
@@ -1852,7 +1815,21 @@ import { existsSync as existsSync4, statSync as fsStatSync } from "fs";
 import { join as join4 } from "path";
 
 // src/docs/schema.ts
-var DOCS_SCHEMA_VERSION = 3;
+var DOCS_SCHEMA_VERSION = 4;
+function docChunksTableSql(name) {
+  return `CREATE TABLE IF NOT EXISTS ${name} (
+    chunk_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    file_path TEXT NOT NULL,
+    category TEXT NOT NULL CHECK(category IN ('doc', 'code', 'config')),
+    content_text TEXT NOT NULL,
+    start_line INTEGER NOT NULL,
+    end_line INTEGER NOT NULL,
+    part INTEGER NOT NULL DEFAULT 0,
+    section_path TEXT,
+    file_modified TEXT NOT NULL,
+    UNIQUE(file_path, start_line, part)
+  );`;
+}
 var DOCS_CREATE_TABLES = `
   CREATE TABLE IF NOT EXISTS metadata (
     key TEXT PRIMARY KEY,
@@ -1869,18 +1846,7 @@ var DOCS_CREATE_TABLES = `
     added_at TEXT NOT NULL
   );
 
-  CREATE TABLE IF NOT EXISTS doc_chunks (
-    chunk_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    file_path TEXT NOT NULL,
-    category TEXT NOT NULL CHECK(category IN ('doc', 'code', 'config')),
-    content_text TEXT NOT NULL,
-    embed_text TEXT NOT NULL,
-    start_line INTEGER NOT NULL,
-    end_line INTEGER NOT NULL,
-    section_path TEXT,
-    file_modified TEXT NOT NULL,
-    UNIQUE(file_path, start_line)
-  );
+  ${docChunksTableSql("doc_chunks")}
 
   CREATE TABLE IF NOT EXISTS doc_sections (
     section_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1945,6 +1911,7 @@ function getDocsDb(projectRoot) {
     db.exec(DOCS_CREATE_TABLES);
     migrateLegacyIdentity(db);
     migrateLegacyDocVectors(db);
+    migrateDocChunksTable(db);
     db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)").run(
       "schema_version",
       String(DOCS_SCHEMA_VERSION)
@@ -1991,6 +1958,22 @@ function migrateLegacyDocVectors(db) {
   db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
   logger.info(`Moved ${moved} doc vectors from ${LEGACY_DOCS_VEC_TABLE} to ${DOC_CHUNK_VECTORS}`);
 }
+function migrateDocChunksTable(db) {
+  const columns = allRows(db, "PRAGMA table_info(doc_chunks)").map((c) => c.name);
+  if (!columns.includes("embed_text")) return;
+  inTransaction(db, () => {
+    db.exec(`
+      ${docChunksTableSql("doc_chunks_new")}
+      INSERT INTO doc_chunks_new (chunk_id, file_path, category, content_text, start_line, end_line, part, section_path, file_modified)
+        SELECT chunk_id, file_path, category, content_text, start_line, end_line, 0, section_path, file_modified FROM doc_chunks;
+      DROP TABLE doc_chunks;
+      ALTER TABLE doc_chunks_new RENAME TO doc_chunks;
+      DELETE FROM doc_index_state;
+    `);
+  });
+  db.exec("PRAGMA incremental_vacuum");
+  logger.info(`Doc chunks table migrated to schema ${DOCS_SCHEMA_VERSION}: every file will be indexed again`);
+}
 function prepareDocsVectorIndex(projectRoot, identity, options = {}) {
   const db = getDocsDb(projectRoot);
   if (!options.resetAll) {
@@ -2020,8 +2003,8 @@ function insertDocChunks(projectRoot, chunks, embeddings) {
     throw new Error(`Chunk count (${chunks.length}) doesn't match embedding count (${embeddings.length})`);
   }
   const insertChunk = db.prepare(`
-    INSERT OR IGNORE INTO doc_chunks (file_path, category, content_text, embed_text, start_line, end_line, section_path, file_modified)
-    VALUES (@file_path, @category, @content_text, @embed_text, @start_line, @end_line, @section_path, @file_modified)
+    INSERT OR IGNORE INTO doc_chunks (file_path, category, content_text, start_line, end_line, part, section_path, file_modified)
+    VALUES (@file_path, @category, @content_text, @start_line, @end_line, @part, @section_path, @file_modified)
   `);
   const insertVec = db.prepare(`
     INSERT INTO ${DOC_CHUNK_VECTORS} (chunk_id, category, file_path, embedding)
@@ -2035,9 +2018,9 @@ function insertDocChunks(projectRoot, chunks, embeddings) {
         file_path: chunk.file_path,
         category: chunk.category,
         content_text: chunk.content_text,
-        embed_text: chunk.embed_text,
         start_line: chunk.start_line,
         end_line: chunk.end_line,
+        part: chunk.part,
         section_path: chunk.section_path,
         file_modified: chunk.file_modified
       });

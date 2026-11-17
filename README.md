@@ -33,7 +33,7 @@ After context compaction, it gets worse: the summary captures *what* was done bu
 
 1. Claude Code writes every conversation to `~/.claude/projects/` as transcript files, and deletes them after 30 days by default.
 2. souvenir copies them into its own database as they are written: every line, compressed, for every project (at server start and after each interaction; no embedding server needed). Reading, listing and searching sessions use this archive, so a session stays complete after Claude Code deletes its file.
-3. A background hook then splits what is new into chunks (what the user wrote with the whole reply that follows; a long exchange in several overlapping parts, never cut) and turns each chunk into a vector with an **embedding model**. Vectors are stored in the same SQLite database with [sqlite-vec](https://github.com/asg017/sqlite-vec).
+3. A background hook then splits what is new into chunks (what the user wrote with the whole reply that follows; a long exchange in several overlapping parts, never cut) and turns each chunk into a vector with an **embedding model**. Vectors are stored in the same SQLite database with [sqlite-vec](https://github.com/asg017/sqlite-vec). A chunk does not store its text a second time: it records where it is in the archive, and its text is read back from there.
 4. When Claude searches, the query is turned into a vector too, and the closest chunks are returned. The default **hybrid** mode combines this meaning-based search with exact text matching over the whole archive.
 
 **Sessions older than the archive.** Before 0.6.0, souvenir kept only search excerpts (the first 2,000 characters of each exchange, without tool calls) and read Claude Code's files directly. Sessions whose transcript Claude Code deleted before 0.6.0 cannot be recovered in full: souvenir lists them as **partial**, shows and searches their excerpts, and never deletes them. Sessions still listed in Claude Code's old `sessions-index.json` with nothing kept are listed as **lost**.
@@ -273,7 +273,7 @@ Manage project file indexing (docs, code, config) and file versioning.
 | "requires Node.js >= 22.13" | Update Node.js; Claude Code runs the plugin with the `node` on your `PATH` |
 | "no sqlite-vec binary for linux-arm64" | Platform not supported yet; text search still works |
 | Settings change has no effect | Run `/reload-plugins` (or restart Claude Code) after `/plugin configure` |
-| First start after upgrading is slow | One-time migration of the index (about a minute for ~500k chunks), then the first archive of every transcript (about 2 minutes for 4 GB of transcripts) |
+| First start after upgrading is slow | One-time migration of the index (about a minute for ~500k chunks), then the first archive of every transcript (about 2 minutes for 4 GB of transcripts). Added project files are indexed again once (0.6.0 cuts them whole) |
 
 Set `SOUVENIR_LOG_LEVEL=info` (or `debug`) in your environment to get detailed logs on stderr (`claude --debug` writes them to `~/.claude/debug/`).
 
@@ -298,6 +298,8 @@ All plugin data lives under `.claude/ASymptOmatik/`, the shared namespace for AS
 - Vectors live in sqlite-vec tables (`chunk_vectors`, `doc_chunk_vectors`) with cosine distance. Search filters are columns of the vector table (project as a partition key; session, speaker, timestamp, category, file as metadata), so sqlite-vec applies them while selecting the nearest vectors.
 - Each index records the **embedding identity** it was built with (provider, model, vector size, prefixes). Searches and incremental indexing check it, so vectors from different models are never mixed.
 - Vector size is measured from the model at startup, not configured.
+- A chunk of an archived transcript stores no text: the lines of its exchange (`line_number` to `end_line`), its position in the exchange's text (`text_start`, `text_end`) and the version of the chunker that cut it (`text_format`). Its text is cut again from the archive when a search returns it; a chunk cut by another chunker version asks for a rebuild instead of showing wrong text. Chunks of partial sessions keep their text (`content_text`): it is their only copy.
+- Project files are cut into chunks of whole lines (ending at a blank line when one is near), small enough to be embedded whole with their location; a line too long for one chunk is cut into parts. Nothing is truncated.
 
 ### Current project
 
@@ -343,7 +345,8 @@ src/
 │   ├── models.ts          # Known models and their input prefixes
 │   ├── ollama.ts          # Ollama provider (default)
 │   ├── openai.ts          # OpenAI-compatible provider
-│   └── chunker.ts         # Archived transcript → chunks (long exchanges in overlapping parts)
+│   ├── chunker.ts         # Archived transcript → chunks (long exchanges in overlapping parts)
+│   └── chunk-text.ts      # A chunk's text, cut again from the archive
 ├── search/                # Text and semantic search, density boost, merging of copied entries
 └── utils/                 # Logger, paths, one-at-a-time runs (serial.ts)
 ```

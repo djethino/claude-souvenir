@@ -1,6 +1,7 @@
 import { logger } from '../utils/logger.js';
 import { serialized } from '../utils/serial.js';
 import { chunkTranscript } from '../embedding/chunker.js';
+import { withChunkText } from '../embedding/chunk-text.js';
 import { type EmbeddingProvider, sameIdentity } from '../embedding/provider.js';
 import { archiveProjects, type ArchiveReport } from '../archive/archiver.js';
 import { getArchivedFiles } from '../archive/store.js';
@@ -128,7 +129,7 @@ async function runBuildIndex(
         }
 
         const fromLine = indexState ? indexState.last_line + 1 : 1;
-        const { chunks, lastLine } = await chunkTranscript(file, fromLine);
+        const { chunks, lastLine } = chunkTranscript(file, fromLine);
 
         for (let i = 0; i < chunks.length; i += EMBED_BATCH_SIZE) {
           const batch = chunks.slice(i, i + EMBED_BATCH_SIZE);
@@ -181,7 +182,7 @@ async function embedPendingChunks(
     const { missing, lastChunkId } = getChunksWithoutVectors(projectDir, after, PENDING_PAGE_SIZE);
     if (lastChunkId === null) break;
     for (let i = 0; i < missing.length; i += EMBED_BATCH_SIZE) {
-      const batch = missing.slice(i, i + EMBED_BATCH_SIZE);
+      const batch = withChunkText(missing.slice(i, i + EMBED_BATCH_SIZE));
       insertVectors(batch, await provider.embed(batch.map((c) => c.content_text)));
       embedded += batch.length;
     }

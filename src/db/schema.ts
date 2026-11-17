@@ -7,8 +7,35 @@
  * 2: vectors moved to chunk_vectors (project partition + filter metadata), embedding identity.
  * 3: transcript archive (transcript_files, transcript_lines, transcript_attachments); chunks keep
  *    their whole text (no embed_text copy), a long one is embedded in several parts.
+ * 4: chunks of archived transcripts keep no text: where it is in the archive (lines, characters),
+ *    re-made from the archive when read (embedding/chunk-text.ts). content_text stays for the chunks
+ *    of partial sessions (their only copy) and for chunks made before.
  */
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
+
+/**
+ * The chunks table. content_text: the chunk's text, or NULL when it is re-made from the archive:
+ * the text of the exchange starting at line_number and ending at end_line, cut at
+ * [text_start, text_end), by the chunker of format text_format.
+ */
+export function chunksTableSql(name: string): string {
+  return `CREATE TABLE IF NOT EXISTS ${name} (
+    chunk_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL,
+    project_dir TEXT NOT NULL,
+    entry_uuid TEXT,
+    role TEXT,
+    content_text TEXT,
+    timestamp TEXT,
+    line_number INTEGER,
+    part INTEGER NOT NULL DEFAULT 0,
+    end_line INTEGER,
+    text_start INTEGER,
+    text_end INTEGER,
+    text_format INTEGER,
+    UNIQUE(session_id, line_number, part)
+  );`;
+}
 
 export const CREATE_TABLES = `
   CREATE TABLE IF NOT EXISTS metadata (
@@ -16,18 +43,7 @@ export const CREATE_TABLES = `
     value TEXT NOT NULL
   );
 
-  CREATE TABLE IF NOT EXISTS chunks (
-    chunk_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    session_id TEXT NOT NULL,
-    project_dir TEXT NOT NULL,
-    entry_uuid TEXT,
-    role TEXT,
-    content_text TEXT NOT NULL,
-    timestamp TEXT,
-    line_number INTEGER,
-    part INTEGER NOT NULL DEFAULT 0,
-    UNIQUE(session_id, line_number, part)
-  );
+  ${chunksTableSql('chunks')}
 
   CREATE TABLE IF NOT EXISTS index_state (
     file_path TEXT PRIMARY KEY,

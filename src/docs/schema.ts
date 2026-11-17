@@ -3,8 +3,28 @@
  * Stored at <project>/.claude/ASymptOmatik/souvenir/docs.db
  */
 
-/** 3: vectors moved to doc_chunk_vectors (category / file filter metadata), embedding identity. */
-export const DOCS_SCHEMA_VERSION = 3;
+/**
+ * 3: vectors moved to doc_chunk_vectors (category / file filter metadata), embedding identity.
+ * 4: chunks no longer truncated (a long block is cut into chunks that fit the embedding window, a
+ *    long line into parts: part column); the embedded text (location + lines) is not stored.
+ */
+export const DOCS_SCHEMA_VERSION = 4;
+
+/** The doc_chunks table (see DOCS_SCHEMA_VERSION 4). */
+export function docChunksTableSql(name: string): string {
+  return `CREATE TABLE IF NOT EXISTS ${name} (
+    chunk_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    file_path TEXT NOT NULL,
+    category TEXT NOT NULL CHECK(category IN ('doc', 'code', 'config')),
+    content_text TEXT NOT NULL,
+    start_line INTEGER NOT NULL,
+    end_line INTEGER NOT NULL,
+    part INTEGER NOT NULL DEFAULT 0,
+    section_path TEXT,
+    file_modified TEXT NOT NULL,
+    UNIQUE(file_path, start_line, part)
+  );`;
+}
 
 export const DOCS_CREATE_TABLES = `
   CREATE TABLE IF NOT EXISTS metadata (
@@ -22,18 +42,7 @@ export const DOCS_CREATE_TABLES = `
     added_at TEXT NOT NULL
   );
 
-  CREATE TABLE IF NOT EXISTS doc_chunks (
-    chunk_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    file_path TEXT NOT NULL,
-    category TEXT NOT NULL CHECK(category IN ('doc', 'code', 'config')),
-    content_text TEXT NOT NULL,
-    embed_text TEXT NOT NULL,
-    start_line INTEGER NOT NULL,
-    end_line INTEGER NOT NULL,
-    section_path TEXT,
-    file_modified TEXT NOT NULL,
-    UNIQUE(file_path, start_line)
-  );
+  ${docChunksTableSql('doc_chunks')}
 
   CREATE TABLE IF NOT EXISTS doc_sections (
     section_id INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -9,7 +9,7 @@ import {
 } from '../db/identity.js';
 import type { EmbeddingIdentity } from '../embedding/provider.js';
 import {
-  DOCS_CREATE_TABLES, DOCS_SCHEMA_VERSION, DOC_CHUNK_VECTORS, LEGACY_DOCS_VEC_TABLE, createDocChunkVectorsTable,
+  DOCS_CREATE_TABLES, DOCS_SCHEMA_VERSION, DOC_CHUNK_VECTORS, LEGACY_DOCS_VEC_TABLE, createDocChunkVectorsTable, docChunksTableSql,
 } from './schema.js';
 
 export type DocCategory = 'doc' | 'code' | 'config';
@@ -29,9 +29,9 @@ export interface DocChunkRow {
   file_path: string;
   category: DocCategory;
   content_text: string;
-  embed_text: string;
   start_line: number;
   end_line: number;
+  part: number;
   section_path: string | null;
   file_modified: string;
 }
@@ -109,6 +109,7 @@ export function getDocsDb(projectRoot: string): Db {
     db.exec(DOCS_CREATE_TABLES);
     migrateLegacyIdentity(db);
     migrateLegacyDocVectors(db);
+    migrateDocChunksTable(db);
 
     db.prepare('INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)').run(
       'schema_version',
@@ -165,6 +166,30 @@ function migrateLegacyDocVectors(db: Db): void {
   db.exec('PRAGMA incremental_vacuum');
   db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
   logger.info(`Moved ${moved} doc vectors from ${LEGACY_DOCS_VEC_TABLE} to ${DOC_CHUNK_VECTORS}`);
+}
+
+/**
+ * Schema 3 truncated long chunks and kept a second copy of their text (embed_text). Re-create the
+ * table in the current form, keeping every chunk and its chunk_id (vectors stay attached, search
+ * keeps working), and forget when each file was indexed: the next index run cuts every file again,
+ * whole this time, and replaces its chunks.
+ */
+function migrateDocChunksTable(db: Db): void {
+  const columns = allRows<{ name: string }>(db, 'PRAGMA table_info(doc_chunks)').map((c) => c.name);
+  if (!columns.includes('embed_text')) return;
+
+  inTransaction(db, () => {
+    db.exec(`
+      ${docChunksTableSql('doc_chunks_new')}
+      INSERT INTO doc_chunks_new (chunk_id, file_path, category, content_text, start_line, end_line, part, section_path, file_modified)
+        SELECT chunk_id, file_path, category, content_text, start_line, end_line, 0, section_path, file_modified FROM doc_chunks;
+      DROP TABLE doc_chunks;
+      ALTER TABLE doc_chunks_new RENAME TO doc_chunks;
+      DELETE FROM doc_index_state;
+    `);
+  });
+  db.exec('PRAGMA incremental_vacuum');
+  logger.info(`Doc chunks table migrated to schema ${DOCS_SCHEMA_VERSION}: every file will be indexed again`);
 }
 
 /**
@@ -266,9 +291,9 @@ export function insertDocChunks(
     file_path: string;
     category: DocCategory;
     content_text: string;
-    embed_text: string;
     start_line: number;
     end_line: number;
+    part: number;
     section_path: string | null;
     file_modified: string;
   }>,
@@ -281,8 +306,8 @@ export function insertDocChunks(
   }
 
   const insertChunk = db.prepare(`
-    INSERT OR IGNORE INTO doc_chunks (file_path, category, content_text, embed_text, start_line, end_line, section_path, file_modified)
-    VALUES (@file_path, @category, @content_text, @embed_text, @start_line, @end_line, @section_path, @file_modified)
+    INSERT OR IGNORE INTO doc_chunks (file_path, category, content_text, start_line, end_line, part, section_path, file_modified)
+    VALUES (@file_path, @category, @content_text, @start_line, @end_line, @part, @section_path, @file_modified)
   `);
 
   const insertVec = db.prepare(`
@@ -299,9 +324,9 @@ export function insertDocChunks(
         file_path: chunk.file_path,
         category: chunk.category,
         content_text: chunk.content_text,
-        embed_text: chunk.embed_text,
         start_line: chunk.start_line,
         end_line: chunk.end_line,
+        part: chunk.part,
         section_path: chunk.section_path,
         file_modified: chunk.file_modified,
       });

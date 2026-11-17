@@ -4,7 +4,8 @@ import { archiveErrorNote, ensureArchived, findSession, listProjectDirs, resolve
 import { getConfig } from '../config.js';
 import { resolveProjectDir } from '../utils/paths.js';
 import { searchSemantic, getProjectChunkCount } from '../db/store.js';
-import type { VecSearchResult } from '../db/store.js';
+import type { TextChunkRow, VecSearchResult } from '../db/store.js';
+import { withChunkText } from '../embedding/chunk-text.js';
 import { getOrCreateProvider, errorMessage } from './helpers.js';
 import { buildIndex } from '../db/indexer.js';
 import { logger } from '../utils/logger.js';
@@ -81,7 +82,7 @@ function sessionMetadataLookup(): (sessionId: string, projectDir: string) => Ret
 
 /** A semantic match (one indexed chunk) as a search result with the given score. */
 function semanticResult(
-  vr: VecSearchResult,
+  vr: VecSearchResult & TextChunkRow,
   score: number,
   query: string,
   metadataOf: ReturnType<typeof sessionMetadataLookup>,
@@ -317,14 +318,14 @@ async function performSemanticSearch(
     // One more than the page needs: if it comes back, a next page exists
     const offset = params.offset || 0;
     const topK = offset + maxResults + 1;
-    const vecResults = searchSemantic(provider.identity, queryEmbedding, {
+    const vecResults = withChunkText(searchSemantic(provider.identity, queryEmbedding, {
       topK,
       projectDir,
       sessionId: params.session_id,
       speaker: params.role === 'both' ? undefined : params.role,
       dateFrom: params.date_from,
       dateTo: params.date_to,
-    });
+    }));
     const more = vecResults.length === topK;
 
     if (vecResults.length === 0) {
@@ -421,19 +422,19 @@ async function performHybridSearch(
       const queryEmbedding = await provider.embedQuery(params.query);
       const projectDir = projectDirs.length === 1 ? projectDirs[0] : undefined;
 
-      const results = searchSemantic(provider.identity, queryEmbedding, {
+      const results = withChunkText(searchSemantic(provider.identity, queryEmbedding, {
         topK: depth,
         projectDir,
         sessionId: params.session_id,
         speaker: params.role === 'both' ? undefined : params.role,
         dateFrom: params.date_from,
         dateTo: params.date_to,
-      });
+      }));
 
       return { results, error: null as string | null, indexNote };
     } catch (err) {
       logger.warn('Semantic search failed in hybrid mode:', err);
-      return { results: [] as VecSearchResult[], error: errorMessage(err), indexNote: null };
+      return { results: [] as Array<VecSearchResult & TextChunkRow>, error: errorMessage(err), indexNote: null };
     }
   })();
 

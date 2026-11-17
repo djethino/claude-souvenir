@@ -3,6 +3,8 @@ import { getConfig } from '../config.js';
 import { resolveProjectDir, getDbPath } from '../utils/paths.js';
 import { getSessions, listProjectDirs } from '../archive/catalog.js';
 import { getArchiveStats } from '../archive/store.js';
+import { archiveBacklog, archiveInProgress } from '../archive/archiver.js';
+import { listProjectDirsOnDisk } from '../transcript/discovery.js';
 import { buildIndex } from '../db/indexer.js';
 import { getDb, getIndexStatus, getIndexIdentity, fullVacuum } from '../db/store.js';
 import { docsDbExists, getDocsIndexIdentity, getDocsChunkCount } from '../docs/store.js';
@@ -52,6 +54,15 @@ function getStatusReport(projectFilter?: string): string {
   const archive = getArchiveStats(projectDir);
 
   const lines = ['Archive (every line of every transcript, kept after Claude Code deletes its files):'];
+  // The copy runs in the background (server start, after each interaction): say when it is not done
+  const copying = archiveInProgress();
+  const backlog = archiveBacklog(projectDir ? [projectDir] : listProjectDirsOnDisk());
+  if (copying) {
+    lines.push(`  Copy in progress (${copying.phase}: ${copying.current}/${copying.total}): the figures below are not final yet.`);
+  }
+  if (backlog.transcripts > 0) {
+    lines.push(`  Not archived yet: ${formatSize(backlog.bytes)} in ${backlog.transcripts} transcript(s) (copied at server start, after each interaction, and before reading or searching a project).`);
+  }
   lines.push(`  Sessions: ${archive.sessions} (${archive.files} transcripts with subagents) | Lines: ${archive.lines} | ${formatSize(archive.storedBytes)} compressed`);
   lines.push(`  Saved files (tool results, images …): ${archive.attachments} | ${formatSize(archive.attachmentBytes)} compressed`);
   lines.push(`  Transcripts Claude Code deleted, read from the archive: ${archive.sourcesGone}`);
@@ -227,7 +238,9 @@ function databaseSize(dbPath: string): number {
 }
 
 function formatSize(bytes: number): string {
-  return bytes >= 1024 ** 3 ? `${(bytes / 1024 ** 3).toFixed(2)} GB` : `${(bytes / 1024 ** 2).toFixed(1)} MB`;
+  if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(2)} GB`;
+  if (bytes >= 1024 ** 2) return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
+  return `${Math.ceil(bytes / 1024)} KB`;
 }
 
 function runVacuum(): string {

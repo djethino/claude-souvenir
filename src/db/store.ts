@@ -3,7 +3,7 @@ import { existsSync, statSync as fsStatSync } from 'fs';
 import { isAbsolute, relative, sep } from 'path';
 import { getDbPath, getProjectsDir } from '../utils/paths.js';
 import { logger } from '../utils/logger.js';
-import { CREATE_TABLES, CREATE_INDEXES, SCHEMA_VERSION, CHUNK_VECTORS, LEGACY_VEC_TABLE, createChunkVectorsTable } from './schema.js';
+import { CREATE_TABLES, CREATE_INDEXES, SCHEMA_VERSION, CHUNK_VECTORS, LEGACY_VEC_TABLE, chunksTableSql, createChunkVectorsTable } from './schema.js';
 import { type Db, openDatabase, inTransaction, vectorBlob, getRow, allRows, iterateRows } from './sqlite.js';
 import {
   IndexMismatchError, assertSameIdentity, deleteOrphanVectors, getStoredIdentity, migrateLegacyIdentity,
@@ -17,12 +17,26 @@ export interface ChunkRow {
   project_dir: string;
   entry_uuid: string | null;
   role: string | null;
-  /** The text embedded for this chunk (one part of a long exchange, see embedding/chunker.ts) */
-  content_text: string;
+  /**
+   * The text embedded for this chunk (one part of a long exchange, see embedding/chunker.ts), or
+   * null for a chunk of an archived transcript: its text is re-made from the archive
+   * (embedding/chunk-text.ts) with the fields below.
+   */
+  content_text: string | null;
   timestamp: string | null;
   line_number: number | null;
   part: number;
+  /** Last archive line of the exchange the chunk was cut from (null when content_text is kept) */
+  end_line: number | null;
+  /** Where the chunk is in the exchange's text: [text_start, text_end) */
+  text_start: number | null;
+  text_end: number | null;
+  /** Chunker format that made the chunk (CHUNK_TEXT_FORMAT), null when content_text is kept */
+  text_format: number | null;
 }
+
+/** A chunk whose text is known: kept in the database, or re-made from the archive. */
+export type TextChunkRow = ChunkRow & { content_text: string };
 
 export interface VecSearchResult extends ChunkRow {
   distance: number;
@@ -110,7 +124,7 @@ function migrateLegacyVectors(db: Db): void {
       const alreadyMoved = db.prepare(`SELECT chunk_id FROM ${CHUNK_VECTORS} WHERE chunk_id = ?`);
       const insert = db.prepare(`INSERT INTO ${CHUNK_VECTORS} (chunk_id, project_dir, session_id, role, has_user, has_assistant, timestamp, embedding) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
       for (let last = 0; ;) {
-        const rows = page.all(last) as unknown as ChunkRow[];
+        const rows = page.all(last) as unknown as TextChunkRow[]; // schema 1 chunks all have their text
         if (rows.length === 0) break;
         for (const r of rows) {
           const id = BigInt(r.chunk_id);
@@ -135,33 +149,25 @@ function migrateLegacyVectors(db: Db): void {
 }
 
 /**
- * Schema 2 chunks kept a second, shorter copy of their text (embed_text) and one chunk per entry.
- * Re-create the table without embed_text and with a part number (a long exchange is embedded in
- * several parts), keeping every chunk_id so that the vectors stay attached to their chunks.
+ * Re-create the chunks table of an older schema in the current form, keeping every chunk and its
+ * chunk_id so that the vectors stay attached to their chunks:
+ * - schema 2 kept a second, shorter copy of the text (embed_text, dropped) and had no part number;
+ * - schema 3 required content_text; chunks now made from the archive keep no text.
+ * The chunks kept keep their text (content_text).
  */
 function migrateChunksTable(db: Db): void {
   const columns = allRows<{ name: string }>(db, 'PRAGMA table_info(chunks)').map((c) => c.name);
-  if (!columns.includes('embed_text')) return;
+  if (columns.includes('text_format')) return;
 
   const started = Date.now();
+  const part = columns.includes('part') ? 'part' : '0';
   inTransaction(db, () => {
     db.exec(`
-      CREATE TABLE chunks_v3 (
-        chunk_id INTEGER PRIMARY KEY AUTOINCREMENT,
-        session_id TEXT NOT NULL,
-        project_dir TEXT NOT NULL,
-        entry_uuid TEXT,
-        role TEXT,
-        content_text TEXT NOT NULL,
-        timestamp TEXT,
-        line_number INTEGER,
-        part INTEGER NOT NULL DEFAULT 0,
-        UNIQUE(session_id, line_number, part)
-      );
-      INSERT INTO chunks_v3 (chunk_id, session_id, project_dir, entry_uuid, role, content_text, timestamp, line_number, part)
-        SELECT chunk_id, session_id, project_dir, entry_uuid, role, content_text, timestamp, line_number, 0 FROM chunks;
+      ${chunksTableSql('chunks_new')}
+      INSERT INTO chunks_new (chunk_id, session_id, project_dir, entry_uuid, role, content_text, timestamp, line_number, part)
+        SELECT chunk_id, session_id, project_dir, entry_uuid, role, content_text, timestamp, line_number, ${part} FROM chunks;
       DROP TABLE chunks;
-      ALTER TABLE chunks_v3 RENAME TO chunks;
+      ALTER TABLE chunks_new RENAME TO chunks;
     `);
     // Ids above the highest kept one may be reused: no vector may remain for them
     if (tableExists(db, CHUNK_VECTORS)) {
@@ -171,7 +177,7 @@ function migrateChunksTable(db: Db): void {
   });
   db.exec('PRAGMA incremental_vacuum');
   db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
-  logger.info(`Chunks table migrated to schema 3 in ${Date.now() - started} ms`);
+  logger.info(`Chunks table migrated to schema ${SCHEMA_VERSION} in ${Date.now() - started} ms`);
 }
 
 /**
@@ -255,16 +261,22 @@ export interface NewChunk {
   project_dir: string;
   entry_uuid?: string;
   role: string;
+  /** Text to embed; not stored: it is re-made from the archive with the fields below */
   content_text: string;
   timestamp?: string;
   line_number: number;
   part: number;
+  end_line: number;
+  text_start: number;
+  text_end: number;
+  text_format: number;
   hasUser: boolean;
   hasAssistant: boolean;
 }
 
 /**
- * Insert chunks with their embeddings in a single transaction.
+ * Insert chunks with their embeddings in a single transaction. Their text is not stored: the
+ * archive holds it (see embedding/chunk-text.ts).
  */
 export function insertChunks(chunks: NewChunk[], embeddings: Float32Array[]): number {
   const db = getDb();
@@ -274,8 +286,8 @@ export function insertChunks(chunks: NewChunk[], embeddings: Float32Array[]): nu
   }
 
   const insertChunk = db.prepare(`
-    INSERT OR IGNORE INTO chunks (session_id, project_dir, entry_uuid, role, content_text, timestamp, line_number, part)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT OR IGNORE INTO chunks (session_id, project_dir, entry_uuid, role, timestamp, line_number, part, end_line, text_start, text_end, text_format)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   let inserted = 0;
@@ -284,8 +296,9 @@ export function insertChunks(chunks: NewChunk[], embeddings: Float32Array[]): nu
     for (let i = 0; i < chunks.length; i++) {
       const chunk = chunks[i];
       const result = insertChunk.run(
-        chunk.session_id, chunk.project_dir, chunk.entry_uuid || null, chunk.role, chunk.content_text,
+        chunk.session_id, chunk.project_dir, chunk.entry_uuid || null, chunk.role,
         chunk.timestamp || null, chunk.line_number, chunk.part,
+        chunk.end_line, chunk.text_start, chunk.text_end, chunk.text_format,
       );
 
       if (result.changes > 0) {
@@ -334,7 +347,7 @@ export function getChunksWithoutVectors(projectDir: string, afterChunkId: number
 }
 
 /** Give vectors to existing chunks (re-embedded after a model change). */
-export function insertVectors(chunks: ChunkRow[], embeddings: Float32Array[]): void {
+export function insertVectors(chunks: TextChunkRow[], embeddings: Float32Array[]): void {
   const db = getDb();
   inTransaction(db, () => {
     chunks.forEach((c, i) => {
@@ -392,9 +405,12 @@ export function searchSemantic(
   `).all(...params) as unknown as VecSearchResult[];
 }
 
-/** Every chunk of a session, in transcript order (the only content left of a partial session). */
-export function getSessionChunks(projectDir: string, sessionId: string): ChunkRow[] {
-  return allRows<ChunkRow>(getDb(), 'SELECT * FROM chunks WHERE project_dir = ? AND session_id = ? ORDER BY line_number, part', projectDir, sessionId);
+/**
+ * Every chunk of a partial session, in transcript order: the only content left of it. Its chunks
+ * keep their text (only chunks of archived transcripts are re-made from the archive).
+ */
+export function getSessionChunks(projectDir: string, sessionId: string): TextChunkRow[] {
+  return allRows<TextChunkRow>(getDb(), 'SELECT * FROM chunks WHERE project_dir = ? AND session_id = ? AND content_text IS NOT NULL ORDER BY line_number, part', projectDir, sessionId);
 }
 
 /**
@@ -402,11 +418,11 @@ export function getSessionChunks(projectDir: string, sessionId: string): ChunkRo
  * matches, one at a time: LIKE for plain text (case-insensitive for ASCII), every chunk when the
  * caller filters them itself (regex, case-insensitive text beyond ASCII).
  */
-export function iteratePartialSessionChunks(projectDir: string, likePattern: string | null): Generator<ChunkRow> {
-  const archived = 'session_id NOT IN (SELECT session_id FROM transcript_files WHERE project_dir = ?)';
+export function iteratePartialSessionChunks(projectDir: string, likePattern: string | null): Generator<TextChunkRow> {
+  const archived = 'session_id NOT IN (SELECT session_id FROM transcript_files WHERE project_dir = ?) AND content_text IS NOT NULL';
   return likePattern === null
-    ? iterateRows<ChunkRow>(getDb(), `SELECT * FROM chunks WHERE project_dir = ? AND ${archived}`, projectDir, projectDir)
-    : iterateRows<ChunkRow>(getDb(), `SELECT * FROM chunks WHERE project_dir = ? AND ${archived} AND content_text LIKE ? ESCAPE '\\'`, projectDir, projectDir, likePattern);
+    ? iterateRows<TextChunkRow>(getDb(), `SELECT * FROM chunks WHERE project_dir = ? AND ${archived}`, projectDir, projectDir)
+    : iterateRows<TextChunkRow>(getDb(), `SELECT * FROM chunks WHERE project_dir = ? AND ${archived} AND content_text LIKE ? ESCAPE '\\'`, projectDir, projectDir, likePattern);
 }
 
 /**

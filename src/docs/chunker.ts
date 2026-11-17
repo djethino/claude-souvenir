@@ -1,14 +1,19 @@
 import { readFileSync } from 'fs';
 import { extname } from 'path';
+import { EMBED_WINDOW_CHARS, WINDOW_OVERLAP_CHARS, windows } from '../embedding/chunker.js';
 import type { DocCategory } from './store.js';
 
 export interface DocChunk {
   file_path: string;
   category: DocCategory;
+  /** The lines of the chunk (stored: shown in results) */
   content_text: string;
+  /** What is embedded: the chunk's location, then its lines (not stored) */
   embed_text: string;
   start_line: number;
   end_line: number;
+  /** Part of a line too long for one chunk (0 otherwise): its parts share the line */
+  part: number;
   section_path: string | null;
 }
 
@@ -63,19 +68,76 @@ export function isSupportedExtension(filePath: string): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// Chunking constants
+// Splitting a block of lines into chunks
 // ---------------------------------------------------------------------------
 
-const MAX_EMBED_CHARS = 1600;
-const MAX_CONTENT_CHARS = 2000;
-const MAX_CHUNK_LINES = 80;
-const MIN_CHUNK_LINES = 5;
+/** Where a chunk is, written before its lines in the embedded text. */
+type Location = (startLine: number, endLine: number) => string;
 
-function truncateForEmbed(text: string, maxChars: number): string {
-  if (text.length <= maxChars) return text;
-  const truncated = text.slice(0, maxChars);
-  const lastSpace = truncated.lastIndexOf(' ');
-  return lastSpace > maxChars * 0.7 ? truncated.slice(0, lastSpace) : truncated;
+/**
+ * Cut lines [first, first + lines.length) of a file into chunks whose embedded text (location +
+ * lines) fits one embedding window, so that every line is embedded: nothing is truncated.
+ * A chunk ends at a blank line when one is near its end; consecutive chunks share up to
+ * WINDOW_OVERLAP_CHARS of lines; a line too long for one chunk is cut into parts.
+ */
+function blockChunks(
+  lines: string[],
+  first: number,
+  base: { file_path: string; category: DocCategory; section_path: string | null },
+  location: Location,
+): DocChunk[] {
+  const last = first + lines.length - 1;
+  // Room left for the lines once the longest location is written (at least half a window)
+  const budget = Math.max(EMBED_WINDOW_CHARS - location(last, last).length - 1, EMBED_WINDOW_CHARS / 2);
+  const chunks: DocChunk[] = [];
+  const push = (text: string, startLine: number, endLine: number, part: number) => {
+    if (!text.trim()) return;
+    chunks.push({ ...base, content_text: text, embed_text: `${location(startLine, endLine)}\n${text}`, start_line: startLine, end_line: endLine, part });
+  };
+
+  let start = 0;
+  while (start < lines.length) {
+    if (lines[start].length > budget) {
+      const line = lines[start];
+      windows(line, budget).forEach(({ start: s, end: e }, part) => push(line.slice(s, e), first + start, first + start, part));
+      start++;
+      continue;
+    }
+
+    // As many lines as fit
+    let end = start;
+    let length = -1;
+    while (end < lines.length && lines[end].length <= budget && length + 1 + lines[end].length <= budget) {
+      length += 1 + lines[end].length;
+      end++;
+    }
+    // End after a blank line when one is in the last 30% of the chunk
+    if (end < lines.length) {
+      let upTo = length;
+      for (let k = end - 1; k > start; k--) {
+        upTo -= 1 + lines[k].length;
+        if (upTo < budget * 0.7) break;
+        if (lines[k - 1].trim() === '') {
+          end = k;
+          break;
+        }
+      }
+    }
+    push(lines.slice(start, end).join('\n'), first + start, first + end - 1, 0);
+    if (end >= lines.length) break;
+
+    // The next chunk starts with the last lines of this one (not before a line cut into parts)
+    let next = end;
+    if (lines[end].length <= budget) {
+      let shared = 0;
+      while (next - 1 > start && shared + lines[next - 1].length + 1 <= WINDOW_OVERLAP_CHARS) {
+        next--;
+        shared += lines[next].length + 1;
+      }
+    }
+    start = next;
+  }
+  return chunks;
 }
 
 // ---------------------------------------------------------------------------
@@ -140,38 +202,12 @@ function chunkMarkdown(
   const headers = parseMarkdownHeaders(lines);
   const chunks: DocChunk[] = [];
   const sections: DocSection[] = [];
+  const inFile: Location = () => `[${relativePath}]`;
 
-  if (headers.length === 0) {
-    // No headers: treat as a single chunk
-    const content = lines.join('\n');
-    if (content.trim()) {
-      chunks.push({
-        file_path: relativePath,
-        category: 'doc',
-        content_text: truncateForEmbed(content, MAX_CONTENT_CHARS),
-        embed_text: truncateForEmbed(`[${relativePath}]\n${content}`, MAX_EMBED_CHARS),
-        start_line: 1,
-        end_line: lines.length,
-        section_path: null,
-      });
-    }
-    return { chunks, sections };
-  }
-
-  // Content before first header (if any)
-  if (headers[0].lineIndex > 0) {
-    const preContent = lines.slice(0, headers[0].lineIndex).join('\n');
-    if (preContent.trim()) {
-      chunks.push({
-        file_path: relativePath,
-        category: 'doc',
-        content_text: truncateForEmbed(preContent, MAX_CONTENT_CHARS),
-        embed_text: truncateForEmbed(`[${relativePath}]\n${preContent}`, MAX_EMBED_CHARS),
-        start_line: 1,
-        end_line: headers[0].lineIndex,
-        section_path: null,
-      });
-    }
+  // Text before the first header (the whole file when it has none)
+  const preEnd = headers.length > 0 ? headers[0].lineIndex : lines.length;
+  if (preEnd > 0) {
+    chunks.push(...blockChunks(lines.slice(0, preEnd), 1, { file_path: relativePath, category: 'doc', section_path: null }, inFile));
   }
 
   // Process each header section
@@ -179,8 +215,6 @@ function chunkMarkdown(
     const header = headers[hi];
     const startLine = header.lineIndex; // 0-based
     const endLine = hi + 1 < headers.length ? headers[hi + 1].lineIndex : lines.length;
-    const sectionLines = lines.slice(startLine, endLine);
-    const sectionContent = sectionLines.join('\n');
     const sectionPath = buildSectionPath(headers, hi);
 
     // Register section for navigation
@@ -193,200 +227,37 @@ function chunkMarkdown(
       section_path: sectionPath,
     });
 
-    if (!sectionContent.trim()) continue;
-
-    // If section is too long, split at paragraph boundaries
-    if (sectionContent.length > MAX_CONTENT_CHARS) {
-      const subChunks = splitAtParagraphs(sectionLines, startLine, relativePath, 'doc', sectionPath);
-      chunks.push(...subChunks);
-    } else {
-      chunks.push({
-        file_path: relativePath,
-        category: 'doc',
-        content_text: truncateForEmbed(sectionContent, MAX_CONTENT_CHARS),
-        embed_text: truncateForEmbed(`[${sectionPath}]\n${sectionContent}`, MAX_EMBED_CHARS),
-        start_line: startLine + 1,
-        end_line: endLine,
-        section_path: sectionPath,
-      });
-    }
+    chunks.push(...blockChunks(
+      lines.slice(startLine, endLine),
+      startLine + 1,
+      { file_path: relativePath, category: 'doc', section_path: sectionPath },
+      () => `[${sectionPath}]`,
+    ));
   }
 
   return { chunks, sections };
 }
 
 // ---------------------------------------------------------------------------
-// Code chunking (by blank line boundaries)
+// Code and config chunking (by lines, preferring blank lines as boundaries)
 // ---------------------------------------------------------------------------
 
 function chunkCode(
   lines: string[],
   relativePath: string,
 ): { chunks: DocChunk[]; sections: DocSection[] } {
-  const chunks: DocChunk[] = [];
-
-  if (lines.length <= MAX_CHUNK_LINES) {
-    // Small file: single chunk
-    const content = lines.join('\n');
-    if (content.trim()) {
-      chunks.push({
-        file_path: relativePath,
-        category: 'code',
-        content_text: truncateForEmbed(content, MAX_CONTENT_CHARS),
-        embed_text: truncateForEmbed(`[${relativePath}]\n${content}`, MAX_EMBED_CHARS),
-        start_line: 1,
-        end_line: lines.length,
-        section_path: null,
-      });
-    }
-    return { chunks, sections: [] };
-  }
-
-  // Find blank line positions (good split points)
-  const splitPoints: number[] = [];
-  for (let i = 0; i < lines.length; i++) {
-    if (lines[i].trim() === '') {
-      splitPoints.push(i);
-    }
-  }
-
-  // Group lines into chunks of ~MAX_CHUNK_LINES, splitting at blank lines
-  let chunkStart = 0;
-
-  while (chunkStart < lines.length) {
-    let chunkEnd = Math.min(chunkStart + MAX_CHUNK_LINES, lines.length);
-
-    // Try to find a blank line near the target end to split cleanly
-    if (chunkEnd < lines.length) {
-      const nearestBlank = splitPoints.find(
-        (p) => p >= chunkStart + MIN_CHUNK_LINES && p <= chunkEnd,
-      );
-      // Prefer the last blank line in the range
-      const candidates = splitPoints.filter(
-        (p) => p >= chunkStart + MIN_CHUNK_LINES && p <= chunkEnd,
-      );
-      if (candidates.length > 0) {
-        chunkEnd = candidates[candidates.length - 1] + 1;
-      }
-    }
-
-    const chunkLines = lines.slice(chunkStart, chunkEnd);
-    const content = chunkLines.join('\n');
-
-    if (content.trim()) {
-      chunks.push({
-        file_path: relativePath,
-        category: 'code',
-        content_text: truncateForEmbed(content, MAX_CONTENT_CHARS),
-        embed_text: truncateForEmbed(`[${relativePath}:${chunkStart + 1}-${chunkEnd}]\n${content}`, MAX_EMBED_CHARS),
-        start_line: chunkStart + 1,
-        end_line: chunkEnd,
-        section_path: null,
-      });
-    }
-
-    chunkStart = chunkEnd;
-  }
-
+  const chunks = blockChunks(lines, 1, { file_path: relativePath, category: 'code', section_path: null },
+    (start, end) => `[${relativePath}:${start}-${end}]`);
   return { chunks, sections: [] };
 }
-
-// ---------------------------------------------------------------------------
-// Config chunking (single chunk or split by sections)
-// ---------------------------------------------------------------------------
 
 function chunkConfig(
   lines: string[],
   relativePath: string,
 ): { chunks: DocChunk[]; sections: DocSection[] } {
-  const content = lines.join('\n');
-  const chunks: DocChunk[] = [];
-
-  if (!content.trim()) return { chunks, sections: [] };
-
-  if (content.length <= MAX_CONTENT_CHARS) {
-    // Small config: single chunk
-    chunks.push({
-      file_path: relativePath,
-      category: 'config',
-      content_text: truncateForEmbed(content, MAX_CONTENT_CHARS),
-      embed_text: truncateForEmbed(`[config: ${relativePath}]\n${content}`, MAX_EMBED_CHARS),
-      start_line: 1,
-      end_line: lines.length,
-      section_path: null,
-    });
-  } else {
-    // Large config: split at blank lines like code
-    const codeResult = chunkCode(lines, relativePath);
-    for (const chunk of codeResult.chunks) {
-      chunk.category = 'config';
-    }
-    chunks.push(...codeResult.chunks);
-  }
-
+  const chunks = blockChunks(lines, 1, { file_path: relativePath, category: 'config', section_path: null },
+    () => `[config: ${relativePath}]`);
   return { chunks, sections: [] };
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function splitAtParagraphs(
-  lines: string[],
-  baseLineIndex: number,
-  relativePath: string,
-  category: DocCategory,
-  sectionPath: string | null,
-): DocChunk[] {
-  const chunks: DocChunk[] = [];
-  let blockStart = 0;
-  let currentBlock: string[] = [];
-
-  for (let i = 0; i < lines.length; i++) {
-    currentBlock.push(lines[i]);
-    const blockContent = currentBlock.join('\n');
-
-    // Split when block is large enough and we hit a blank line
-    if (blockContent.length >= MAX_CONTENT_CHARS * 0.8 && lines[i].trim() === '') {
-      if (blockContent.trim()) {
-        chunks.push({
-          file_path: relativePath,
-          category,
-          content_text: truncateForEmbed(blockContent, MAX_CONTENT_CHARS),
-          embed_text: truncateForEmbed(
-            sectionPath ? `[${sectionPath}]\n${blockContent}` : `[${relativePath}]\n${blockContent}`,
-            MAX_EMBED_CHARS,
-          ),
-          start_line: baseLineIndex + blockStart + 1,
-          end_line: baseLineIndex + i + 1,
-          section_path: sectionPath,
-        });
-      }
-      blockStart = i + 1;
-      currentBlock = [];
-    }
-  }
-
-  // Remaining content
-  if (currentBlock.length > 0) {
-    const remaining = currentBlock.join('\n');
-    if (remaining.trim()) {
-      chunks.push({
-        file_path: relativePath,
-        category,
-        content_text: truncateForEmbed(remaining, MAX_CONTENT_CHARS),
-        embed_text: truncateForEmbed(
-          sectionPath ? `[${sectionPath}]\n${remaining}` : `[${relativePath}]\n${remaining}`,
-          MAX_EMBED_CHARS,
-        ),
-        start_line: baseLineIndex + blockStart + 1,
-        end_line: baseLineIndex + lines.length,
-        section_path: sectionPath,
-      });
-    }
-  }
-
-  return chunks;
 }
 
 // ---------------------------------------------------------------------------

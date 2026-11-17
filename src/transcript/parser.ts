@@ -29,14 +29,22 @@ const SKIPPED_LINE_MARKER = '"file-history-snapshot"';
 /** Entry types read when the caller names none. */
 export const DEFAULT_ENTRY_TYPES = ['user', 'assistant', 'summary'];
 
-/**
- * Parse an archived transcript (see archive/store.ts), yielding entries one at a time.
- * Applies pre-filters on raw strings before JSON.parse for performance.
- */
+/** readTranscript as an async iterator, for the callers that read with for await. */
 export async function* parseTranscript(
   fileKey: string,
   options: ParseOptions = {},
 ): AsyncGenerator<ParsedLine> {
+  yield* readTranscript(fileKey, options);
+}
+
+/**
+ * Parse an archived transcript (see archive/store.ts), yielding entries one at a time.
+ * Applies pre-filters on raw strings before JSON.parse for performance.
+ */
+export function* readTranscript(
+  fileKey: string,
+  options: ParseOptions = {},
+): Generator<ParsedLine> {
   const {
     includeTypes = DEFAULT_ENTRY_TYPES,
     fromLine = 1,

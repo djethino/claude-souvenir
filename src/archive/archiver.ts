@@ -54,9 +54,59 @@ const NEWLINE = 0x0a;
  */
 export const archiveProjects = serialized(runArchive);
 
+/** Where this process's running archive copy is, null when none runs. */
+let running: ArchiveProgress | null = null;
+
+/** The archive copy running in this process, if any (another process may be copying too). */
+export function archiveInProgress(): ArchiveProgress | null {
+  return running;
+}
+
+/**
+ * What Claude Code wrote that the archive does not hold yet, measured on disk: transcripts with
+ * bytes beyond the archived ones (a session being written always has a few) and their size.
+ */
+export function archiveBacklog(projectDirs: string[]): { transcripts: number; bytes: number } {
+  const backlog = { transcripts: 0, bytes: 0 };
+  for (const projectDir of projectDirs) {
+    const archived = new Map(getArchivedFiles(projectDir).map((f) => [f.file_key, f.archived_bytes]));
+    for (const source of listSourceFiles(projectDir).transcripts) {
+      let size: number;
+      try {
+        size = statSync(source.path).size;
+      } catch {
+        continue; // deleted meanwhile: the next copy marks it gone
+      }
+      const missing = size - (archived.get(source.fileKey) ?? 0);
+      if (missing > 0) {
+        backlog.transcripts++;
+        backlog.bytes += missing;
+      }
+    }
+  }
+  return backlog;
+}
+
 async function runArchive(
   projectDirs: string[],
   options: { onProgress?: (progress: ArchiveProgress) => void; signal?: AbortSignal } = {},
+): Promise<ArchiveReport> {
+  try {
+    return await copyProjects(projectDirs, {
+      ...options,
+      onProgress: (progress) => {
+        running = progress;
+        options.onProgress?.(progress);
+      },
+    });
+  } finally {
+    running = null;
+  }
+}
+
+async function copyProjects(
+  projectDirs: string[],
+  options: { onProgress?: (progress: ArchiveProgress) => void; signal?: AbortSignal },
 ): Promise<ArchiveReport> {
   const report: ArchiveReport = { filesUpdated: 0, linesAdded: 0, attachmentsUpdated: 0, sourcesGone: 0, errors: [] };
 
