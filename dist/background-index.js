@@ -426,10 +426,10 @@ function createEmbeddingProvider(config) {
 
 // src/utils/serial.ts
 function serialized(fn) {
-  let queue2 = Promise.resolve();
+  let queue = Promise.resolve();
   return (...args) => {
-    const run2 = queue2.then(() => fn(...args));
-    queue2 = run2.catch(() => {
+    const run2 = queue.then(() => fn(...args));
+    queue = run2.catch(() => {
     });
     return run2;
   };
@@ -1613,22 +1613,9 @@ var PENDING_PAGE_SIZE = 2e3;
 function buildIndex(...args) {
   return exclusive(() => runBuildIndex(...args));
 }
-var queue = serialized((task) => task());
-var tasksQueued = 0;
-var lastTask = Promise.resolve();
-function exclusive(task) {
-  tasksQueued++;
-  const run2 = queue(task).finally(() => {
-    tasksQueued--;
-  });
-  lastTask = run2.catch(() => {
-  });
-  return run2;
-}
+var exclusive = serialized((task) => task());
 async function runBuildIndex(provider, projectDirs, options = {}) {
-  const { sessionId, includeSubagents = true, rebuild = false, onProgress, signal, deadline } = options;
-  const late = () => deadline !== void 0 && Date.now() >= deadline;
-  let unfinished = false;
+  const { sessionId, includeSubagents = true, rebuild = false, onProgress, signal } = options;
   const archive = await archiveProjects(projectDirs, { onProgress, signal });
   if (!provider.isReady()) {
     onProgress?.({ phase: "Initializing embedding model", current: 0, total: 1 });
@@ -1657,10 +1644,6 @@ async function runBuildIndex(provider, projectDirs, options = {}) {
     onProgress?.({ phase: `Indexing ${projectDir}`, current: 0, total: totalFiles });
     for (let fi = 0; fi < files.length; fi++) {
       if (signal?.aborted) break;
-      if (late()) {
-        unfinished = true;
-        break;
-      }
       const file = files[fi];
       onProgress?.({
         phase: `Indexing ${projectDir}`,
@@ -1689,7 +1672,7 @@ async function runBuildIndex(provider, projectDirs, options = {}) {
         let added = 0;
         let stopped = false;
         for (const batch of textBatches(chunks, lastLine)) {
-          if (signal?.aborted || late()) {
+          if (signal?.aborted) {
             stopped = true;
             break;
           }
@@ -1706,7 +1689,6 @@ async function runBuildIndex(provider, projectDirs, options = {}) {
         }
         totalEmbedded += added;
         if (stopped) {
-          unfinished = unfinished || !signal?.aborted;
           if (added > 0) filesProcessed++;
           break;
         }
@@ -1722,9 +1704,7 @@ async function runBuildIndex(provider, projectDirs, options = {}) {
     }
     if (!signal?.aborted && hasPendingVectors(projectDir)) {
       try {
-        const pending = await embedPendingChunks(provider, projectDir, onProgress, signal, deadline);
-        totalEmbedded += pending.embedded;
-        if (!pending.done && !signal?.aborted) unfinished = true;
+        totalEmbedded += await embedPendingChunks(provider, projectDir, onProgress, signal);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         logger.error(`Error re-embedding the kept chunks of ${projectDir}:`, msg);
@@ -1733,7 +1713,7 @@ async function runBuildIndex(provider, projectDirs, options = {}) {
     }
   }
   logger.info(`Indexing complete: ${totalChunks} chunks, ${totalEmbedded} embedded, ${filesProcessed} files, ${skipped} skipped`);
-  return { totalChunks, totalEmbedded, filesProcessed, skipped, errors, resetAll, archive, unfinished };
+  return { totalChunks, totalEmbedded, filesProcessed, skipped, errors, resetAll, archive };
 }
 function textBatches(chunks, lastLine) {
   const batches = [];
@@ -1812,10 +1792,10 @@ function upgradeOldChunks(provider, options) {
     return result;
   });
 }
-async function embedPendingChunks(provider, projectDir, onProgress, signal, deadline) {
+async function embedPendingChunks(provider, projectDir, onProgress, signal) {
   let embedded = 0;
   for (let after = 0; ; ) {
-    if (signal?.aborted || deadline !== void 0 && Date.now() >= deadline) return { embedded, done: false };
+    if (signal?.aborted) return embedded;
     const { missing, lastChunkId } = getChunksWithoutVectors(projectDir, after, PENDING_PAGE_SIZE);
     if (lastChunkId === null) break;
     for (let i = 0; i < missing.length; i += EMBED_BATCH_SIZE) {
@@ -1828,7 +1808,7 @@ async function embedPendingChunks(provider, projectDir, onProgress, signal, dead
     after = lastChunkId;
   }
   clearPendingVectors(projectDir);
-  return { embedded, done: true };
+  return embedded;
 }
 
 // src/docs/indexer.ts

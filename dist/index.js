@@ -35867,10 +35867,10 @@ import { setImmediate as nextTick } from "timers/promises";
 
 // src/utils/serial.ts
 function serialized(fn) {
-  let queue2 = Promise.resolve();
+  let queue = Promise.resolve();
   return (...args) => {
-    const run = queue2.then(() => fn(...args));
-    queue2 = run.catch(() => {
+    const run = queue.then(() => fn(...args));
+    queue = run.catch(() => {
     });
     return run;
   };
@@ -37337,28 +37337,9 @@ var PENDING_PAGE_SIZE = 2e3;
 function buildIndex(...args) {
   return exclusive(() => runBuildIndex(...args));
 }
-var queue = serialized((task) => task());
-var tasksQueued = 0;
-var lastTask = Promise.resolve();
-function exclusive(task) {
-  tasksQueued++;
-  const run = queue(task).finally(() => {
-    tasksQueued--;
-  });
-  lastTask = run.catch(() => {
-  });
-  return run;
-}
-function indexingInProgress() {
-  return tasksQueued > 0;
-}
-async function whenIndexIdle() {
-  while (tasksQueued > 0) await lastTask;
-}
+var exclusive = serialized((task) => task());
 async function runBuildIndex(provider, projectDirs, options = {}) {
-  const { sessionId, includeSubagents = true, rebuild = false, onProgress, signal, deadline } = options;
-  const late = () => deadline !== void 0 && Date.now() >= deadline;
-  let unfinished = false;
+  const { sessionId, includeSubagents = true, rebuild = false, onProgress, signal } = options;
   const archive = await archiveProjects(projectDirs, { onProgress, signal });
   if (!provider.isReady()) {
     onProgress?.({ phase: "Initializing embedding model", current: 0, total: 1 });
@@ -37387,10 +37368,6 @@ async function runBuildIndex(provider, projectDirs, options = {}) {
     onProgress?.({ phase: `Indexing ${projectDir}`, current: 0, total: totalFiles });
     for (let fi = 0; fi < files.length; fi++) {
       if (signal?.aborted) break;
-      if (late()) {
-        unfinished = true;
-        break;
-      }
       const file2 = files[fi];
       onProgress?.({
         phase: `Indexing ${projectDir}`,
@@ -37419,7 +37396,7 @@ async function runBuildIndex(provider, projectDirs, options = {}) {
         let added = 0;
         let stopped = false;
         for (const batch of textBatches(chunks, lastLine)) {
-          if (signal?.aborted || late()) {
+          if (signal?.aborted) {
             stopped = true;
             break;
           }
@@ -37436,7 +37413,6 @@ async function runBuildIndex(provider, projectDirs, options = {}) {
         }
         totalEmbedded += added;
         if (stopped) {
-          unfinished = unfinished || !signal?.aborted;
           if (added > 0) filesProcessed++;
           break;
         }
@@ -37452,9 +37428,7 @@ async function runBuildIndex(provider, projectDirs, options = {}) {
     }
     if (!signal?.aborted && hasPendingVectors(projectDir)) {
       try {
-        const pending = await embedPendingChunks(provider, projectDir, onProgress, signal, deadline);
-        totalEmbedded += pending.embedded;
-        if (!pending.done && !signal?.aborted) unfinished = true;
+        totalEmbedded += await embedPendingChunks(provider, projectDir, onProgress, signal);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         logger.error(`Error re-embedding the kept chunks of ${projectDir}:`, msg);
@@ -37463,7 +37437,7 @@ async function runBuildIndex(provider, projectDirs, options = {}) {
     }
   }
   logger.info(`Indexing complete: ${totalChunks} chunks, ${totalEmbedded} embedded, ${filesProcessed} files, ${skipped} skipped`);
-  return { totalChunks, totalEmbedded, filesProcessed, skipped, errors, resetAll, archive, unfinished };
+  return { totalChunks, totalEmbedded, filesProcessed, skipped, errors, resetAll, archive };
 }
 function textBatches(chunks, lastLine) {
   const batches = [];
@@ -37512,10 +37486,10 @@ async function reindexTranscript(provider, file2, options) {
   if (!indexed) setIndexStateIfAbsent(file2.file_key, file2.archived_bytes, upToLine);
   return { embedded, done: true };
 }
-async function embedPendingChunks(provider, projectDir, onProgress, signal, deadline) {
+async function embedPendingChunks(provider, projectDir, onProgress, signal) {
   let embedded = 0;
   for (let after = 0; ; ) {
-    if (signal?.aborted || deadline !== void 0 && Date.now() >= deadline) return { embedded, done: false };
+    if (signal?.aborted) return embedded;
     const { missing, lastChunkId } = getChunksWithoutVectors(projectDir, after, PENDING_PAGE_SIZE);
     if (lastChunkId === null) break;
     for (let i = 0; i < missing.length; i += EMBED_BATCH_SIZE) {
@@ -37528,7 +37502,7 @@ async function embedPendingChunks(provider, projectDir, onProgress, signal, dead
     after = lastChunkId;
   }
   clearPendingVectors(projectDir);
-  return { embedded, done: true };
+  return embedded;
 }
 
 // src/search/density-boost.ts
@@ -38057,42 +38031,15 @@ function pageFooter(endIndex, maxResults, total, more, nextScore) {
   return `
 --- ${page} | ${remaining}${best} | Next page: offset=${endIndex} ---`;
 }
-var INDEX_BEFORE_SEARCH_MS = 2e4;
-var catchingUp = false;
-var STILL_INDEXING_NOTE = "Note: new messages are still being indexed in the background: the most recent ones may be missing from semantic results for now (text mode searches the whole archive).";
 async function indexBeforeSemanticSearch(provider, projectDirs, ctx) {
   if (projectDirs.length !== 1) {
     return 'Note: across several projects, only messages already indexed are searched: recent sessions of other projects may be missing (souvenir_index action="build" project="all" indexes them; text mode searches the whole archive).';
   }
-  if (catchingUp) return STILL_INDEXING_NOTE;
-  const deadline = Date.now() + INDEX_BEFORE_SEARCH_MS;
-  if (indexingInProgress()) {
-    let timer;
-    await Promise.race([whenIndexIdle(), new Promise((resolve4) => {
-      timer = setTimeout(resolve4, INDEX_BEFORE_SEARCH_MS);
-    })]);
-    clearTimeout(timer);
-    if (indexingInProgress()) return STILL_INDEXING_NOTE;
-  }
   try {
-    const result = await buildIndex(provider, projectDirs, {
-      rebuild: false,
-      onProgress: createProgressNotifier(ctx),
-      deadline
-    });
-    const notes = [];
-    if (result.unfinished) {
-      catchingUp = true;
-      void buildIndex(provider, projectDirs, { rebuild: false }).catch((err) => logger.warn("Background indexing after search failed:", err)).finally(() => {
-        catchingUp = false;
-      });
-      notes.push(STILL_INDEXING_NOTE);
-    }
-    if (result.errors.length > 0) {
-      const count = result.errors.length >= 5 ? "5 or more" : String(result.errors.length);
-      notes.push(`Note: ${count} transcript(s) could not be indexed, so their newest messages may be missing from semantic results (first error: ${result.errors[0]}). Text mode searches the whole archive.`);
-    }
-    return notes.length > 0 ? notes.join("\n") : null;
+    const result = await buildIndex(provider, projectDirs, { rebuild: false, onProgress: createProgressNotifier(ctx) });
+    if (result.errors.length === 0) return null;
+    const count = result.errors.length >= 5 ? "5 or more" : String(result.errors.length);
+    return `Note: ${count} transcript(s) could not be indexed, so their newest messages may be missing from semantic results (first error: ${result.errors[0]}). Text mode searches the whole archive.`;
   } catch (err) {
     logger.warn("Indexing before search failed:", err);
     return `Note: indexing new messages failed (${errorMessage(err)}), so the latest messages may be missing from semantic results. Text mode searches the whole archive.`;

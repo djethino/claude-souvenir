@@ -159,7 +159,7 @@ Search through transcripts and/or project files.
 | `case_sensitive` | For text mode |
 | `regex` | For text mode: treat query as regex |
 
-Before a semantic or hybrid search, the project's new messages are indexed, for up to 20 seconds. With a larger backlog (a first index, a long pause), the search runs on what is indexed and says that the most recent messages may be missing; indexing goes on in the background. Text mode always searches the whole archive.
+Before a semantic or hybrid search, the project's new messages are indexed (with progress shown), so the search covers the whole conversation. With a large backlog (a first index, a long pause) this can take minutes once. Text mode always searches the whole archive.
 
 Filters are applied inside the vector search, so a filtered search still returns up to `max_results` matches. Every page ends with the offset of the next one; semantic and hybrid searches have no fixed total (the nearest matches keep coming), so they show "N+" while more exist. When hybrid search cannot run one of its halves (embedding server down, incompatible index), the answer says so and shows the other half. Results include hints about matches in the other source (transcripts ↔ project files). When a session is resumed or forked, Claude Code copies earlier messages into the new session's transcript: a match found in several sessions with the same entry and the same text is shown once, with the other sessions listed ("also in session(s)").
 

@@ -41,8 +41,6 @@ interface BuildIndexOptions {
   rebuild?: boolean;
   onProgress?: (progress: IndexProgress) => void;
   signal?: AbortSignal;
-  /** Stop starting new batches after this time (Date.now()); what is left is indexed by a later build */
-  deadline?: number;
 }
 
 interface BuildIndexResult {
@@ -54,8 +52,6 @@ interface BuildIndexResult {
   resetAll: boolean;
   /** Archiving done before indexing (the index is built from the archive) */
   archive: ArchiveReport;
-  /** The deadline came before everything new was indexed */
-  unfinished: boolean;
 }
 
 /**
@@ -80,37 +76,15 @@ export function buildIndex(...args: Parameters<typeof runBuildIndex>): ReturnTyp
 }
 
 /** Index work of this process runs one task at a time (builds, upgrades of old chunks). */
-const queue = serialized(<T>(task: () => Promise<T>): Promise<T> => task()) as <T>(task: () => Promise<T>) => Promise<T>;
-let tasksQueued = 0;
-let lastTask: Promise<unknown> = Promise.resolve();
+const exclusive = serialized(<T>(task: () => Promise<T>): Promise<T> => task()) as <T>(task: () => Promise<T>) => Promise<T>;
 
-function exclusive<T>(task: () => Promise<T>): Promise<T> {
-  tasksQueued++;
-  const run = queue(task).finally(() => {
-    tasksQueued--;
-  });
-  lastTask = run.catch(() => {});
-  return run;
-}
-
-/** Whether index work runs (or waits) in this process. */
-export function indexingInProgress(): boolean {
-  return tasksQueued > 0;
-}
-
-/** Resolves once no index work runs or waits in this process. */
-export async function whenIndexIdle(): Promise<void> {
-  while (tasksQueued > 0) await lastTask;
-}
 
 async function runBuildIndex(
   provider: EmbeddingProvider,
   projectDirs: string[],
   options: BuildIndexOptions = {},
 ): Promise<BuildIndexResult> {
-  const { sessionId, includeSubagents = true, rebuild = false, onProgress, signal, deadline } = options;
-  const late = () => deadline !== undefined && Date.now() >= deadline;
-  let unfinished = false;
+  const { sessionId, includeSubagents = true, rebuild = false, onProgress, signal } = options;
 
   const archive = await archiveProjects(projectDirs, { onProgress, signal });
 
@@ -149,10 +123,6 @@ async function runBuildIndex(
 
     for (let fi = 0; fi < files.length; fi++) {
       if (signal?.aborted) break;
-      if (late()) {
-        unfinished = true;
-        break;
-      }
 
       const file = files[fi];
       onProgress?.({
@@ -189,7 +159,7 @@ async function runBuildIndex(
         let added = 0;
         let stopped = false;
         for (const batch of textBatches(chunks, lastLine)) {
-          if (signal?.aborted || late()) {
+          if (signal?.aborted) {
             stopped = true;
             break;
           }
@@ -208,9 +178,8 @@ async function runBuildIndex(
         }
         totalEmbedded += added;
         if (stopped) {
-          unfinished = unfinished || !signal?.aborted;
           if (added > 0) filesProcessed++;
-          break;
+          break; // aborted
         }
         if (added > 0 || replaced > 0) filesProcessed++;
         else skipped++;
@@ -225,9 +194,7 @@ async function runBuildIndex(
 
     if (!signal?.aborted && hasPendingVectors(projectDir)) {
       try {
-        const pending = await embedPendingChunks(provider, projectDir, onProgress, signal, deadline);
-        totalEmbedded += pending.embedded;
-        if (!pending.done && !signal?.aborted) unfinished = true;
+        totalEmbedded += await embedPendingChunks(provider, projectDir, onProgress, signal);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         logger.error(`Error re-embedding the kept chunks of ${projectDir}:`, msg);
@@ -238,7 +205,7 @@ async function runBuildIndex(
 
   logger.info(`Indexing complete: ${totalChunks} chunks, ${totalEmbedded} embedded, ${filesProcessed} files, ${skipped} skipped`);
 
-  return { totalChunks, totalEmbedded, filesProcessed, skipped, errors, resetAll, archive, unfinished };
+  return { totalChunks, totalEmbedded, filesProcessed, skipped, errors, resetAll, archive };
 }
 
 /**
@@ -377,12 +344,11 @@ async function embedPendingChunks(
   projectDir: string,
   onProgress: BuildIndexOptions['onProgress'],
   signal: AbortSignal | undefined,
-  deadline: number | undefined,
-): Promise<{ embedded: number; done: boolean }> {
+): Promise<number> {
   let embedded = 0;
   for (let after = 0; ;) {
-    // Stopped: the chunks still without vectors are found again by the next build
-    if (signal?.aborted || (deadline !== undefined && Date.now() >= deadline)) return { embedded, done: false };
+    // Aborted: the chunks still without vectors are found again by the next build
+    if (signal?.aborted) return embedded;
     const { missing, lastChunkId } = getChunksWithoutVectors(projectDir, after, PENDING_PAGE_SIZE);
     if (lastChunkId === null) break;
     for (let i = 0; i < missing.length; i += EMBED_BATCH_SIZE) {
@@ -395,5 +361,5 @@ async function embedPendingChunks(
     after = lastChunkId;
   }
   clearPendingVectors(projectDir);
-  return { embedded, done: true };
+  return embedded;
 }
