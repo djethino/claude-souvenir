@@ -9,6 +9,7 @@ import { getOrCreateProvider, errorMessage } from './helpers.js';
 import { buildIndex } from '../db/indexer.js';
 import { logger } from '../utils/logger.js';
 import { applySessionDensityBoost } from '../search/density-boost.js';
+import { CopyMerger, sessionsOf } from '../search/copies.js';
 import type { SearchResult } from '../transcript/types.js';
 import { searchDocsSemantic, docsDbExists, getDocsChunkCount } from '../docs/store.js';
 import type { DocCategory, DocVecSearchResult } from '../docs/store.js';
@@ -75,6 +76,29 @@ function sessionMetadataLookup(): (sessionId: string, projectDir: string) => Ret
   return (sessionId, projectDir) => {
     if (!cache.has(sessionId)) cache.set(sessionId, findSession(sessionId, projectDir));
     return cache.get(sessionId) ?? null;
+  };
+}
+
+/** A semantic match (one indexed chunk) as a search result with the given score. */
+function semanticResult(
+  vr: VecSearchResult,
+  score: number,
+  query: string,
+  metadataOf: ReturnType<typeof sessionMetadataLookup>,
+): SearchResult {
+  const meta = metadataOf(vr.session_id, vr.project_dir);
+  return {
+    sessionId: vr.session_id,
+    projectDir: vr.project_dir,
+    entryUuid: vr.entry_uuid || undefined,
+    role: vr.role || 'turn',
+    content: vr.content_text,
+    snippet: extractSmartSnippet(vr.content_text, query),
+    timestamp: vr.timestamp || undefined,
+    lineNumber: vr.line_number || 0,
+    score,
+    sessionSummary: meta?.summary,
+    sessionFirstPrompt: meta?.firstPrompt,
   };
 }
 
@@ -317,22 +341,11 @@ async function performSemanticSearch(
       seen.add(key);
       return true;
     });
-    const allResults: SearchResult[] = distinct.map((vr) => {
-      const meta = metadataOf(vr.session_id, vr.project_dir);
-      return {
-        sessionId: vr.session_id,
-        projectDir: vr.project_dir,
-        entryUuid: vr.entry_uuid || undefined,
-        role: vr.role || 'turn',
-        content: vr.content_text,
-        snippet: extractSmartSnippet(vr.content_text, params.query),
-        timestamp: vr.timestamp || undefined,
-        lineNumber: vr.line_number || 0,
-        score: 1 - vr.distance, // Convert cosine distance to similarity
-        sessionSummary: meta?.summary,
-        sessionFirstPrompt: meta?.firstPrompt,
-      };
-    });
+    // A resumed session's copies of an exchange are merged into one result that names their sessions
+    const copies = new CopyMerger();
+    const allResults: SearchResult[] = distinct
+      .map((vr) => semanticResult(vr, 1 - vr.distance, params.query, metadataOf)) // cosine distance → similarity
+      .filter((r) => !copies.isCopy(r, r.content));
 
     // Apply session density boost before pagination
     const { results: boostedResults, sessionHitCounts } = applySessionDensityBoost(allResults);
@@ -437,43 +450,36 @@ async function performHybridSearch(
 
   // Merge results
   const merged = new Map<string, SearchResult>();
+  // Text results by entry: a semantic match on a copy of the same entry (resumed session) joins it
+  const textByEntry = new Map<string, SearchResult>();
 
-  // Add text results
+  // Add text results (copies across sessions already merged by textSearch)
   for (const r of textResult.results) {
-    const key = `${r.sessionId}:${r.lineNumber}`;
-    merged.set(key, { ...r, score: r.score * 0.4 }); // Text weight: 0.4
+    const result = { ...r, score: r.score * 0.4 }; // Text weight: 0.4
+    merged.set(`${r.sessionId}:${r.lineNumber}`, result);
+    if (r.entryUuid) textByEntry.set(r.entryUuid, result);
   }
 
   // Add/merge semantic results
   const metadataOf = sessionMetadataLookup();
+  const copies = new CopyMerger();
   // Parts of one long exchange share its line: the closest part (vecResults are sorted by distance) stands for it
   const semanticKeys = new Set<string>();
   for (const vr of vecResults) {
     const key = `${vr.session_id}:${vr.line_number}`;
     if (semanticKeys.has(key)) continue;
     semanticKeys.add(key);
-    const meta = metadataOf(vr.session_id, vr.project_dir);
-    const similarity = 1 - vr.distance;
-    const semanticScore = similarity * 0.6; // Semantic weight: 0.6
+    const result = semanticResult(vr, (1 - vr.distance) * 0.6, params.query, metadataOf); // Semantic weight: 0.6
+    if (copies.isCopy(result, result.content)) continue;
 
-    const existing = merged.get(key);
+    // Found by both searches: in the same session at the same line, or as copies of one entry
+    const textMatch = textByEntry.get(result.entryUuid ?? '');
+    const sameEntry = textMatch && sessionsOf(textMatch).includes(result.sessionId) ? textMatch : undefined;
+    const existing = merged.get(key) ?? sameEntry;
     if (existing) {
-      // Found in both - combine scores
-      existing.score += semanticScore;
+      existing.score += result.score;
     } else {
-      merged.set(key, {
-        sessionId: vr.session_id,
-        projectDir: vr.project_dir,
-        entryUuid: vr.entry_uuid || undefined,
-        role: vr.role || 'turn',
-        content: vr.content_text,
-        snippet: extractSmartSnippet(vr.content_text, params.query),
-        timestamp: vr.timestamp || undefined,
-        lineNumber: vr.line_number || 0,
-        score: semanticScore,
-        sessionSummary: meta?.summary,
-        sessionFirstPrompt: meta?.firstPrompt,
-      });
+      merged.set(key, result);
     }
   }
 

@@ -334,6 +334,7 @@ export function formatSearchResult(
     sessionSummary?: string;
     sessionFirstPrompt?: string;
     lineNumber: number;
+    alsoInSessions?: string[];
   },
   index: number,
   sessionHitCount?: number,
@@ -359,6 +360,10 @@ export function formatSearchResult(
 
   if (result.entryUuid) {
     lines.push(`  entry_uuid: ${result.entryUuid}`);
+  }
+
+  if (result.alsoInSessions?.length) {
+    lines.push(`  also in session(s) ${result.alsoInSessions.join(', ')} (same entry and text, copied by Claude Code when the session was resumed or forked)`);
   }
 
   lines.push(

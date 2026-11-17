@@ -36198,6 +36198,33 @@ function getProjectInfo(projectDir) {
   };
 }
 
+// src/search/copies.ts
+import { createHash } from "crypto";
+var CopyMerger = class {
+  kept = /* @__PURE__ */ new Map();
+  /**
+   * Whether `result` is a copy of a result already kept, whose `alsoInSessions` then records its
+   * session: the caller drops it. Otherwise `result` is kept and stands for its later copies.
+   * `fullText`: the whole text the result was matched on (results only carry an excerpt).
+   */
+  isCopy(result, fullText) {
+    if (!result.entryUuid) return false;
+    const key = `${result.entryUuid}\0${createHash("sha1").update(fullText).digest("hex")}`;
+    const original = this.kept.get(key);
+    if (!original) {
+      this.kept.set(key, result);
+      return false;
+    }
+    if (original.sessionId === result.sessionId) return false;
+    const sessions = original.alsoInSessions ??= [];
+    if (!sessions.includes(result.sessionId)) sessions.push(result.sessionId);
+    return true;
+  }
+};
+function sessionsOf(result) {
+  return [result.sessionId, ...result.alsoInSessions ?? []];
+}
+
 // src/search/text-search.ts
 var CONTEXT_CHARS = 100;
 function extractSnippet(text2, query, caseSensitive) {
@@ -36262,12 +36289,14 @@ async function textSearch(options) {
   const includeTypes = ["summary"];
   if (role === "both" || role === "user") includeTypes.push("user");
   if (role === "both" || role === "assistant") includeTypes.push("assistant");
+  const copies = new CopyMerger();
+  const excerptCopies = new CopyMerger();
   for (const projectDir of projectDirs) {
     const sessions = new Map(getSessions(projectDir, { includeSidechains: true }).map((s) => [s.sessionId, s]));
     const files = getArchivedFiles(projectDir).filter((f) => {
       if (f.parent_session_id !== null && !includeSubagents) return false;
       return !sessionId || f.session_id === sessionId || includeSubagents && f.parent_session_id === sessionId;
-    });
+    }).sort((a, b) => (a.first_timestamp ?? "").localeCompare(b.first_timestamp ?? "") || (a.last_timestamp ?? "").localeCompare(b.last_timestamp ?? ""));
     for (const file2 of files) {
       filesSearched++;
       const meta3 = sessions.get(file2.session_id);
@@ -36284,7 +36313,7 @@ async function textSearch(options) {
           if (!text2) continue;
           const found = match(text2);
           if (!found) continue;
-          allResults.push({
+          const result = {
             sessionId: file2.session_id,
             projectDir,
             entryUuid: entry.uuid,
@@ -36296,7 +36325,8 @@ async function textSearch(options) {
             score: found.score,
             sessionSummary: meta3?.summary,
             sessionFirstPrompt: meta3?.firstPrompt
-          });
+          };
+          if (!copies.isCopy(result, text2)) allResults.push(result);
         }
       } catch (err) {
         logger.warn(`Error searching ${file2.file_key}:`, err);
@@ -36315,7 +36345,7 @@ async function textSearch(options) {
       const found = match(chunk.content_text);
       if (!found) continue;
       const meta3 = sessions.get(chunk.session_id);
-      allResults.push({
+      const result = {
         sessionId: chunk.session_id,
         projectDir,
         entryUuid: chunk.entry_uuid ?? void 0,
@@ -36327,7 +36357,8 @@ async function textSearch(options) {
         score: found.score,
         sessionSummary: meta3?.summary,
         sessionFirstPrompt: meta3?.firstPrompt
-      });
+      };
+      if (!excerptCopies.isCopy(result, chunk.content_text)) allResults.push(result);
     }
   }
   allResults.sort((a, b) => {
@@ -36585,6 +36616,9 @@ function formatSearchResult(result, index, sessionHitCount) {
   lines.push(`  session_id: ${result.sessionId}`);
   if (result.entryUuid) {
     lines.push(`  entry_uuid: ${result.entryUuid}`);
+  }
+  if (result.alsoInSessions?.length) {
+    lines.push(`  also in session(s) ${result.alsoInSessions.join(", ")} (same entry and text, copied by Claude Code when the session was resumed or forked)`);
   }
   lines.push(
     `${ts} | ${result.role} | Line ${result.lineNumber}`,
@@ -37709,6 +37743,22 @@ function sessionMetadataLookup() {
     return cache.get(sessionId) ?? null;
   };
 }
+function semanticResult(vr, score, query, metadataOf) {
+  const meta3 = metadataOf(vr.session_id, vr.project_dir);
+  return {
+    sessionId: vr.session_id,
+    projectDir: vr.project_dir,
+    entryUuid: vr.entry_uuid || void 0,
+    role: vr.role || "turn",
+    content: vr.content_text,
+    snippet: extractSmartSnippet(vr.content_text, query),
+    timestamp: vr.timestamp || void 0,
+    lineNumber: vr.line_number || 0,
+    score,
+    sessionSummary: meta3?.summary,
+    sessionFirstPrompt: meta3?.firstPrompt
+  };
+}
 function extractSmartSnippet(content, query, maxLen = 250) {
   const contentLower = content.toLowerCase();
   const words = query.toLowerCase().split(/\s+/).filter((w) => w.length > 2);
@@ -37856,23 +37906,8 @@ async function performSemanticSearch(params, projectDirs, maxResults, ctx) {
       seen.add(key);
       return true;
     });
-    const allResults = distinct.map((vr) => {
-      const meta3 = metadataOf(vr.session_id, vr.project_dir);
-      return {
-        sessionId: vr.session_id,
-        projectDir: vr.project_dir,
-        entryUuid: vr.entry_uuid || void 0,
-        role: vr.role || "turn",
-        content: vr.content_text,
-        snippet: extractSmartSnippet(vr.content_text, params.query),
-        timestamp: vr.timestamp || void 0,
-        lineNumber: vr.line_number || 0,
-        score: 1 - vr.distance,
-        // Convert cosine distance to similarity
-        sessionSummary: meta3?.summary,
-        sessionFirstPrompt: meta3?.firstPrompt
-      };
-    });
+    const copies = new CopyMerger();
+    const allResults = distinct.map((vr) => semanticResult(vr, 1 - vr.distance, params.query, metadataOf)).filter((r) => !copies.isCopy(r, r.content));
     const { results: boostedResults, sessionHitCounts } = applySessionDensityBoost(allResults);
     const sliced = boostedResults.slice(offset, offset + maxResults);
     const total = boostedResults.length;
@@ -37944,36 +37979,28 @@ async function performHybridSearch(params, projectDirs, maxResults, ctx) {
 
 ` : "";
   const merged = /* @__PURE__ */ new Map();
+  const textByEntry = /* @__PURE__ */ new Map();
   for (const r of textResult.results) {
-    const key = `${r.sessionId}:${r.lineNumber}`;
-    merged.set(key, { ...r, score: r.score * 0.4 });
+    const result = { ...r, score: r.score * 0.4 };
+    merged.set(`${r.sessionId}:${r.lineNumber}`, result);
+    if (r.entryUuid) textByEntry.set(r.entryUuid, result);
   }
   const metadataOf = sessionMetadataLookup();
+  const copies = new CopyMerger();
   const semanticKeys = /* @__PURE__ */ new Set();
   for (const vr of vecResults) {
     const key = `${vr.session_id}:${vr.line_number}`;
     if (semanticKeys.has(key)) continue;
     semanticKeys.add(key);
-    const meta3 = metadataOf(vr.session_id, vr.project_dir);
-    const similarity = 1 - vr.distance;
-    const semanticScore = similarity * 0.6;
-    const existing = merged.get(key);
+    const result = semanticResult(vr, (1 - vr.distance) * 0.6, params.query, metadataOf);
+    if (copies.isCopy(result, result.content)) continue;
+    const textMatch = textByEntry.get(result.entryUuid ?? "");
+    const sameEntry = textMatch && sessionsOf(textMatch).includes(result.sessionId) ? textMatch : void 0;
+    const existing = merged.get(key) ?? sameEntry;
     if (existing) {
-      existing.score += semanticScore;
+      existing.score += result.score;
     } else {
-      merged.set(key, {
-        sessionId: vr.session_id,
-        projectDir: vr.project_dir,
-        entryUuid: vr.entry_uuid || void 0,
-        role: vr.role || "turn",
-        content: vr.content_text,
-        snippet: extractSmartSnippet(vr.content_text, params.query),
-        timestamp: vr.timestamp || void 0,
-        lineNumber: vr.line_number || 0,
-        score: semanticScore,
-        sessionSummary: meta3?.summary,
-        sessionFirstPrompt: meta3?.firstPrompt
-      });
+      merged.set(key, result);
     }
   }
   const allResults = [...merged.values()].sort((a, b) => b.score - a.score);
@@ -38756,12 +38783,12 @@ function runVacuum() {
 // src/tools/docs.ts
 import { existsSync as existsSync8, statSync as statSync5, readFileSync as readFileSync5, writeFileSync } from "fs";
 import { resolve as resolve2, relative as relative4 } from "path";
-import { createHash as createHash2 } from "crypto";
+import { createHash as createHash3 } from "crypto";
 
 // src/docs/indexer.ts
 import { statSync as statSync4, readdirSync as readdirSync2, readFileSync as readFileSync4 } from "fs";
 import { join as join5, relative as relative3, resolve } from "path";
-import { createHash } from "crypto";
+import { createHash as createHash2 } from "crypto";
 
 // src/docs/chunker.ts
 import { readFileSync as readFileSync3 } from "fs";
@@ -39228,7 +39255,7 @@ async function runBuildDocsIndex(projectRoot, provider, options = {}) {
       }
       try {
         const content = readFileSync4(absolutePath, "utf-8");
-        const contentHash = createHash("sha256").update(content).digest("hex");
+        const contentHash = createHash2("sha256").update(content).digest("hex");
         insertSnapshot(projectRoot, relativePath, content, contentHash, stat.size);
       } catch (snapErr) {
         logger.error(`Snapshot error for ${relativePath}:`, snapErr);
@@ -39794,7 +39821,7 @@ async function handleRestore(projectRoot, params, confirm2) {
   if (existsSync8(absolutePath)) {
     try {
       const currentContent = readFileSync5(absolutePath, "utf-8");
-      const currentHash = createHash2("sha256").update(currentContent).digest("hex");
+      const currentHash = createHash3("sha256").update(currentContent).digest("hex");
       const currentStat = statSync5(absolutePath);
       backupSnapshotCreated = insertSnapshot(
         projectRoot,

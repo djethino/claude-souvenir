@@ -3,6 +3,7 @@ import { getSessions } from '../archive/catalog.js';
 import { getArchivedFiles } from '../archive/store.js';
 import { escapeLike, iteratePartialSessionChunks } from '../db/store.js';
 import { logger } from '../utils/logger.js';
+import { CopyMerger } from './copies.js';
 import type { SearchResult, SessionInfo } from '../transcript/types.js';
 
 export interface TextSearchOptions {
@@ -122,14 +123,19 @@ export async function textSearch(options: TextSearchOptions): Promise<{
   if (role === 'both' || role === 'user') includeTypes.push('user');
   if (role === 'both' || role === 'assistant') includeTypes.push('assistant');
 
+  const copies = new CopyMerger();
+  const excerptCopies = new CopyMerger();
+
   for (const projectDir of projectDirs) {
     // Session titles for the results, read once per project (a session can match thousands of times)
     const sessions = new Map<string, SessionInfo>(getSessions(projectDir, { includeSidechains: true }).map((s) => [s.sessionId, s]));
 
+    // Oldest session first: a resumed session's copies of earlier entries are merged into the original
     const files = getArchivedFiles(projectDir).filter((f) => {
       if (f.parent_session_id !== null && !includeSubagents) return false;
       return !sessionId || f.session_id === sessionId || (includeSubagents && f.parent_session_id === sessionId);
-    });
+    }).sort((a, b) =>
+      (a.first_timestamp ?? '').localeCompare(b.first_timestamp ?? '') || (a.last_timestamp ?? '').localeCompare(b.last_timestamp ?? ''));
 
     for (const file of files) {
       filesSearched++;
@@ -150,7 +156,7 @@ export async function textSearch(options: TextSearchOptions): Promise<{
           const found = match(text);
           if (!found) continue;
 
-          allResults.push({
+          const result: SearchResult = {
             sessionId: file.session_id,
             projectDir,
             entryUuid: entry.uuid,
@@ -162,7 +168,8 @@ export async function textSearch(options: TextSearchOptions): Promise<{
             score: found.score,
             sessionSummary: meta?.summary,
             sessionFirstPrompt: meta?.firstPrompt,
-          });
+          };
+          if (!copies.isCopy(result, text)) allResults.push(result);
         }
       } catch (err) {
         logger.warn(`Error searching ${file.file_key}:`, err);
@@ -185,7 +192,7 @@ export async function textSearch(options: TextSearchOptions): Promise<{
       if (!found) continue;
 
       const meta = sessions.get(chunk.session_id);
-      allResults.push({
+      const result: SearchResult = {
         sessionId: chunk.session_id,
         projectDir,
         entryUuid: chunk.entry_uuid ?? undefined,
@@ -197,7 +204,9 @@ export async function textSearch(options: TextSearchOptions): Promise<{
         score: found.score,
         sessionSummary: meta?.summary,
         sessionFirstPrompt: meta?.firstPrompt,
-      });
+      };
+      // An excerpt's text differs from its entry's: excerpts are only merged with copies of the same excerpt
+      if (!excerptCopies.isCopy(result, chunk.content_text)) allResults.push(result);
     }
   }
 

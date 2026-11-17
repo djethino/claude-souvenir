@@ -172,4 +172,6 @@ export interface SearchResult {
   score: number;
   sessionSummary?: string;
   sessionFirstPrompt?: string;
+  /** Other sessions holding a copy of this same entry (resumed or forked sessions, see search/copies.ts) */
+  alsoInSessions?: string[];
 }

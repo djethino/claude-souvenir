@@ -157,7 +157,7 @@ Search through transcripts and/or project files.
 | `case_sensitive` | For text mode |
 | `regex` | For text mode: treat query as regex |
 
-Filters are applied inside the vector search, so a filtered search still returns up to `max_results` matches. Every page ends with the offset of the next one; semantic and hybrid searches have no fixed total (the nearest matches keep coming), so they show "N+" while more exist. When hybrid search cannot run one of its halves (embedding server down, incompatible index), the answer says so and shows the other half. Results include hints about matches in the other source (transcripts ↔ project files).
+Filters are applied inside the vector search, so a filtered search still returns up to `max_results` matches. Every page ends with the offset of the next one; semantic and hybrid searches have no fixed total (the nearest matches keep coming), so they show "N+" while more exist. When hybrid search cannot run one of its halves (embedding server down, incompatible index), the answer says so and shows the other half. Results include hints about matches in the other source (transcripts ↔ project files). When a session is resumed or forked, Claude Code copies earlier messages into the new session's transcript: a match found in several sessions with the same entry and the same text is shown once, with the other sessions listed ("also in session(s)").
 
 ### souvenir_read
 
@@ -344,7 +344,7 @@ src/
 │   ├── ollama.ts          # Ollama provider (default)
 │   ├── openai.ts          # OpenAI-compatible provider
 │   └── chunker.ts         # Archived transcript → chunks (long exchanges in overlapping parts)
-├── search/                # Text and semantic search, density boost
+├── search/                # Text and semantic search, density boost, merging of copied entries
 └── utils/                 # Logger, paths, one-at-a-time runs (serial.ts)
 ```
 
