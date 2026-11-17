@@ -175,10 +175,12 @@ function migrateLegacyDocVectors(db: Db): void {
  * whole this time, and replaces its chunks.
  */
 function migrateDocChunksTable(db: Db): void {
-  const columns = allRows<{ name: string }>(db, 'PRAGMA table_info(doc_chunks)').map((c) => c.name);
-  if (!columns.includes('embed_text')) return;
+  const hasEmbedText = () => allRows<{ name: string }>(db, 'PRAGMA table_info(doc_chunks)').some((c) => c.name === 'embed_text');
+  if (!hasEmbedText()) return;
 
-  inTransaction(db, () => {
+  // Write lock first, then check again: another process may have migrated meanwhile
+  const migrated = inTransaction(db, () => {
+    if (!hasEmbedText()) return false;
     db.exec(`
       ${docChunksTableSql('doc_chunks_new')}
       INSERT INTO doc_chunks_new (chunk_id, file_path, category, content_text, start_line, end_line, part, section_path, file_modified)
@@ -187,7 +189,9 @@ function migrateDocChunksTable(db: Db): void {
       ALTER TABLE doc_chunks_new RENAME TO doc_chunks;
       DELETE FROM doc_index_state;
     `);
-  });
+    return true;
+  }, 'IMMEDIATE');
+  if (!migrated) return;
   db.exec('PRAGMA incremental_vacuum');
   logger.info(`Doc chunks table migrated to schema ${DOCS_SCHEMA_VERSION}: every file will be indexed again`);
 }

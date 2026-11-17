@@ -3,7 +3,10 @@ import { existsSync, statSync as fsStatSync } from 'fs';
 import { isAbsolute, relative, sep } from 'path';
 import { getDbPath, getProjectsDir } from '../utils/paths.js';
 import { logger } from '../utils/logger.js';
-import { CREATE_TABLES, CREATE_INDEXES, SCHEMA_VERSION, CHUNK_VECTORS, LEGACY_VEC_TABLE, chunksTableSql, createChunkVectorsTable } from './schema.js';
+import {
+  CREATE_TABLES, CREATE_INDEXES, SCHEMA_VERSION, CHUNK_VECTORS, LEGACY_VEC_TABLE, KEEP_PARTIAL_EXCERPTS, KEEP_PARTIAL_EXCERPTS_TRIGGER,
+  chunksTableSql, createChunkVectorsTable,
+} from './schema.js';
 import { type Db, openDatabase, inTransaction, vectorBlob, getRow, allRows, iterateRows } from './sqlite.js';
 import {
   IndexMismatchError, assertSameIdentity, deleteOrphanVectors, getStoredIdentity, migrateLegacyIdentity,
@@ -157,12 +160,15 @@ function migrateLegacyVectors(db: Db): void {
  * The chunks kept keep their text (content_text).
  */
 function migrateChunksTable(db: Db): void {
-  const columns = allRows<{ name: string }>(db, 'PRAGMA table_info(chunks)').map((c) => c.name);
-  if (columns.includes('text_format')) return;
+  const columnsNow = () => allRows<{ name: string }>(db, 'PRAGMA table_info(chunks)').map((c) => c.name);
+  if (columnsNow().includes('text_format')) return;
 
   const started = Date.now();
-  const part = columns.includes('part') ? 'part' : '0';
-  inTransaction(db, () => {
+  // Write lock first, then check again: another process may have migrated (and indexed) meanwhile
+  const migrated = inTransaction(db, () => {
+    const columns = columnsNow();
+    if (columns.includes('text_format')) return false;
+    const part = columns.includes('part') ? 'part' : '0';
     db.exec(`
       ${chunksTableSql('chunks_new')}
       INSERT INTO chunks_new (chunk_id, session_id, project_dir, entry_uuid, role, content_text, timestamp, line_number, part)
@@ -175,7 +181,9 @@ function migrateChunksTable(db: Db): void {
       const orphans = deleteOrphanVectors(db, CHUNK_VECTORS, 'chunks');
       if (orphans > 0) logger.info(`Deleted ${orphans} vectors of chunks that no longer exist`);
     }
-  });
+    return true;
+  }, 'IMMEDIATE');
+  if (!migrated) return;
   db.exec('PRAGMA incremental_vacuum');
   db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
   logger.info(`Chunks table migrated to schema ${SCHEMA_VERSION} in ${Date.now() - started} ms`);
@@ -217,7 +225,8 @@ export function prepareVectorIndex(identity: EmbeddingIdentity, options: { reset
   inTransaction(db, () => {
     if (options.resetAll) {
       if (tableExists(db, CHUNK_VECTORS)) db.exec(`DROP TABLE ${CHUNK_VECTORS}`);
-      db.exec('DELETE FROM chunks WHERE session_id IN (SELECT session_id FROM transcript_files)');
+      // Chunks of archived transcripts only: a partial session of another project may share an id
+      db.exec('DELETE FROM chunks WHERE EXISTS (SELECT 1 FROM transcript_files f WHERE f.session_id = chunks.session_id AND f.project_dir = chunks.project_dir)');
       db.exec('DELETE FROM index_state');
       const markPending = db.prepare('INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)');
       for (const { project_dir } of allRows<{ project_dir: string }>(db, 'SELECT DISTINCT project_dir FROM chunks')) {
@@ -276,16 +285,27 @@ export interface NewChunk {
 }
 
 /**
- * Insert chunks with their embeddings in a single transaction. Their text is not stored: the
- * archive holds it (see embedding/chunk-text.ts).
+ * Add the chunks of an archived transcript's new lines and record it indexed up to `lastLine`, in
+ * one transaction, only if its index progress is still `expectedLastLine` (null: never indexed).
+ * Returns null, writing nothing, when another process indexed these lines meanwhile. The chunks'
+ * text is not stored: the archive holds it (see embedding/chunk-text.ts).
  */
-export function insertChunks(chunks: NewChunk[], embeddings: Float32Array[]): number {
+export function appendChunks(
+  file: { file_key: string; archived_bytes: number },
+  expectedLastLine: number | null,
+  lastLine: number,
+  chunks: NewChunk[],
+  embeddings: Float32Array[],
+): number | null {
   const db = getDb();
-  let inserted = 0;
-  inTransaction(db, () => {
-    inserted = insertChunkRows(db, chunks, embeddings);
-  });
-  return inserted;
+  return inTransaction(db, () => {
+    const current = getRow<{ last_line: number }>(db, 'SELECT last_line FROM index_state WHERE file_path = ?', file.file_key);
+    if ((current?.last_line ?? null) !== expectedLastLine) return null;
+    const inserted = insertChunkRows(db, chunks, embeddings);
+    db.prepare('INSERT OR REPLACE INTO index_state (file_path, file_size, last_line, indexed_at) VALUES (?, ?, ?, ?)')
+      .run(file.file_key, file.archived_bytes, lastLine, new Date().toISOString());
+    return inserted;
+  }, 'IMMEDIATE');
 }
 
 /** Insert chunks and their vectors, inside the caller's transaction. Returns how many were new. */
@@ -327,54 +347,63 @@ function deleteChunkRows(db: Db, chunkIds: number[]): void {
 }
 
 /**
- * Replace the chunks of an archived transcript's lines 1..upToLine with chunks cut again from the
- * archive, in one transaction: searches see either the old chunks or the new ones, never a gap.
- * Chunks of later lines (indexed meanwhile by another process) are left alone. `indexedUpTo`:
- * record that the transcript is indexed up to upToLine (when it had no index progress).
- * Returns how many chunks were inserted.
+ * Replace the chunks of an archived transcript's lines fromLine..toLine with chunks cut again
+ * from the archive, in one transaction: searches see either the old chunks or the new ones, never
+ * a gap. From line 1, chunks without a line number go too. Returns how many chunks were inserted.
  */
 export function replaceTranscriptChunks(
-  file: { file_key: string; session_id: string; project_dir: string; archived_bytes: number },
-  upToLine: number,
+  file: { session_id: string; project_dir: string },
+  fromLine: number,
+  toLine: number,
   chunks: NewChunk[],
   embeddings: Float32Array[],
-  indexedUpTo: boolean,
 ): number {
   const db = getDb();
-  let inserted = 0;
-  inTransaction(db, () => {
-    const old = allRows<{ chunk_id: number }>(db,
-      'SELECT chunk_id FROM chunks WHERE session_id = ? AND project_dir = ? AND line_number <= ?',
-      file.session_id, file.project_dir, upToLine);
+  return inTransaction(db, () => {
+    const old = allRows<{ chunk_id: number }>(db, `
+      SELECT chunk_id FROM chunks WHERE session_id = ? AND project_dir = ?
+        AND (line_number BETWEEN ? AND ?${fromLine === 1 ? ' OR line_number IS NULL' : ''})`,
+      file.session_id, file.project_dir, fromLine, toLine);
     deleteChunkRows(db, old.map((r) => r.chunk_id));
-    inserted = insertChunkRows(db, chunks, embeddings);
-    if (indexedUpTo) {
-      db.prepare('INSERT OR REPLACE INTO index_state (file_path, file_size, last_line, indexed_at) VALUES (?, ?, ?, ?)')
-        .run(file.file_key, file.archived_bytes, upToLine, new Date().toISOString());
-    }
-  });
-  return inserted;
+    return insertChunkRows(db, chunks, embeddings);
+  }, 'IMMEDIATE');
+}
+
+/** SQL condition: a chunk of an archived transcript made by an older chunker (or before 0.6.0, without format). */
+const OUTDATED = '(c.text_format IS NULL OR c.text_format <> ?)';
+
+/**
+ * Whether lines fromLine..toLine of an archived transcript need re-indexing: a chunk there is
+ * outdated, or none there is current.
+ */
+export function rangeNeedsReindex(file: { session_id: string; project_dir: string }, fromLine: number, toLine: number, format: number): boolean {
+  const row = getRow<{ outdated: number; current: number }>(getDb(), `
+    SELECT COALESCE(SUM(${OUTDATED}), 0) AS outdated, COALESCE(SUM(c.text_format = ?), 0) AS current FROM chunks c
+    WHERE c.session_id = ? AND c.project_dir = ? AND (c.line_number BETWEEN ? AND ?${fromLine === 1 ? ' OR c.line_number IS NULL' : ''})`,
+    format, format, file.session_id, file.project_dir, fromLine, toLine)!;
+  return row.outdated > 0 || row.current === 0;
 }
 
 /**
- * Archived transcripts that still have chunks made before 0.6.0 (text kept, cut at 2,000
- * characters, reply's first entry only), most recently active first. Partial sessions are not
- * among them: they have no archived transcript, their chunks are their only copy.
+ * Archived transcripts that still have outdated chunks (made before 0.6.0: text kept, cut at
+ * 2,000 characters, reply's first entry only; or by another chunker format), most recently
+ * active first. Partial sessions are not among them: they have no archived transcript, their
+ * chunks are their only copy.
  */
-export function getTranscriptsWithOldChunks(): ArchivedFileRow[] {
+export function getTranscriptsWithOldChunks(format: number): ArchivedFileRow[] {
   return allRows<ArchivedFileRow>(getDb(), `
     SELECT f.* FROM transcript_files f
-    WHERE EXISTS (SELECT 1 FROM chunks c WHERE c.session_id = f.session_id AND c.project_dir = f.project_dir AND c.text_format IS NULL)
-    ORDER BY f.last_timestamp DESC`);
+    WHERE EXISTS (SELECT 1 FROM chunks c WHERE c.session_id = f.session_id AND c.project_dir = f.project_dir AND ${OUTDATED})
+    ORDER BY f.last_timestamp DESC`, format);
 }
 
 /** Chunks of archived transcripts made before 0.6.0, still to be cut again (see getTranscriptsWithOldChunks). */
-export function countOldChunks(projectDir?: string): { chunks: number; transcripts: number } {
+export function countOldChunks(format: number, projectDir?: string): { chunks: number; transcripts: number } {
   return getRow<{ chunks: number; transcripts: number }>(getDb(), `
     SELECT COUNT(*) AS chunks, COUNT(DISTINCT c.session_id) AS transcripts FROM chunks c
-    WHERE c.text_format IS NULL ${projectDir ? 'AND c.project_dir = ?' : ''}
+    WHERE ${OUTDATED} ${projectDir ? 'AND c.project_dir = ?' : ''}
       AND EXISTS (SELECT 1 FROM transcript_files f WHERE f.session_id = c.session_id AND f.project_dir = c.project_dir)`,
-    ...(projectDir ? [projectDir] : []))!;
+    format, ...(projectDir ? [projectDir] : []))!;
 }
 
 /** sqlite-vec only accepts integer primary keys: a JS number binds as REAL, BigInt as INTEGER. */
@@ -582,7 +611,8 @@ export function removeCaseDuplicateArchives(onDisk: Set<string>): { transcripts:
   }>(db, `
     SELECT d.file_key AS drop_key, d.project_dir AS drop_dir, d.session_id AS drop_session, d.line_count AS drop_lines, d.archived_bytes AS drop_bytes,
            k.file_key AS keep_key, k.project_dir AS keep_dir, k.line_count AS keep_lines, k.archived_bytes AS keep_bytes
-    FROM transcript_files d JOIN transcript_files k ON lower(d.file_key) = lower(k.file_key) AND d.file_key <> k.file_key`);
+    FROM transcript_files d JOIN transcript_files k ON lower(d.file_key) = lower(k.file_key) AND d.file_key <> k.file_key
+    WHERE lower(d.file_key) IN (SELECT lower(file_key) FROM transcript_files GROUP BY lower(file_key) HAVING COUNT(*) > 1)`);
 
   let transcripts = 0;
   for (const p of pairs) {
@@ -606,7 +636,8 @@ export function removeCaseDuplicateArchives(onDisk: Set<string>): { transcripts:
   const attachments = allRows<{ drop_key: string; drop_dir: string; keep_dir: string }>(db, `
     SELECT d.file_key AS drop_key, d.project_dir AS drop_dir, k.project_dir AS keep_dir
     FROM transcript_attachments d JOIN transcript_attachments k
-      ON lower(d.file_key) = lower(k.file_key) AND d.file_key <> k.file_key AND k.size >= d.size`)
+      ON lower(d.file_key) = lower(k.file_key) AND d.file_key <> k.file_key AND k.size >= d.size
+    WHERE lower(d.file_key) IN (SELECT lower(file_key) FROM transcript_attachments GROUP BY lower(file_key) HAVING COUNT(*) > 1)`)
     .filter((a) => !onDisk.has(a.drop_dir) && onDisk.has(a.keep_dir));
   if (attachments.length > 0) {
     inTransaction(db, () => {
@@ -632,7 +663,10 @@ export function deleteProject(projectDir: string): void {
 
   inTransaction(db, () => {
     const chunkIds = allRows<{ chunk_id: number }>(db, 'SELECT chunk_id FROM chunks WHERE project_dir = ?', projectDir);
+    // The user confirmed deleting this project's last copy: lift the protection of partial excerpts here only
+    db.exec(`DROP TRIGGER IF EXISTS ${KEEP_PARTIAL_EXCERPTS}`);
     deleteChunkRows(db, chunkIds.map((r) => r.chunk_id));
+    db.exec(KEEP_PARTIAL_EXCERPTS_TRIGGER);
     db.prepare('DELETE FROM index_state WHERE file_path IN (SELECT file_key FROM transcript_files WHERE project_dir = ?)').run(projectDir);
     db.prepare('DELETE FROM transcript_lines WHERE file_key IN (SELECT file_key FROM transcript_files WHERE project_dir = ?)').run(projectDir);
     db.prepare('DELETE FROM transcript_files WHERE project_dir = ?').run(projectDir);

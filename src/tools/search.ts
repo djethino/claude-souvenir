@@ -7,7 +7,7 @@ import { searchSemantic, getProjectChunkCount } from '../db/store.js';
 import type { TextChunkRow, VecSearchResult } from '../db/store.js';
 import { withChunkText } from '../embedding/chunk-text.js';
 import { getOrCreateProvider, errorMessage } from './helpers.js';
-import { buildIndex } from '../db/indexer.js';
+import { buildIndex, indexingInProgress, whenIndexIdle } from '../db/indexer.js';
 import { logger } from '../utils/logger.js';
 import { applySessionDensityBoost } from '../search/density-boost.js';
 import { CopyMerger, sessionsOf } from '../search/copies.js';
@@ -45,6 +45,12 @@ function pageFooter(endIndex: number, maxResults: number, total: number, more: b
  * lack recent messages: the search still runs on what is indexed, but Claude must know the
  * results can be incomplete instead of taking them as everything there is.
  */
+/** Time a search waits for new messages to be indexed before searching what is indexed. */
+const INDEX_BEFORE_SEARCH_MS = 20_000;
+/** Set while a backlog a search could not wait for is indexed in the background. */
+let catchingUp = false;
+const STILL_INDEXING_NOTE = 'Note: new messages are still being indexed in the background: the most recent ones may be missing from semantic results for now (text mode searches the whole archive).';
+
 async function indexBeforeSemanticSearch(
   provider: ReturnType<typeof getOrCreateProvider>,
   projectDirs: string[],
@@ -54,11 +60,37 @@ async function indexBeforeSemanticSearch(
     // Several projects: indexing them all here could take minutes; the background index only covers the current one
     return 'Note: across several projects, only messages already indexed are searched: recent sessions of other projects may be missing (souvenir_index action="build" project="all" indexes them; text mode searches the whole archive).';
   }
+  // A large backlog is being indexed in the background: waiting would not change the results
+  if (catchingUp) return STILL_INDEXING_NOTE;
+  const deadline = Date.now() + INDEX_BEFORE_SEARCH_MS;
+  if (indexingInProgress()) {
+    // Indexing already runs here (background index after a tool call, a large backlog): wait for
+    // it within the time allowed, else search what is indexed now
+    let timer: NodeJS.Timeout | undefined;
+    await Promise.race([whenIndexIdle(), new Promise<void>((resolve) => { timer = setTimeout(resolve, INDEX_BEFORE_SEARCH_MS); })]);
+    clearTimeout(timer);
+    if (indexingInProgress()) return STILL_INDEXING_NOTE;
+  }
   try {
-    const result = await buildIndex(provider, projectDirs, { rebuild: false, onProgress: createProgressNotifier(ctx) });
-    if (result.errors.length === 0) return null;
-    const count = result.errors.length >= 5 ? '5 or more' : String(result.errors.length); // buildIndex keeps the first 5
-    return `Note: ${count} transcript(s) could not be indexed, so their newest messages may be missing from semantic results (first error: ${result.errors[0]}). Text mode searches the whole archive.`;
+    const result = await buildIndex(provider, projectDirs, {
+      rebuild: false,
+      onProgress: createProgressNotifier(ctx),
+      deadline,
+    });
+    const notes: string[] = [];
+    if (result.unfinished) {
+      // A large backlog (first index, long pause): search now, finish in the background
+      catchingUp = true;
+      void buildIndex(provider, projectDirs, { rebuild: false })
+        .catch((err) => logger.warn('Background indexing after search failed:', err))
+        .finally(() => { catchingUp = false; });
+      notes.push(STILL_INDEXING_NOTE);
+    }
+    if (result.errors.length > 0) {
+      const count = result.errors.length >= 5 ? '5 or more' : String(result.errors.length); // buildIndex keeps the first 5
+      notes.push(`Note: ${count} transcript(s) could not be indexed, so their newest messages may be missing from semantic results (first error: ${result.errors[0]}). Text mode searches the whole archive.`);
+    }
+    return notes.length > 0 ? notes.join('\n') : null;
   } catch (err) {
     logger.warn('Indexing before search failed:', err);
     return `Note: indexing new messages failed (${errorMessage(err)}), so the latest messages may be missing from semantic results. Text mode searches the whole archive.`;
@@ -78,6 +110,11 @@ function sessionMetadataLookup(): (sessionId: string, projectDir: string) => Ret
     if (!cache.has(sessionId)) cache.set(sessionId, findSession(sessionId, projectDir));
     return cache.get(sessionId) ?? null;
   };
+}
+
+/** Note for the semantic matches left out because their text could not be cut again from the archive. */
+function chunkTextNote(problems: string[]): string | null {
+  return problems.length > 0 ? `Note: some semantic matches are not shown: ${problems.join(' ')}` : null;
 }
 
 /** A semantic match (one indexed chunk) as a search result with the given score. */
@@ -308,7 +345,6 @@ async function performSemanticSearch(
     }
 
     const indexNote = await indexBeforeSemanticSearch(provider, projectDirs, ctx);
-    const noteBlock = indexNote ? `${indexNote}\n\n` : '';
 
     const queryEmbedding = await provider.embedQuery(params.query);
 
@@ -318,15 +354,18 @@ async function performSemanticSearch(
     // One more than the page needs: if it comes back, a next page exists
     const offset = params.offset || 0;
     const topK = offset + maxResults + 1;
-    const vecResults = withChunkText(searchSemantic(provider.identity, queryEmbedding, {
+    const found = searchSemantic(provider.identity, queryEmbedding, {
       topK,
       projectDir,
       sessionId: params.session_id,
       speaker: params.role === 'both' ? undefined : params.role,
       dateFrom: params.date_from,
       dateTo: params.date_to,
-    }));
-    const more = vecResults.length === topK;
+    });
+    const more = found.length === topK;
+    const { chunks: vecResults, problems } = withChunkText(found);
+    const notes = [indexNote, chunkTextNote(problems)].filter(Boolean).join('\n');
+    const noteBlock = notes ? `${notes}\n\n` : '';
 
     if (vecResults.length === 0) {
       return `${noteBlock}No semantic results found for "${params.query}". The index may be empty for the specified project. Run souvenir_index with action="status" to check.`;
@@ -422,7 +461,7 @@ async function performHybridSearch(
       const queryEmbedding = await provider.embedQuery(params.query);
       const projectDir = projectDirs.length === 1 ? projectDirs[0] : undefined;
 
-      const results = withChunkText(searchSemantic(provider.identity, queryEmbedding, {
+      const { chunks: results, problems } = withChunkText(searchSemantic(provider.identity, queryEmbedding, {
         topK: depth,
         projectDir,
         sessionId: params.session_id,
@@ -431,7 +470,7 @@ async function performHybridSearch(
         dateTo: params.date_to,
       }));
 
-      return { results, error: null as string | null, indexNote };
+      return { results, error: null as string | null, indexNote: [indexNote, chunkTextNote(problems)].filter(Boolean).join('\n') || null };
     } catch (err) {
       logger.warn('Semantic search failed in hybrid mode:', err);
       return { results: [] as Array<VecSearchResult & TextChunkRow>, error: errorMessage(err), indexNote: null };

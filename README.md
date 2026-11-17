@@ -36,7 +36,7 @@ After context compaction, it gets worse: the summary captures *what* was done bu
 3. A background hook then splits what is new into chunks (what the user wrote with the whole reply that follows; a long exchange in several overlapping parts, never cut) and turns each chunk into a vector with an **embedding model**. Vectors are stored in the same SQLite database with [sqlite-vec](https://github.com/asg017/sqlite-vec). A chunk does not store its text a second time: it records where it is in the archive, and its text is read back from there.
 4. When Claude searches, the query is turned into a vector too, and the closest chunks are returned. The default **hybrid** mode combines this meaning-based search with exact text matching over the whole archive.
 
-**Upgrading from an earlier version** needs nothing from you. The index is converted at the first start, then the chunks made before 0.6.0 are re-indexed whole in the background, a few sessions after each interaction, most recent first; each session's chunks are replaced at once, so searches stay complete meanwhile. `souvenir_index status` shows what is left.
+**Upgrading from an earlier version**: after `/plugin update`, restart every open Claude Code session (each one keeps running the souvenir it started with until it is restarted). Nothing else is needed. The index is converted at the first start, then the chunks made before 0.6.0 are re-indexed whole in the background, a few minutes after each interaction, most recent sessions first; each range of a session is replaced at once, so searches stay complete meanwhile, and an interrupted run resumes where it stopped. `souvenir_index status` shows what is left. The excerpts of partial sessions (below) are protected by the database itself: even an older souvenir still running in a session not restarted cannot delete them.
 
 **Sessions older than the archive.** Before 0.6.0, souvenir kept only search excerpts (the first 2,000 characters of each exchange; tool calls by name only, without their input or results) and read Claude Code's files directly. Sessions whose transcript Claude Code deleted before 0.6.0 cannot be recovered in full: souvenir lists them as **partial**, shows and searches their excerpts, and never deletes them. Sessions still listed in Claude Code's old `sessions-index.json` with nothing kept are listed as **lost**.
 
@@ -89,7 +89,7 @@ Type `@` in Claude Code: the 50 most recent sessions of the current project are 
 
 These actions ask you to confirm in a Claude Code dialog before running, with what they will do: `souvenir_docs` `restore`, `clear` and `build` with `rebuild=true`, `souvenir_index` `rebuild`, `souvenir_projects` `clean`. Their checks run first, so you are only asked for an action that can be done.
 
-A session that cannot show a dialog (`claude -p`, the Agent SDK) cancels the question: these actions then need an interactive session. A client without elicitation support runs them without asking, as before.
+A session that cannot show a dialog (`claude -p`, the Agent SDK) cancels the question: these actions then need an interactive session. A client without elicitation support runs them without asking, as before, except `souvenir_projects` `clean`, which deletes the only copy of conversations and is refused without your answer.
 
 ## Configuration
 
@@ -159,6 +159,8 @@ Search through transcripts and/or project files.
 | `case_sensitive` | For text mode |
 | `regex` | For text mode: treat query as regex |
 
+Before a semantic or hybrid search, the project's new messages are indexed, for up to 20 seconds. With a larger backlog (a first index, a long pause), the search runs on what is indexed and says that the most recent messages may be missing; indexing goes on in the background. Text mode always searches the whole archive.
+
 Filters are applied inside the vector search, so a filtered search still returns up to `max_results` matches. Every page ends with the offset of the next one; semantic and hybrid searches have no fixed total (the nearest matches keep coming), so they show "N+" while more exist. When hybrid search cannot run one of its halves (embedding server down, incompatible index), the answer says so and shows the other half. Results include hints about matches in the other source (transcripts ↔ project files). When a session is resumed or forked, Claude Code copies earlier messages into the new session's transcript: a match found in several sessions with the same entry and the same text is shown once, with the other sessions listed ("also in session(s)").
 
 ### souvenir_read
@@ -205,7 +207,7 @@ List all projects with conversation history.
 | `action` | `list` (default) or `clean` (delete what souvenir kept of projects whose folder no longer exists, after your confirmation) |
 | `search` | Filter by path |
 
-Lists the projects Claude Code still has and those it deleted whose sessions are in the archive. A project whose folder no longer exists is marked `[folder deleted]`; `clean` deletes its archived conversations, which can be the only copy left, so it only runs when you ask and confirm. A project's path comes from Claude Code's session index or from its transcripts; a project whose path cannot be found is shown `[path unknown]` and never cleaned.
+Lists the projects Claude Code still has and those it deleted whose sessions are in the archive. A project whose folder no longer exists is marked `[folder deleted]`; `clean` deletes its archived conversations, which can be the only copy left, so it only runs when you ask and confirm. A project on a drive that is not available (unplugged, not mounted) is marked `[drive not available]` and never cleaned. A project's path comes from Claude Code's session index or from its transcripts; a project whose path cannot be found is shown `[path unknown]` and never cleaned.
 
 ### souvenir_index
 
@@ -309,7 +311,7 @@ The current project is `CLAUDE_PROJECT_DIR`, which Claude Code gives the MCP ser
 
 ### Background indexing
 
-Hooks on Stop, UserPromptSubmit, PostToolUse and PreCompact start an asynchronous run: at most one at a time across all sessions (PID lock), at least 30 s apart. It archives every project's transcripts, then indexes the current project. It never blocks Claude; a failed run exits with an error on stderr. The MCP server does the same at startup and after its tool calls; inside it, archiving and index builds run one after the other (parallel searches would otherwise embed the same new messages twice).
+Hooks on Stop, UserPromptSubmit, PostToolUse and PreCompact start an asynchronous run: at most one at a time across all sessions (PID lock), at least 30 s apart. It archives every project's transcripts, then indexes the current project and its added files, then re-indexes outdated chunks (made before 0.6.0) for up to about 5 minutes. It never blocks Claude, and needs the embedding server only when there is something to embed; a failed run exits with an error on stderr. The MCP server does the same at startup and after its tool calls; inside it, archiving and index builds run one after the other (parallel searches would otherwise embed the same new messages twice).
 
 ### Multi-agent and multi-project
 

@@ -11,15 +11,27 @@ export class ChunkTextError extends Error {}
  * Chunks with kept text (partial sessions, chunks made before) are returned as they are.
  * Parts of one exchange share one reading of the archive.
  *
- * Throws ChunkTextError when a chunk cannot be re-made as it was embedded: cut by another chunker
- * format, transcript no longer archived, or a text that does not match the recorded position.
+ * A chunk that cannot be re-made as it was embedded (cut by another chunker format, transcript no
+ * longer archived, text not matching the recorded position) is left out, and `problems` says why
+ * (one line per distinct reason), for the caller to show: the other chunks are still usable.
  */
-export function withChunkText<T extends ChunkRow>(chunks: T[]): Array<T & TextChunkRow> {
+export function withChunkText<T extends ChunkRow>(chunks: T[]): { chunks: Array<T & TextChunkRow>; problems: string[] } {
   const sources = new Map<string, ChunkSource[]>();
-  return chunks.map((chunk) => {
-    if (chunk.content_text !== null) return chunk as T & TextChunkRow;
-    return { ...chunk, content_text: rebuildText(chunk, sources) };
-  });
+  const withText: Array<T & TextChunkRow> = [];
+  const problems = new Set<string>();
+  for (const chunk of chunks) {
+    if (chunk.content_text !== null) {
+      withText.push(chunk as T & TextChunkRow);
+      continue;
+    }
+    try {
+      withText.push({ ...chunk, content_text: rebuildText(chunk, sources) });
+    } catch (err) {
+      if (!(err instanceof ChunkTextError)) throw err;
+      problems.add(err.message);
+    }
+  }
+  return { chunks: withText, problems: [...problems] };
 }
 
 function rebuildText(chunk: ChunkRow, cache: Map<string, ChunkSource[]>): string {

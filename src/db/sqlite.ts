@@ -80,8 +80,9 @@ export function openDatabase(dbPath: string, label: string): Db {
 }
 
 /** Run fn inside a transaction: committed if it returns, rolled back if it throws. */
-export function inTransaction<T>(db: Db, fn: () => T): T {
-  db.exec('BEGIN');
+export function inTransaction<T>(db: Db, fn: () => T, mode: 'DEFERRED' | 'IMMEDIATE' = 'DEFERRED'): T {
+  // IMMEDIATE takes the write lock at once: what fn reads cannot change before it writes
+  db.exec(`BEGIN ${mode}`);
   try {
     const result = fn();
     db.exec('COMMIT');

@@ -10,6 +10,7 @@ import { getDb, getIndexStatus, getIndexIdentity, fullVacuum, countOldChunks } f
 import { docsDbExists, getDocsIndexIdentity, getDocsChunkCount } from '../docs/store.js';
 import { describeIdentity, sameIdentity } from '../embedding/provider.js';
 import { findModelPrompts } from '../embedding/models.js';
+import { CHUNK_TEXT_FORMAT } from '../embedding/chunker.js';
 import { getOrCreateProvider, createProgressNotifier, errorMessage } from './helpers.js';
 import type { ToolContext } from './helpers.js';
 import { DECLINED, type Confirm } from './confirm.js';
@@ -72,9 +73,9 @@ function getStatusReport(projectFilter?: string): string {
   lines.push(`  Built with: ${identity ? describeIdentity(identity) : 'not built yet'}`);
   lines.push(`  Total chunks: ${status.totalChunks}`);
   lines.push(`  Transcripts indexed: ${status.totalFiles}`);
-  const old = countOldChunks(projectDir);
+  const old = countOldChunks(CHUNK_TEXT_FORMAT, projectDir);
   if (old.chunks > 0) {
-    lines.push(`  Made before 0.6.0, being re-indexed in the background: ${old.chunks} chunks of ${old.transcripts} transcripts (each one replaced at once, search stays complete)`);
+    lines.push(`  Made before 0.6.0 (or by an older souvenir), being re-indexed in the background: ${old.chunks} chunks of ${old.transcripts} transcripts (each one replaced at once, search stays complete)`);
   }
   lines.push('');
 

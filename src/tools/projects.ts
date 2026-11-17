@@ -1,4 +1,5 @@
 import { existsSync } from 'fs';
+import { parse } from 'path';
 import { listProjectDirsOnDisk } from '../transcript/discovery.js';
 import { ensureArchived, archiveErrorNote, getProjectInfo, listProjectDirs } from '../archive/catalog.js';
 import { getConfig } from '../config.js';
@@ -57,6 +58,7 @@ export async function handleSouvenirProjects(params: {
     const tags: string[] = [];
     if (p.dirName === config.currentProject) tags.push('[current]');
     else if (p.originalPath === null) tags.push('[path unknown]');
+    else if (!driveAvailable(p.originalPath)) tags.push('[drive not available]');
     else if (!existsSync(p.originalPath)) tags.push('[folder deleted]');
     if (!onDisk.has(p.dirName)) tags.push('[transcripts deleted by Claude Code: read from the archive]');
 
@@ -73,11 +75,18 @@ export async function handleSouvenirProjects(params: {
 // Delete what souvenir kept of projects whose folder was deleted
 // ---------------------------------------------------------------------------
 
+/** Whether the drive (or root) of a path is there: an unplugged drive is not a deleted folder. */
+function driveAvailable(path: string): boolean {
+  return existsSync(parse(path).root);
+}
+
 function handleClean(confirm: Confirm): string {
-  // Only projects whose folder is known to be gone: never one whose path is unknown
+  // Only projects whose folder is known to be gone: never one whose path is unknown, nor one on a
+  // drive that is not available right now
   const deleted = listProjectDirs()
     .map((dir) => getProjectInfo(dir))
-    .filter((p): p is NonNullable<typeof p> & { originalPath: string } => p !== null && p.originalPath !== null && !existsSync(p.originalPath));
+    .filter((p): p is NonNullable<typeof p> & { originalPath: string } =>
+      p !== null && p.originalPath !== null && driveAvailable(p.originalPath) && !existsSync(p.originalPath));
 
   if (deleted.length === 0) {
     return 'No project with a deleted folder: nothing to clean.';
@@ -88,7 +97,8 @@ function handleClean(confirm: Confirm): string {
     'This deletes their archived conversations, not only the search index. When Claude Code already deleted their transcripts, souvenir\'s archive is the only copy left: it cannot be undone.',
     ...deleted.map((p) => `- ${p.originalPath} (${p.sessionCount} sessions, ${p.oldestDate?.slice(0, 10) ?? '???'} to ${p.latestDate?.slice(0, 10) ?? '???'})`),
   ];
-  if (!confirm(question.join('\n'))) {
+  // Deletes the only copy of conversations: never without the user's answer
+  if (!confirm(question.join('\n'), { required: true })) {
     return DECLINED;
   }
 

@@ -47,6 +47,8 @@ const FIRST_PROMPT_LABEL_CHARS = 1000;
 /** Entry types souvenir_read pages through (the parser's DEFAULT_ENTRY_TYPES). */
 const COUNTED_TYPES = new Set(['user', 'assistant', 'summary']);
 const NEWLINE = 0x0a;
+/** Start of the error recorded on a transcript Claude Code rewrote smaller than what was archived. */
+const REWRITTEN = 'the transcript was rewritten';
 
 /**
  * Archive the transcripts of these projects (one call at a time in this process: a call queued
@@ -191,10 +193,10 @@ async function archiveTranscript(projectDir: string, source: SourceTranscript, s
     }
 
     if (size < state.archived_bytes) {
-      const reason = `the transcript is now ${size} bytes, smaller than the ${state.archived_bytes} bytes already archived: it was rewritten, the archived copy is kept unchanged and new lines are not archived`;
-      if (state.error !== reason) {
-        db.prepare('UPDATE transcript_files SET error = ?, updated_at = ? WHERE file_key = ?').run(reason, new Date().toISOString(), source.fileKey);
-      }
+      // Reported once (this run's error), then kept on the transcript: status and session lists show it
+      if (state.error?.startsWith(REWRITTEN)) return added;
+      const reason = `${REWRITTEN}: it is now ${size} bytes, smaller than the ${state.archived_bytes} bytes already archived; the archived copy is kept unchanged and new lines are not archived`;
+      db.prepare('UPDATE transcript_files SET error = ?, updated_at = ? WHERE file_key = ?').run(reason, new Date().toISOString(), source.fileKey);
       throw new Error(reason);
     }
     if (size === state.archived_bytes) {

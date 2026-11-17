@@ -13,7 +13,7 @@ Summarize for the user in their language, in a few lines:
 
 - Archive: sessions and size kept, how many transcripts Claude Code deleted that are read from the archive, and any transcript that could not be archived (a problem to report).
 - Embedding: provider, model, server URL, OK or failing (with the reason).
-- Transcript index: chunks, projects indexed, built with which model, compatible or not.
+- Transcript index: chunks, projects indexed, built with which model, compatible or not. If status lists chunks "made before 0.6.0", say they are being re-indexed whole in the background after each interaction (nothing to do; search stays complete meanwhile).
 - Docs index of this project, if any.
 
 If something is wrong (server down, configuration error, incompatible index), say what it means and suggest `/asymptomatik-souvenir:souvenir-init` to fix it. Do not change anything yourself.

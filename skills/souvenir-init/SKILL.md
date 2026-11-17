@@ -59,7 +59,7 @@ Changing the provider, model or dimensions makes existing indexes incompatible: 
 
 - Current project only (quick): `souvenir_index action="build"`.
 - All projects: `souvenir_index action="build" project="all"`. It embeds every past conversation and can take a long time with a large history; ask before starting.
-- After a model change (index INCOMPATIBLE): `souvenir_index action="rebuild" project="all"` re-embeds everything from the archive. Ask first and say it replaces the whole search index and can take hours with a large history; the archived conversations themselves are not touched.
+- After a model change (index INCOMPATIBLE): `souvenir_index action="rebuild" project="all"` re-embeds everything from the archive. Ask first and say it replaces the whole search index and can take hours with a large history; the archived conversations themselves are not touched, and the excerpts of partial sessions are kept and embedded again.
 
 Progress is reported while it runs; indexing then keeps itself up to date in the background after every interaction.
 

@@ -90,7 +90,25 @@ export const CREATE_TABLES = `
   );
 `;
 
-/** Indexes, created after the migrations (a migrated table is re-created without them). */
+/** Name of the trigger that protects the excerpts of partial sessions. */
+export const KEEP_PARTIAL_EXCERPTS = 'keep_partial_excerpts';
+
+/**
+ * The excerpts of a partial session (a chunk with its text whose transcript is not archived) are
+ * the only copy left of that conversation: the database itself refuses to delete them, whatever
+ * code asks (an older souvenir still running in a session not restarted after an upgrade would
+ * otherwise delete them on a rebuild). Only deleteProject (souvenir_projects clean, confirmed by
+ * the user) lifts it, inside its transaction.
+ */
+export const KEEP_PARTIAL_EXCERPTS_TRIGGER = `
+  CREATE TRIGGER IF NOT EXISTS ${KEEP_PARTIAL_EXCERPTS} BEFORE DELETE ON chunks
+  WHEN OLD.content_text IS NOT NULL
+    AND NOT EXISTS (SELECT 1 FROM transcript_files f WHERE f.session_id = OLD.session_id AND f.project_dir = OLD.project_dir)
+  BEGIN
+    SELECT RAISE(ABORT, 'souvenir: the excerpts of a partial session are the only copy of it and are never deleted (only souvenir_projects clean, confirmed, removes a project)');
+  END;`;
+
+/** Indexes and triggers, created after the migrations (a migrated table is re-created without them). */
 export const CREATE_INDEXES = `
   CREATE INDEX IF NOT EXISTS idx_chunks_session ON chunks(session_id);
   CREATE INDEX IF NOT EXISTS idx_chunks_project ON chunks(project_dir);
@@ -99,6 +117,7 @@ export const CREATE_INDEXES = `
   CREATE INDEX IF NOT EXISTS idx_tfiles_session ON transcript_files(session_id);
   CREATE INDEX IF NOT EXISTS idx_tfiles_project ON transcript_files(project_dir);
   CREATE INDEX IF NOT EXISTS idx_tattach_session ON transcript_attachments(session_id);
+  ${KEEP_PARTIAL_EXCERPTS_TRIGGER}
 `;
 
 /** Vector table of schema 1 (no filter columns), migrated into CHUNK_VECTORS. */

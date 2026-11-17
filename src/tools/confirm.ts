@@ -15,7 +15,7 @@ import type { ToolContext } from './helpers.js';
  * handler runs again from the start (its checks run before the question, so it is asked only
  * for an action that can actually be done).
  */
-export type Confirm = (message: string) => boolean;
+export type Confirm = (message: string, options?: { required?: boolean }) => boolean;
 
 /**
  * Text a tool returns when its confirmation was not accepted. A client that declares elicitation but
@@ -49,7 +49,7 @@ export class ConfirmationNeeded extends Error {
  *   connection older than 2026-07-28 (which has no per-request capabilities)
  */
 export function confirmFor(ctx: ToolContext, legacyCapabilities: () => ClientCapabilities | undefined): Confirm {
-  return (message) => {
+  return (message, options) => {
     const answer = inputResponse(ctx.mcpReq.inputResponses, CONFIRM_KEY);
     if (answer.kind === 'elicit') return answer.action === 'accept';
 
@@ -58,8 +58,9 @@ export function confirmFor(ctx: ToolContext, legacyCapabilities: () => ClientCap
     const capabilities = envelope
       ? (envelope[CLIENT_CAPABILITIES_META_KEY] as ClientCapabilities | undefined)
       : legacyCapabilities();
-    // A client that cannot show a dialog keeps the behaviour from before confirmations existed
-    if (!capabilities?.elicitation) return true;
+    // A client that cannot show a dialog keeps the behaviour from before confirmations existed,
+    // except for what cannot be undone (required): it is refused without the user's answer
+    if (!capabilities?.elicitation) return !options?.required;
 
     throw new ConfirmationNeeded(message);
   };

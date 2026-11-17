@@ -23,6 +23,8 @@ import { createEmbeddingProvider } from './tools/helpers.js';
 import { buildIndex, upgradeOldChunks } from './db/indexer.js';
 import { buildDocsIndex } from './docs/indexer.js';
 import { docsDbExists, getDocSources } from './docs/store.js';
+import { getTranscriptsWithOldChunks } from './db/store.js';
+import { CHUNK_TEXT_FORMAT } from './embedding/chunker.js';
 import { archiveProjects } from './archive/archiver.js';
 import { listProjectDirsOnDisk } from './transcript/discovery.js';
 
@@ -92,6 +94,12 @@ async function run(): Promise<void> {
   if (archive.errors.length > 0) process.exitCode = 1;
 
   const config = getConfig();
+  const projectRoot = config.cwd;
+  const hasDocs = docsDbExists(projectRoot) && getDocSources(projectRoot).length > 0;
+  const hasOutdated = getTranscriptsWithOldChunks(CHUNK_TEXT_FORMAT).length > 0;
+  // Nothing to embed: the embedding server is not needed (nor reported when it is down)
+  if (!config.currentProject && !hasDocs && !hasOutdated) return;
+
   const provider = createEmbeddingProvider(config);
   try {
     await provider.initialize();
@@ -105,24 +113,22 @@ async function run(): Promise<void> {
     }
 
     // 2. Index docs (local DB) if sources are configured
-    const projectRoot = config.cwd;
-    if (docsDbExists(projectRoot)) {
-      const sources = getDocSources(projectRoot);
-      if (sources.length > 0) {
-        const docsResult = await buildDocsIndex(projectRoot, provider, { rebuild: false });
-        if (docsResult.totalEmbedded > 0) {
-          process.stderr.write(`[souvenir] Background index: ${docsResult.totalEmbedded} new doc chunks\n`);
-        }
+    if (hasDocs) {
+      const docsResult = await buildDocsIndex(projectRoot, provider, { rebuild: false });
+      if (docsResult.totalEmbedded > 0) {
+        process.stderr.write(`[souvenir] Background index: ${docsResult.totalEmbedded} new doc chunks\n`);
       }
     }
 
-    // 3. Chunks made before 0.6.0 (cut at 2,000 characters): cut them again from the archive, a few
-    //    transcripts per run, without the user doing anything; searches stay complete meanwhile
-    const upgrade = await upgradeOldChunks(provider, { deadline: Date.now() + UPGRADE_BUDGET_MS });
-    for (const err of upgrade.errors) {
-      process.stderr.write(`[souvenir] Re-index error: ${err}\n`);
+    // 3. Outdated chunks (made before 0.6.0, cut at 2,000 characters): cut them again from the
+    //    archive, a few minutes per run, without the user doing anything; searches stay complete
+    if (hasOutdated) {
+      const upgrade = await upgradeOldChunks(provider, { deadline: Date.now() + UPGRADE_BUDGET_MS });
+      for (const err of upgrade.errors) {
+        process.stderr.write(`[souvenir] Re-index error: ${err}\n`);
+      }
+      if (upgrade.errors.length > 0) process.exitCode = 1;
     }
-    if (upgrade.errors.length > 0) process.exitCode = 1;
   } finally {
     await provider.dispose();
   }
