@@ -10,8 +10,13 @@
  * 4: chunks of archived transcripts keep no text: where it is in the archive (lines, characters),
  *    re-made from the archive when read (embedding/chunk-text.ts). content_text stays for the chunks
  *    of partial sessions (their only copy) and for chunks made before.
+ * 5: a chunk is unique per project too: one session id can exist in two projects (a moved project
+ *    folder, short subagent ids), whose chunks must not refuse each other.
  */
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
+
+/** The unique key of chunks (see chunksTableSql): a table without it is migrated. */
+export const CHUNKS_UNIQUE_KEY = 'UNIQUE(session_id, project_dir, line_number, part)';
 
 /**
  * The chunks table. content_text: the chunk's text, or NULL when it is re-made from the archive:
@@ -33,7 +38,7 @@ export function chunksTableSql(name: string): string {
     text_start INTEGER,
     text_end INTEGER,
     text_format INTEGER,
-    UNIQUE(session_id, line_number, part)
+    ${CHUNKS_UNIQUE_KEY}
   );`;
 }
 

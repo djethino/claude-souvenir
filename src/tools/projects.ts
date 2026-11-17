@@ -75,9 +75,19 @@ export async function handleSouvenirProjects(params: {
 // Delete what souvenir kept of projects whose folder was deleted
 // ---------------------------------------------------------------------------
 
-/** Whether the drive (or root) of a path is there: an unplugged drive is not a deleted folder. */
+/**
+ * Mount points of removable or network drives on macOS and Linux: /Volumes/<name>,
+ * /media/<user>/<name> (or /media/<name>), /run/media/<user>/<name>, /mnt/<name>. Two levels are
+ * checked where a user folder may come first: when unsure, the drive counts as unavailable, and
+ * the project is never offered for cleaning.
+ */
+const POSIX_MOUNT = /^(\/Volumes\/[^/]+|\/media\/[^/]+\/[^/]+|\/media\/[^/]+|\/run\/media\/[^/]+\/[^/]+|\/mnt\/[^/]+)/;
+
+/** Whether the drive of a path is there: an unplugged or unmounted drive is not a deleted folder. */
 function driveAvailable(path: string): boolean {
-  return existsSync(parse(path).root);
+  if (!existsSync(parse(path).root)) return false; // Windows drive letter, network share
+  const mount = POSIX_MOUNT.exec(path.replace(/\\/g, '/'));
+  return !mount || existsSync(mount[1]);
 }
 
 function handleClean(confirm: Confirm): string {

@@ -4,7 +4,7 @@ import { isAbsolute, relative, sep } from 'path';
 import { getDbPath, getProjectsDir } from '../utils/paths.js';
 import { logger } from '../utils/logger.js';
 import {
-  CREATE_TABLES, CREATE_INDEXES, SCHEMA_VERSION, CHUNK_VECTORS, LEGACY_VEC_TABLE, KEEP_PARTIAL_EXCERPTS, KEEP_PARTIAL_EXCERPTS_TRIGGER,
+  CREATE_TABLES, CREATE_INDEXES, SCHEMA_VERSION, CHUNK_VECTORS, CHUNKS_UNIQUE_KEY, LEGACY_VEC_TABLE, KEEP_PARTIAL_EXCERPTS, KEEP_PARTIAL_EXCERPTS_TRIGGER,
   chunksTableSql, createChunkVectorsTable,
 } from './schema.js';
 import { type Db, openDatabase, inTransaction, vectorBlob, getRow, allRows, iterateRows } from './sqlite.js';
@@ -112,12 +112,14 @@ function legacyChunkSpeakers(role: string | null, contentText: string): { hasUse
 function migrateLegacyVectors(db: Db): void {
   if (!tableExists(db, LEGACY_VEC_TABLE)) return;
 
-  const legacyDims = vectorTableDimensions(db, LEGACY_VEC_TABLE);
-  const currentDims = tableExists(db, CHUNK_VECTORS) ? vectorTableDimensions(db, CHUNK_VECTORS) : null;
   const started = Date.now();
   let moved = 0;
 
-  inTransaction(db, () => {
+  // Write lock first, then check again: another process may have moved them meanwhile
+  const migrated = inTransaction(db, () => {
+    if (!tableExists(db, LEGACY_VEC_TABLE)) return false;
+    const legacyDims = vectorTableDimensions(db, LEGACY_VEC_TABLE);
+    const currentDims = tableExists(db, CHUNK_VECTORS) ? vectorTableDimensions(db, CHUNK_VECTORS) : null;
     if (currentDims !== null && currentDims !== legacyDims) {
       // Written by an older version with other settings: not comparable with the current index
       logger.warn(`Dropping ${LEGACY_VEC_TABLE} (${legacyDims}d): incompatible with ${CHUNK_VECTORS} (${currentDims}d)`);
@@ -144,7 +146,9 @@ function migrateLegacyVectors(db: Db): void {
       if (orphans > 0) logger.info(`Deleted ${orphans} vectors of chunks that no longer exist`);
     }
     db.exec(`DROP TABLE ${LEGACY_VEC_TABLE}`);
-  });
+    return true;
+  }, 'IMMEDIATE');
+  if (!migrated) return;
 
   // The copy went through the WAL and freed the old table's pages: give the space back
   db.exec('PRAGMA incremental_vacuum');
@@ -156,23 +160,25 @@ function migrateLegacyVectors(db: Db): void {
  * Re-create the chunks table of an older schema in the current form, keeping every chunk and its
  * chunk_id so that the vectors stay attached to their chunks:
  * - schema 2 kept a second, shorter copy of the text (embed_text, dropped) and had no part number;
- * - schema 3 required content_text; chunks now made from the archive keep no text.
- * The chunks kept keep their text (content_text).
+ * - schema 3 required content_text; chunks now made from the archive keep no text;
+ * - schema 4 had a unique key without the project (a session id found in two projects refused
+ *   the chunks of one of them).
+ * Every column the old table has is copied (the chunks kept keep their text and positions).
  */
 function migrateChunksTable(db: Db): void {
-  const columnsNow = () => allRows<{ name: string }>(db, 'PRAGMA table_info(chunks)').map((c) => c.name);
-  if (columnsNow().includes('text_format')) return;
+  const current = () => getRow<{ sql: string }>(db, "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'chunks'")?.sql.includes(CHUNKS_UNIQUE_KEY) ?? false;
+  if (current()) return;
 
   const started = Date.now();
   // Write lock first, then check again: another process may have migrated (and indexed) meanwhile
   const migrated = inTransaction(db, () => {
-    const columns = columnsNow();
-    if (columns.includes('text_format')) return false;
-    const part = columns.includes('part') ? 'part' : '0';
+    if (current()) return false;
+    const old = new Set(allRows<{ name: string }>(db, 'PRAGMA table_info(chunks)').map((c) => c.name));
+    const kept = ['chunk_id', 'session_id', 'project_dir', 'entry_uuid', 'role', 'content_text', 'timestamp', 'line_number',
+      'part', 'end_line', 'text_start', 'text_end', 'text_format'].filter((c) => old.has(c));
     db.exec(`
       ${chunksTableSql('chunks_new')}
-      INSERT INTO chunks_new (chunk_id, session_id, project_dir, entry_uuid, role, content_text, timestamp, line_number, part)
-        SELECT chunk_id, session_id, project_dir, entry_uuid, role, content_text, timestamp, line_number, ${part} FROM chunks;
+      INSERT INTO chunks_new (${kept.join(', ')}) SELECT ${kept.join(', ')} FROM chunks;
       DROP TABLE chunks;
       ALTER TABLE chunks_new RENAME TO chunks;
     `);
@@ -539,6 +545,12 @@ export function setIndexState(fileKey: string, archivedBytes: number, lastLine: 
   `).run(fileKey, archivedBytes, lastLine, new Date().toISOString());
 }
 
+/** Record an archived transcript indexed up to lastLine, unless its progress was recorded meanwhile. */
+export function setIndexStateIfAbsent(fileKey: string, archivedBytes: number, lastLine: number): void {
+  getDb().prepare('INSERT OR IGNORE INTO index_state (file_path, file_size, last_line, indexed_at) VALUES (?, ?, ?, ?)')
+    .run(fileKey, archivedBytes, lastLine, new Date().toISOString());
+}
+
 /**
  * Get aggregate index status.
  */
@@ -672,7 +684,7 @@ export function deleteProject(projectDir: string): void {
     db.prepare('DELETE FROM transcript_files WHERE project_dir = ?').run(projectDir);
     db.prepare('DELETE FROM transcript_attachments WHERE project_dir = ?').run(projectDir);
     db.prepare('DELETE FROM metadata WHERE key = ?').run(PENDING_VECTORS_KEY + projectDir);
-  });
+  }, 'IMMEDIATE'); // the write lock from the start: no other process writes while the protection is lifted
 
   incrementalVacuum();
 }

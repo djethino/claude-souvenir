@@ -7,6 +7,7 @@ import { archiveProjects, type ArchiveReport } from '../archive/archiver.js';
 import { getArchivedFiles, type ArchivedFileRow } from '../archive/store.js';
 import {
   appendChunks,
+  setIndexStateIfAbsent,
   rangeNeedsReindex,
   type NewChunk,
   getIndexState,
@@ -187,7 +188,7 @@ async function runBuildIndex(
         let expected = indexState?.last_line ?? null;
         let added = 0;
         let stopped = false;
-        for (const batch of appendBatches(chunks, lastLine)) {
+        for (const batch of textBatches(chunks, lastLine)) {
           if (signal?.aborted || late()) {
             stopped = true;
             break;
@@ -224,7 +225,9 @@ async function runBuildIndex(
 
     if (!signal?.aborted && hasPendingVectors(projectDir)) {
       try {
-        totalEmbedded += await embedPendingChunks(provider, projectDir, onProgress, signal);
+        const pending = await embedPendingChunks(provider, projectDir, onProgress, signal, deadline);
+        totalEmbedded += pending.embedded;
+        if (!pending.done && !signal?.aborted) unfinished = true;
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         logger.error(`Error re-embedding the kept chunks of ${projectDir}:`, msg);
@@ -244,7 +247,7 @@ async function runBuildIndex(
  * progress can be set to once it is written: the next build cuts from the line after. The last
  * batch goes up to `lastLine`, the last line read. No chunks: one empty batch, to record progress.
  */
-function appendBatches(chunks: NewChunk[], lastLine: number): Array<{ chunks: NewChunk[]; upToLine: number }> {
+function textBatches(chunks: NewChunk[], lastLine: number): Array<{ chunks: NewChunk[]; upToLine: number }> {
   const batches: Array<{ chunks: NewChunk[]; upToLine: number }> = [];
   let current: NewChunk[] = [];
   let coveredTo = 0;
@@ -297,30 +300,25 @@ async function reindexTranscript(
   }
   const upToLine = indexed ? indexed.last_line : file.line_count;
   const { chunks } = chunkTranscript({ ...file, line_count: upToLine }, 1);
-  chunks.sort((a, b) => a.line_number - b.line_number || a.part - b.part);
 
-  // Ranges of whole lines: the parts of one text stay in one range
-  const batches: NewChunk[][] = [];
-  for (const chunk of chunks) {
-    const last = batches[batches.length - 1];
-    if (last && (last.length < REINDEX_BATCH_CHUNKS || last[last.length - 1].line_number === chunk.line_number)) last.push(chunk);
-    else batches.push([chunk]);
-  }
-  if (batches.length === 0) batches.push([]); // nothing to embed: the old chunks still go
-
+  // Ranges that hold whole texts (a turn with the tool results inside it): every chunk the
+  // incremental runs made inside a turn is in the turn's range, replaced with it
   let embedded = 0;
-  for (let b = 0; b < batches.length; b++) {
-    const fromLine = b === 0 ? 1 : batches[b][0].line_number;
-    const toLine = b + 1 < batches.length ? batches[b + 1][0].line_number - 1 : upToLine;
-    if (options.onlyOutdated && !rangeNeedsReindex(file, fromLine, toLine, CHUNK_TEXT_FORMAT)) continue;
-    if (options.signal?.aborted || (options.deadline !== undefined && Date.now() >= options.deadline)) {
-      return { embedded, done: false };
+  let fromLine = 1;
+  for (const batch of textBatches(chunks, upToLine)) {
+    const toLine = batch.upToLine;
+    if (!options.onlyOutdated || rangeNeedsReindex(file, fromLine, toLine, CHUNK_TEXT_FORMAT)) {
+      if (options.signal?.aborted || (options.deadline !== undefined && Date.now() >= options.deadline)) {
+        return { embedded, done: false };
+      }
+      const embeddings = await embedAll(provider, batch.chunks, options.signal);
+      if (!embeddings) return { embedded, done: false };
+      embedded += replaceTranscriptChunks(file, fromLine, toLine, batch.chunks, embeddings);
     }
-    const embeddings = await embedAll(provider, batches[b], options.signal);
-    if (!embeddings) return { embedded, done: false };
-    embedded += replaceTranscriptChunks(file, fromLine, toLine, batches[b], embeddings);
+    fromLine = toLine + 1;
   }
-  if (!indexed) setIndexState(file.file_key, file.archived_bytes, upToLine);
+  // Only if no other process recorded progress meanwhile: it may have indexed further
+  if (!indexed) setIndexStateIfAbsent(file.file_key, file.archived_bytes, upToLine);
   return { embedded, done: true };
 }
 
@@ -379,10 +377,12 @@ async function embedPendingChunks(
   projectDir: string,
   onProgress: BuildIndexOptions['onProgress'],
   signal: AbortSignal | undefined,
-): Promise<number> {
+  deadline: number | undefined,
+): Promise<{ embedded: number; done: boolean }> {
   let embedded = 0;
   for (let after = 0; ;) {
-    if (signal?.aborted) return embedded;
+    // Stopped: the chunks still without vectors are found again by the next build
+    if (signal?.aborted || (deadline !== undefined && Date.now() >= deadline)) return { embedded, done: false };
     const { missing, lastChunkId } = getChunksWithoutVectors(projectDir, after, PENDING_PAGE_SIZE);
     if (lastChunkId === null) break;
     for (let i = 0; i < missing.length; i += EMBED_BATCH_SIZE) {
@@ -395,5 +395,5 @@ async function embedPendingChunks(
     after = lastChunkId;
   }
   clearPendingVectors(projectDir);
-  return embedded;
+  return { embedded, done: true };
 }

@@ -442,7 +442,8 @@ import { deflateRawSync, inflateRawSync } from "zlib";
 import { isAbsolute as isAbsolute2, relative, sep } from "path";
 
 // src/db/schema.ts
-var SCHEMA_VERSION = 4;
+var SCHEMA_VERSION = 5;
+var CHUNKS_UNIQUE_KEY = "UNIQUE(session_id, project_dir, line_number, part)";
 function chunksTableSql(name) {
   return `CREATE TABLE IF NOT EXISTS ${name} (
     chunk_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -458,7 +459,7 @@ function chunksTableSql(name) {
     text_start INTEGER,
     text_end INTEGER,
     text_format INTEGER,
-    UNIQUE(session_id, line_number, part)
+    ${CHUNKS_UNIQUE_KEY}
   );`;
 }
 var CREATE_TABLES = `
@@ -723,11 +724,12 @@ function legacyChunkSpeakers(role, contentText) {
 }
 function migrateLegacyVectors(db) {
   if (!tableExists(db, LEGACY_VEC_TABLE)) return;
-  const legacyDims = vectorTableDimensions(db, LEGACY_VEC_TABLE);
-  const currentDims = tableExists(db, CHUNK_VECTORS) ? vectorTableDimensions(db, CHUNK_VECTORS) : null;
   const started = Date.now();
   let moved = 0;
-  inTransaction(db, () => {
+  const migrated = inTransaction(db, () => {
+    if (!tableExists(db, LEGACY_VEC_TABLE)) return false;
+    const legacyDims = vectorTableDimensions(db, LEGACY_VEC_TABLE);
+    const currentDims = tableExists(db, CHUNK_VECTORS) ? vectorTableDimensions(db, CHUNK_VECTORS) : null;
     if (currentDims !== null && currentDims !== legacyDims) {
       logger.warn(`Dropping ${LEGACY_VEC_TABLE} (${legacyDims}d): incompatible with ${CHUNK_VECTORS} (${currentDims}d)`);
     } else {
@@ -753,23 +755,38 @@ function migrateLegacyVectors(db) {
       if (orphans > 0) logger.info(`Deleted ${orphans} vectors of chunks that no longer exist`);
     }
     db.exec(`DROP TABLE ${LEGACY_VEC_TABLE}`);
-  });
+    return true;
+  }, "IMMEDIATE");
+  if (!migrated) return;
   db.exec("PRAGMA incremental_vacuum");
   db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
   logger.info(`Moved ${moved} vectors from ${LEGACY_VEC_TABLE} to ${CHUNK_VECTORS} in ${Date.now() - started} ms`);
 }
 function migrateChunksTable(db) {
-  const columnsNow = () => allRows(db, "PRAGMA table_info(chunks)").map((c) => c.name);
-  if (columnsNow().includes("text_format")) return;
+  const current = () => getRow(db, "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'chunks'")?.sql.includes(CHUNKS_UNIQUE_KEY) ?? false;
+  if (current()) return;
   const started = Date.now();
   const migrated = inTransaction(db, () => {
-    const columns = columnsNow();
-    if (columns.includes("text_format")) return false;
-    const part = columns.includes("part") ? "part" : "0";
+    if (current()) return false;
+    const old = new Set(allRows(db, "PRAGMA table_info(chunks)").map((c) => c.name));
+    const kept = [
+      "chunk_id",
+      "session_id",
+      "project_dir",
+      "entry_uuid",
+      "role",
+      "content_text",
+      "timestamp",
+      "line_number",
+      "part",
+      "end_line",
+      "text_start",
+      "text_end",
+      "text_format"
+    ].filter((c) => old.has(c));
     db.exec(`
       ${chunksTableSql("chunks_new")}
-      INSERT INTO chunks_new (chunk_id, session_id, project_dir, entry_uuid, role, content_text, timestamp, line_number, part)
-        SELECT chunk_id, session_id, project_dir, entry_uuid, role, content_text, timestamp, line_number, ${part} FROM chunks;
+      INSERT INTO chunks_new (${kept.join(", ")}) SELECT ${kept.join(", ")} FROM chunks;
       DROP TABLE chunks;
       ALTER TABLE chunks_new RENAME TO chunks;
     `);
@@ -948,12 +965,8 @@ function getIndexState(fileKey) {
   const db = getDb();
   return getRow(db, "SELECT * FROM index_state WHERE file_path = ?", fileKey);
 }
-function setIndexState(fileKey, archivedBytes, lastLine) {
-  const db = getDb();
-  db.prepare(`
-    INSERT OR REPLACE INTO index_state (file_path, file_size, last_line, indexed_at)
-    VALUES (?, ?, ?, ?)
-  `).run(fileKey, archivedBytes, lastLine, (/* @__PURE__ */ new Date()).toISOString());
+function setIndexStateIfAbsent(fileKey, archivedBytes, lastLine) {
+  getDb().prepare("INSERT OR IGNORE INTO index_state (file_path, file_size, last_line, indexed_at) VALUES (?, ?, ?, ?)").run(fileKey, archivedBytes, lastLine, (/* @__PURE__ */ new Date()).toISOString());
 }
 function removeCaseDuplicateArchives(onDisk) {
   const db = getDb();
@@ -1675,7 +1688,7 @@ async function runBuildIndex(provider, projectDirs, options = {}) {
         let expected = indexState?.last_line ?? null;
         let added = 0;
         let stopped = false;
-        for (const batch of appendBatches(chunks, lastLine)) {
+        for (const batch of textBatches(chunks, lastLine)) {
           if (signal?.aborted || late()) {
             stopped = true;
             break;
@@ -1709,7 +1722,9 @@ async function runBuildIndex(provider, projectDirs, options = {}) {
     }
     if (!signal?.aborted && hasPendingVectors(projectDir)) {
       try {
-        totalEmbedded += await embedPendingChunks(provider, projectDir, onProgress, signal);
+        const pending = await embedPendingChunks(provider, projectDir, onProgress, signal, deadline);
+        totalEmbedded += pending.embedded;
+        if (!pending.done && !signal?.aborted) unfinished = true;
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         logger.error(`Error re-embedding the kept chunks of ${projectDir}:`, msg);
@@ -1720,7 +1735,7 @@ async function runBuildIndex(provider, projectDirs, options = {}) {
   logger.info(`Indexing complete: ${totalChunks} chunks, ${totalEmbedded} embedded, ${filesProcessed} files, ${skipped} skipped`);
   return { totalChunks, totalEmbedded, filesProcessed, skipped, errors, resetAll, archive, unfinished };
 }
-function appendBatches(chunks, lastLine) {
+function textBatches(chunks, lastLine) {
   const batches = [];
   let current = [];
   let coveredTo = 0;
@@ -1754,27 +1769,21 @@ async function reindexTranscript(provider, file, options) {
   }
   const upToLine = indexed ? indexed.last_line : file.line_count;
   const { chunks } = chunkTranscript({ ...file, line_count: upToLine }, 1);
-  chunks.sort((a, b) => a.line_number - b.line_number || a.part - b.part);
-  const batches = [];
-  for (const chunk of chunks) {
-    const last = batches[batches.length - 1];
-    if (last && (last.length < REINDEX_BATCH_CHUNKS || last[last.length - 1].line_number === chunk.line_number)) last.push(chunk);
-    else batches.push([chunk]);
-  }
-  if (batches.length === 0) batches.push([]);
   let embedded = 0;
-  for (let b = 0; b < batches.length; b++) {
-    const fromLine = b === 0 ? 1 : batches[b][0].line_number;
-    const toLine = b + 1 < batches.length ? batches[b + 1][0].line_number - 1 : upToLine;
-    if (options.onlyOutdated && !rangeNeedsReindex(file, fromLine, toLine, CHUNK_TEXT_FORMAT)) continue;
-    if (options.signal?.aborted || options.deadline !== void 0 && Date.now() >= options.deadline) {
-      return { embedded, done: false };
+  let fromLine = 1;
+  for (const batch of textBatches(chunks, upToLine)) {
+    const toLine = batch.upToLine;
+    if (!options.onlyOutdated || rangeNeedsReindex(file, fromLine, toLine, CHUNK_TEXT_FORMAT)) {
+      if (options.signal?.aborted || options.deadline !== void 0 && Date.now() >= options.deadline) {
+        return { embedded, done: false };
+      }
+      const embeddings = await embedAll(provider, batch.chunks, options.signal);
+      if (!embeddings) return { embedded, done: false };
+      embedded += replaceTranscriptChunks(file, fromLine, toLine, batch.chunks, embeddings);
     }
-    const embeddings = await embedAll(provider, batches[b], options.signal);
-    if (!embeddings) return { embedded, done: false };
-    embedded += replaceTranscriptChunks(file, fromLine, toLine, batches[b], embeddings);
+    fromLine = toLine + 1;
   }
-  if (!indexed) setIndexState(file.file_key, file.archived_bytes, upToLine);
+  if (!indexed) setIndexStateIfAbsent(file.file_key, file.archived_bytes, upToLine);
   return { embedded, done: true };
 }
 function upgradeOldChunks(provider, options) {
@@ -1803,10 +1812,10 @@ function upgradeOldChunks(provider, options) {
     return result;
   });
 }
-async function embedPendingChunks(provider, projectDir, onProgress, signal) {
+async function embedPendingChunks(provider, projectDir, onProgress, signal, deadline) {
   let embedded = 0;
   for (let after = 0; ; ) {
-    if (signal?.aborted) return embedded;
+    if (signal?.aborted || deadline !== void 0 && Date.now() >= deadline) return { embedded, done: false };
     const { missing, lastChunkId } = getChunksWithoutVectors(projectDir, after, PENDING_PAGE_SIZE);
     if (lastChunkId === null) break;
     for (let i = 0; i < missing.length; i += EMBED_BATCH_SIZE) {
@@ -1819,7 +1828,7 @@ async function embedPendingChunks(provider, projectDir, onProgress, signal) {
     after = lastChunkId;
   }
   clearPendingVectors(projectDir);
-  return embedded;
+  return { embedded, done: true };
 }
 
 // src/docs/indexer.ts

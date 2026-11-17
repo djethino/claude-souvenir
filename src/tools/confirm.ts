@@ -5,6 +5,7 @@ import {
   type ClientCapabilities,
   type InputRequiredResult,
 } from '@modelcontextprotocol/server';
+import { createHash } from 'crypto';
 import type { ToolContext } from './helpers.js';
 
 /**
@@ -25,7 +26,14 @@ export const DECLINED =
   'Cancelled: not confirmed (the user declined or dismissed the dialog, or this session cannot show one, ' +
   'as in claude -p: run it from an interactive session). Nothing was changed.';
 
-const CONFIRM_KEY = 'confirm';
+/**
+ * Key of the question, derived from its text: an answer applies only to the exact question shown.
+ * The handler runs again from the start with the answer; if what it would do changed meanwhile
+ * (the question differs), the user is asked again instead of the old answer being used.
+ */
+function confirmKey(question: string): string {
+  return `confirm-${createHash('sha256').update(question).digest('hex').slice(0, 16)}`;
+}
 
 /** Thrown by Confirm until the user has answered; the tool wrapper turns it into the question. */
 export class ConfirmationNeeded extends Error {
@@ -37,7 +45,7 @@ export class ConfirmationNeeded extends Error {
     return inputRequired({
       inputRequests: {
         // No field: the dialog shows the message with accept / decline
-        [CONFIRM_KEY]: inputRequired.elicit({ message: this.question, requestedSchema: { type: 'object', properties: {} } }),
+        [confirmKey(this.question)]: inputRequired.elicit({ message: this.question, requestedSchema: { type: 'object', properties: {} } }),
       },
     });
   }
@@ -50,7 +58,7 @@ export class ConfirmationNeeded extends Error {
  */
 export function confirmFor(ctx: ToolContext, legacyCapabilities: () => ClientCapabilities | undefined): Confirm {
   return (message, options) => {
-    const answer = inputResponse(ctx.mcpReq.inputResponses, CONFIRM_KEY);
+    const answer = inputResponse(ctx.mcpReq.inputResponses, confirmKey(message));
     if (answer.kind === 'elicit') return answer.action === 'accept';
 
     // Protocol 2026-07-28: capabilities come with each request; earlier: declared at initialize
