@@ -926,6 +926,53 @@ function setIndexState(fileKey, archivedBytes, lastLine) {
     VALUES (?, ?, ?, ?)
   `).run(fileKey, archivedBytes, lastLine, (/* @__PURE__ */ new Date()).toISOString());
 }
+function removeCaseDuplicateArchives(onDisk) {
+  const db = getDb();
+  const pairs = allRows(db, `
+    SELECT d.file_key AS drop_key, d.project_dir AS drop_dir, d.session_id AS drop_session, d.line_count AS drop_lines, d.archived_bytes AS drop_bytes,
+           k.file_key AS keep_key, k.project_dir AS keep_dir, k.line_count AS keep_lines, k.archived_bytes AS keep_bytes
+    FROM transcript_files d JOIN transcript_files k ON lower(d.file_key) = lower(k.file_key) AND d.file_key <> k.file_key`);
+  let transcripts = 0;
+  for (const p of pairs) {
+    if (onDisk.has(p.drop_dir) || !onDisk.has(p.keep_dir)) continue;
+    if (p.drop_lines > p.keep_lines || p.drop_bytes > p.keep_bytes) {
+      logger.warn(`${p.drop_key} holds more than ${p.keep_key}: both kept`);
+      continue;
+    }
+    inTransaction(db, () => {
+      const chunkIds = allRows(db, "SELECT chunk_id FROM chunks WHERE session_id = ? AND project_dir = ?", p.drop_session, p.drop_dir);
+      deleteChunkRows(db, chunkIds.map((r) => r.chunk_id));
+      db.prepare("DELETE FROM index_state WHERE file_path = ?").run(p.drop_key);
+      if (chunkIds.length > 0) db.prepare("DELETE FROM index_state WHERE file_path = ?").run(p.keep_key);
+      db.prepare("DELETE FROM transcript_lines WHERE file_key = ?").run(p.drop_key);
+      db.prepare("DELETE FROM transcript_files WHERE file_key = ?").run(p.drop_key);
+    });
+    transcripts++;
+  }
+  const attachments = allRows(db, `
+    SELECT d.file_key AS drop_key, d.project_dir AS drop_dir, k.project_dir AS keep_dir
+    FROM transcript_attachments d JOIN transcript_attachments k
+      ON lower(d.file_key) = lower(k.file_key) AND d.file_key <> k.file_key AND k.size >= d.size`).filter((a) => !onDisk.has(a.drop_dir) && onDisk.has(a.keep_dir));
+  if (attachments.length > 0) {
+    inTransaction(db, () => {
+      const remove = db.prepare("DELETE FROM transcript_attachments WHERE file_key = ?");
+      for (const a of attachments) remove.run(a.drop_key);
+    });
+  }
+  if (transcripts > 0 || attachments.length > 0) {
+    logger.info(`Removed ${transcripts} transcripts and ${attachments.length} files archived twice under another spelling of their project folder`);
+    incrementalVacuum();
+  }
+  return { transcripts, attachments: attachments.length };
+}
+function incrementalVacuum() {
+  try {
+    const db = getDb();
+    db.exec("PRAGMA incremental_vacuum");
+  } catch (err) {
+    logger.error("Incremental vacuum error:", err);
+  }
+}
 
 // src/archive/store.ts
 function compress(text) {
@@ -1194,11 +1241,14 @@ function listProjectDirsOnDisk() {
   if (!existsSync3(projectsDir)) return [];
   return readdirSync(projectsDir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
 }
+function projectFolder(projectDir) {
+  return listProjectDirsOnDisk().includes(projectDir) ? getProjectTranscriptDir(projectDir) : null;
+}
 function listSourceFiles(projectDir) {
-  const dir = getProjectTranscriptDir(projectDir);
+  const dir = projectFolder(projectDir);
   const transcripts = [];
   const attachments = [];
-  if (!existsSync3(dir)) return { transcripts, attachments };
+  if (!dir) return { transcripts, attachments };
   const keyOf = (path) => relative2(getProjectsDir(), path).split(sep2).join("/");
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const path = join3(dir, entry.name);
@@ -1252,6 +1302,7 @@ async function runArchive(projectDirs, options = {}) {
 }
 async function copyProjects(projectDirs, options) {
   const report = { filesUpdated: 0, linesAdded: 0, attachmentsUpdated: 0, sourcesGone: 0, errors: [] };
+  removeCaseDuplicateArchives(new Set(listProjectDirsOnDisk()));
   for (const projectDir of projectDirs) {
     if (options.signal?.aborted) break;
     const { transcripts, attachments } = listSourceFiles(projectDir);

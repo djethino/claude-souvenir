@@ -14,12 +14,12 @@
 
 import { closeSync, openSync, readFileSync, readSync, statSync } from 'fs';
 import { setImmediate as nextTick } from 'timers/promises';
-import { getDb } from '../db/store.js';
+import { getDb, removeCaseDuplicateArchives } from '../db/store.js';
 import { inTransaction } from '../db/sqlite.js';
 import { logger } from '../utils/logger.js';
 import { serialized } from '../utils/serial.js';
 import { isProjectPath } from '../utils/paths.js';
-import { listSourceFiles, type SourceAttachment, type SourceTranscript } from '../transcript/discovery.js';
+import { listProjectDirsOnDisk, listSourceFiles, type SourceAttachment, type SourceTranscript } from '../transcript/discovery.js';
 import { compress, getArchivedFile, getArchivedFiles, type ArchivedFileRow } from './store.js';
 
 export interface ArchiveProgress {
@@ -109,6 +109,8 @@ async function copyProjects(
   options: { onProgress?: (progress: ArchiveProgress) => void; signal?: AbortSignal },
 ): Promise<ArchiveReport> {
   const report: ArchiveReport = { filesUpdated: 0, linesAdded: 0, attachmentsUpdated: 0, sourcesGone: 0, errors: [] };
+  // Copies made twice under another spelling of a project folder (fixed in discovery.ts)
+  removeCaseDuplicateArchives(new Set(listProjectDirsOnDisk()));
 
   for (const projectDir of projectDirs) {
     if (options.signal?.aborted) break;

@@ -30,13 +30,24 @@ export function listProjectDirsOnDisk(): string[] {
 }
 
 /**
+ * The folder of a project under ~/.claude/projects, only when a folder of exactly that name exists.
+ * On a case-insensitive file system (Windows, macOS), "D--projet-ASymptOmatik-x" also opens the
+ * folder "D--projet-Asymptomatik-x": a project known under another spelling (the archive, old
+ * chunks) must not read the same transcripts a second time.
+ */
+function projectFolder(projectDir: string): string | null {
+  return listProjectDirsOnDisk().includes(projectDir) ? getProjectTranscriptDir(projectDir) : null;
+}
+
+/**
  * Load the sessions-index.json for a project (with caching). Claude Code no longer writes it;
  * older ones still give the summaries and the project path of their sessions.
  */
 export function loadSessionIndex(projectDir: string): SessionIndex | null {
-  const indexPath = join(getProjectTranscriptDir(projectDir), 'sessions-index.json');
+  const folder = projectFolder(projectDir);
+  const indexPath = folder && join(folder, 'sessions-index.json');
 
-  if (!existsSync(indexPath)) {
+  if (!indexPath || !existsSync(indexPath)) {
     logger.debug(`No sessions-index.json for ${projectDir}`);
     return null;
   }
@@ -84,10 +95,10 @@ export interface SourceAttachment {
  * Code predicting the user's next input) are not conversations and are left out.
  */
 export function listSourceFiles(projectDir: string): { transcripts: SourceTranscript[]; attachments: SourceAttachment[] } {
-  const dir = getProjectTranscriptDir(projectDir);
+  const dir = projectFolder(projectDir);
   const transcripts: SourceTranscript[] = [];
   const attachments: SourceAttachment[] = [];
-  if (!existsSync(dir)) return { transcripts, attachments };
+  if (!dir) return { transcripts, attachments };
 
   const keyOf = (path: string) => relative(getProjectsDir(), path).split(sep).join('/');
 

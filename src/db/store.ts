@@ -566,6 +566,63 @@ export function escapeLike(value: string): string {
 }
 
 /**
+ * Remove the transcripts archived twice under two spellings of one project folder (before 0.6.0
+ * was released, a project known under another spelling opened the same folder on a
+ * case-insensitive file system, see transcript/discovery.ts). A copy is removed only when its
+ * spelling is not on disk, the other one is, and the other copy holds at least as many lines and
+ * bytes (the same source file, copied as far or further). Its chunks go with it; when it had
+ * some, the kept transcript's were refused as duplicates and it is indexed again. Chunks of
+ * partial sessions are not touched. Returns how many transcripts and files were removed.
+ */
+export function removeCaseDuplicateArchives(onDisk: Set<string>): { transcripts: number; attachments: number } {
+  const db = getDb();
+  const pairs = allRows<{
+    drop_key: string; drop_dir: string; drop_session: string; drop_lines: number; drop_bytes: number;
+    keep_key: string; keep_dir: string; keep_lines: number; keep_bytes: number;
+  }>(db, `
+    SELECT d.file_key AS drop_key, d.project_dir AS drop_dir, d.session_id AS drop_session, d.line_count AS drop_lines, d.archived_bytes AS drop_bytes,
+           k.file_key AS keep_key, k.project_dir AS keep_dir, k.line_count AS keep_lines, k.archived_bytes AS keep_bytes
+    FROM transcript_files d JOIN transcript_files k ON lower(d.file_key) = lower(k.file_key) AND d.file_key <> k.file_key`);
+
+  let transcripts = 0;
+  for (const p of pairs) {
+    if (onDisk.has(p.drop_dir) || !onDisk.has(p.keep_dir)) continue; // the other row of the pair
+    if (p.drop_lines > p.keep_lines || p.drop_bytes > p.keep_bytes) {
+      logger.warn(`${p.drop_key} holds more than ${p.keep_key}: both kept`);
+      continue;
+    }
+    inTransaction(db, () => {
+      const chunkIds = allRows<{ chunk_id: number }>(db, 'SELECT chunk_id FROM chunks WHERE session_id = ? AND project_dir = ?', p.drop_session, p.drop_dir);
+      deleteChunkRows(db, chunkIds.map((r) => r.chunk_id));
+      db.prepare('DELETE FROM index_state WHERE file_path = ?').run(p.drop_key);
+      // The removed copy's chunks took the session's keys: the kept copy's were refused, index it again
+      if (chunkIds.length > 0) db.prepare('DELETE FROM index_state WHERE file_path = ?').run(p.keep_key);
+      db.prepare('DELETE FROM transcript_lines WHERE file_key = ?').run(p.drop_key);
+      db.prepare('DELETE FROM transcript_files WHERE file_key = ?').run(p.drop_key);
+    });
+    transcripts++;
+  }
+
+  const attachments = allRows<{ drop_key: string; drop_dir: string; keep_dir: string }>(db, `
+    SELECT d.file_key AS drop_key, d.project_dir AS drop_dir, k.project_dir AS keep_dir
+    FROM transcript_attachments d JOIN transcript_attachments k
+      ON lower(d.file_key) = lower(k.file_key) AND d.file_key <> k.file_key AND k.size >= d.size`)
+    .filter((a) => !onDisk.has(a.drop_dir) && onDisk.has(a.keep_dir));
+  if (attachments.length > 0) {
+    inTransaction(db, () => {
+      const remove = db.prepare('DELETE FROM transcript_attachments WHERE file_key = ?');
+      for (const a of attachments) remove.run(a.drop_key);
+    });
+  }
+
+  if (transcripts > 0 || attachments.length > 0) {
+    logger.info(`Removed ${transcripts} transcripts and ${attachments.length} files archived twice under another spelling of their project folder`);
+    incrementalVacuum();
+  }
+  return { transcripts, attachments: attachments.length };
+}
+
+/**
  * Delete everything souvenir kept of a project: archived transcripts and files, chunks, vectors.
  * For a project whose transcripts Claude Code deleted, this is the last copy of its conversations:
  * only on the user's explicit request (souvenir_projects action="clean").
