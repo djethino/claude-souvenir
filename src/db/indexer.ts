@@ -4,12 +4,13 @@ import { chunkTranscript } from '../embedding/chunker.js';
 import { withChunkText } from '../embedding/chunk-text.js';
 import { type EmbeddingProvider, sameIdentity } from '../embedding/provider.js';
 import { archiveProjects, type ArchiveReport } from '../archive/archiver.js';
-import { getArchivedFiles } from '../archive/store.js';
+import { getArchivedFiles, type ArchivedFileRow } from '../archive/store.js';
 import {
   insertChunks,
   getIndexState,
   setIndexState,
-  clearArchivedChunks,
+  replaceTranscriptChunks,
+  getTranscriptsWithOldChunks,
   getIndexIdentity,
   prepareVectorIndex,
   hasPendingVectors,
@@ -57,13 +58,20 @@ interface BuildIndexResult {
  * builds would embed the same new chunks twice. A queued build finds the transcripts the previous
  * one indexed unchanged and skips them.
  *
- * A rebuild re-creates the chunks of archived transcripts from the archive; the chunks of partial
- * sessions (transcripts deleted before souvenir archived them) are the only trace of those
- * sessions and are never deleted. After an embedding model change, a rebuild resets the vectors
- * of every project (they share one vector space) and re-indexes the requested projects; the
- * others are re-indexed on their next search or with project="all". resetAll reports it.
+ * A rebuild cuts the chunks of archived transcripts again from the archive, one transcript at a
+ * time, each replacing the old ones in one transaction (searches stay complete meanwhile); the
+ * chunks of partial sessions (transcripts deleted before souvenir archived them) are the only
+ * trace of those sessions and are never deleted. After an embedding model change, a rebuild
+ * resets the vectors of every project (they share one vector space) and re-indexes the requested
+ * projects; the others are re-indexed on their next search or with project="all". resetAll
+ * reports it.
  */
-export const buildIndex = serialized(runBuildIndex);
+export function buildIndex(...args: Parameters<typeof runBuildIndex>): ReturnType<typeof runBuildIndex> {
+  return exclusive(() => runBuildIndex(...args));
+}
+
+/** Index work of this process runs one task at a time (builds, upgrades of old chunks). */
+const exclusive = serialized(<T>(task: () => Promise<T>): Promise<T> => task()) as <T>(task: () => Promise<T>) => Promise<T>;
 
 async function runBuildIndex(
   provider: EmbeddingProvider,
@@ -90,9 +98,6 @@ async function runBuildIndex(
 
   if (rebuild && !resetAll) {
     logger.info('Rebuilding index from the archive...');
-    for (const dir of projectDirs) {
-      clearArchivedChunks(dir, sessionId);
-    }
   }
 
   let totalChunks = 0;
@@ -122,9 +127,20 @@ async function runBuildIndex(
       });
 
       try {
+        // Rebuild: cut what was indexed again, replacing its chunks; the new lines follow below
+        let replaced = 0;
+        if (rebuild && !resetAll) {
+          const embedded = await reindexTranscript(provider, file, signal);
+          if (embedded === null) break; // aborted
+          replaced = embedded;
+          totalEmbedded += embedded;
+          totalChunks += embedded;
+        }
+
         const indexState = getIndexState(file.file_key);
         if (indexState && indexState.last_line >= file.line_count) {
-          skipped++;
+          if (replaced > 0) filesProcessed++;
+          else skipped++;
           continue;
         }
 
@@ -139,7 +155,7 @@ async function runBuildIndex(
 
         totalChunks += chunks.length;
         setIndexState(file.file_key, file.archived_bytes, lastLine);
-        if (chunks.length > 0) filesProcessed++;
+        if (chunks.length > 0 || replaced > 0) filesProcessed++;
         else skipped++;
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -164,6 +180,66 @@ async function runBuildIndex(
   logger.info(`Indexing complete: ${totalChunks} chunks, ${totalEmbedded} embedded, ${filesProcessed} files, ${skipped} skipped`);
 
   return { totalChunks, totalEmbedded, filesProcessed, skipped, errors, resetAll, archive };
+}
+
+/**
+ * Cut the indexed lines of an archived transcript again (current chunker) and replace its chunks
+ * of those lines in one transaction. Returns how many chunks were embedded, null when aborted
+ * (nothing changed). A transcript never indexed is indexed whole.
+ */
+async function reindexTranscript(provider: EmbeddingProvider, file: ArchivedFileRow, signal?: AbortSignal): Promise<number | null> {
+  const indexed = getIndexState(file.file_key);
+  const upToLine = indexed ? indexed.last_line : file.line_count;
+  const { chunks } = chunkTranscript({ ...file, line_count: upToLine }, 1);
+  const embeddings: Float32Array[] = [];
+  for (let i = 0; i < chunks.length; i += EMBED_BATCH_SIZE) {
+    if (signal?.aborted) return null;
+    embeddings.push(...await provider.embed(chunks.slice(i, i + EMBED_BATCH_SIZE).map((c) => c.content_text)));
+  }
+  return replaceTranscriptChunks(file, upToLine, chunks, embeddings, !indexed);
+}
+
+export interface UpgradeResult {
+  transcripts: number;
+  chunks: number;
+  /** Transcripts still holding chunks made before 0.6.0 */
+  remaining: number;
+  errors: string[];
+}
+
+/**
+ * Re-index, in the background, the archived transcripts whose chunks were made before 0.6.0
+ * (text cut at 2,000 characters, first reply entry only), most recently active first, until
+ * `deadline` (checked between transcripts). Each transcript's chunks are replaced in one
+ * transaction, so searches stay complete while it runs. Partial sessions are not touched.
+ */
+export function upgradeOldChunks(
+  provider: EmbeddingProvider,
+  options: { deadline: number; signal?: AbortSignal },
+): Promise<UpgradeResult> {
+  return exclusive(async () => {
+    prepareVectorIndex(provider.identity); // throws on a model change: the user must rebuild
+    const pending = getTranscriptsWithOldChunks();
+    const result: UpgradeResult = { transcripts: 0, chunks: 0, remaining: pending.length, errors: [] };
+    for (const file of pending) {
+      if (Date.now() >= options.deadline || options.signal?.aborted) break;
+      try {
+        const embedded = await reindexTranscript(provider, file, options.signal);
+        if (embedded === null) break;
+        result.transcripts++;
+        result.chunks += embedded;
+        result.remaining--;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logger.error(`Error re-indexing ${file.file_key}:`, msg);
+        result.errors.push(`${file.file_key}: ${msg}`);
+      }
+    }
+    if (result.transcripts > 0) {
+      logger.info(`Old index format: ${result.transcripts} transcripts re-indexed (${result.chunks} chunks), ${result.remaining} left`);
+    }
+    return result;
+  });
 }
 
 /**

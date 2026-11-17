@@ -6,7 +6,7 @@ import { getArchiveStats } from '../archive/store.js';
 import { archiveBacklog, archiveInProgress } from '../archive/archiver.js';
 import { listProjectDirsOnDisk } from '../transcript/discovery.js';
 import { buildIndex } from '../db/indexer.js';
-import { getDb, getIndexStatus, getIndexIdentity, fullVacuum } from '../db/store.js';
+import { getDb, getIndexStatus, getIndexIdentity, fullVacuum, countOldChunks } from '../db/store.js';
 import { docsDbExists, getDocsIndexIdentity, getDocsChunkCount } from '../docs/store.js';
 import { describeIdentity, sameIdentity } from '../embedding/provider.js';
 import { findModelPrompts } from '../embedding/models.js';
@@ -72,6 +72,10 @@ function getStatusReport(projectFilter?: string): string {
   lines.push(`  Built with: ${identity ? describeIdentity(identity) : 'not built yet'}`);
   lines.push(`  Total chunks: ${status.totalChunks}`);
   lines.push(`  Transcripts indexed: ${status.totalFiles}`);
+  const old = countOldChunks(projectDir);
+  if (old.chunks > 0) {
+    lines.push(`  Made before 0.6.0, being re-indexed in the background: ${old.chunks} chunks of ${old.transcripts} transcripts (each one replaced at once, search stays complete)`);
+  }
   lines.push('');
 
   if (status.projects.length === 0) {

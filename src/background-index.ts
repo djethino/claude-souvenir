@@ -1,6 +1,7 @@
 /**
  * Background archiving and indexation entry point for souvenir hooks: archives every project's
- * transcripts (see archive/archiver.ts), then indexes the current project.
+ * transcripts (see archive/archiver.ts), then indexes the current project, then re-indexes a few
+ * transcripts whose chunks were made before 0.6.0 (see upgradeOldChunks).
  * Called async by Stop, PostToolUse, UserPromptSubmit, PreCompact hooks.
  *
  * Each hook is a new process, so coordination is file-based:
@@ -19,7 +20,7 @@ import { join } from 'path';
 import { getSouvenirDir } from './utils/paths.js';
 import { getConfig } from './config.js';
 import { createEmbeddingProvider } from './tools/helpers.js';
-import { buildIndex } from './db/indexer.js';
+import { buildIndex, upgradeOldChunks } from './db/indexer.js';
 import { buildDocsIndex } from './docs/indexer.js';
 import { docsDbExists, getDocSources } from './docs/store.js';
 import { archiveProjects } from './archive/archiver.js';
@@ -29,6 +30,8 @@ const SOUVENIR_DIR = getSouvenirDir();
 const LOCK_FILE = join(SOUVENIR_DIR, 'bg-index.lock');
 const LAST_RUN_FILE = join(SOUVENIR_DIR, 'bg-index.last');
 const MIN_INTERVAL_MS = 30_000; // 30s debounce
+/** Time a run spends re-indexing chunks made before 0.6.0 (checked between transcripts): the next run goes on. */
+const UPGRADE_BUDGET_MS = 5 * 60_000;
 
 mkdirSync(SOUVENIR_DIR, { recursive: true });
 
@@ -89,18 +92,16 @@ async function run(): Promise<void> {
   if (archive.errors.length > 0) process.exitCode = 1;
 
   const config = getConfig();
-  if (!config.currentProject) {
-    return; // The project has no Claude Code history yet
-  }
-
   const provider = createEmbeddingProvider(config);
   try {
     await provider.initialize();
 
-    // 1. Index transcripts (global DB)
-    const result = await buildIndex(provider, [config.currentProject], { rebuild: false });
-    if (result.totalEmbedded > 0) {
-      process.stderr.write(`[souvenir] Background index: ${result.totalEmbedded} new transcript chunks\n`);
+    // 1. Index transcripts (global DB), when the project has a Claude Code history
+    if (config.currentProject) {
+      const result = await buildIndex(provider, [config.currentProject], { rebuild: false });
+      if (result.totalEmbedded > 0) {
+        process.stderr.write(`[souvenir] Background index: ${result.totalEmbedded} new transcript chunks\n`);
+      }
     }
 
     // 2. Index docs (local DB) if sources are configured
@@ -114,6 +115,14 @@ async function run(): Promise<void> {
         }
       }
     }
+
+    // 3. Chunks made before 0.6.0 (cut at 2,000 characters): cut them again from the archive, a few
+    //    transcripts per run, without the user doing anything; searches stay complete meanwhile
+    const upgrade = await upgradeOldChunks(provider, { deadline: Date.now() + UPGRADE_BUDGET_MS });
+    for (const err of upgrade.errors) {
+      process.stderr.write(`[souvenir] Re-index error: ${err}\n`);
+    }
+    if (upgrade.errors.length > 0) process.exitCode = 1;
   } finally {
     await provider.dispose();
   }

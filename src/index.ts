@@ -200,10 +200,10 @@ The index is built from souvenir's archive of every transcript, which is kept up
 - "status": show the archive (sessions, lines, size, transcripts Claude Code deleted) and what's indexed with which embedding model.
 - "check": verify the configuration end to end (settings, embedding server, a test embedding, index compatibility). Use it when semantic search fails or after changing settings.
 - "build": index new/updated sessions now (incremental).
-- "rebuild": re-create the index from the archive (archived conversations and the excerpts of partial sessions are never deleted). After an embedding model change it resets the vectors of every project (use project="all" to re-index every project now). Can take a long time on a large history. Asks the user to confirm when the client supports it.
+- "rebuild": re-index from the archive, one session at a time, each replacing its old chunks at once, so searches stay complete meanwhile (archived conversations and the excerpts of partial sessions are never deleted). Not needed after upgrading souvenir: chunks made before 0.6.0 are re-indexed automatically in the background. After an embedding model change it resets the vectors of every project (use project="all" to re-index every project now). Can take a long time on a large history. Asks the user to confirm when the client supports it.
 - "vacuum": compact the database file to reclaim disk space from deleted data.`,
     inputSchema: z.object({
-      action: z.enum(['status', 'check', 'build', 'rebuild', 'vacuum']).describe('"status": show indexing state. "check": verify configuration and embedding server. "build": incrementally index new content. "rebuild": drop and re-index everything. "vacuum": compact database file.'),
+      action: z.enum(['status', 'check', 'build', 'rebuild', 'vacuum']).describe('"status": show indexing state. "check": verify configuration and embedding server. "build": incrementally index new content. "rebuild": re-index everything from the archive. "vacuum": compact database file.'),
       project: z.string().optional().describe('Project to index. Default: current project. Use "all" for all projects.'),
       session_id: z.string().optional().describe('Index only a specific session.'),
     }),

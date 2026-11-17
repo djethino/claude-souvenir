@@ -36,6 +36,8 @@ After context compaction, it gets worse: the summary captures *what* was done bu
 3. A background hook then splits what is new into chunks (what the user wrote with the whole reply that follows; a long exchange in several overlapping parts, never cut) and turns each chunk into a vector with an **embedding model**. Vectors are stored in the same SQLite database with [sqlite-vec](https://github.com/asg017/sqlite-vec). A chunk does not store its text a second time: it records where it is in the archive, and its text is read back from there.
 4. When Claude searches, the query is turned into a vector too, and the closest chunks are returned. The default **hybrid** mode combines this meaning-based search with exact text matching over the whole archive.
 
+**Upgrading from an earlier version** needs nothing from you. The index is converted at the first start, then the chunks made before 0.6.0 are re-indexed whole in the background, a few sessions after each interaction, most recent first; each session's chunks are replaced at once, so searches stay complete meanwhile. `souvenir_index status` shows what is left.
+
 **Sessions older than the archive.** Before 0.6.0, souvenir kept only search excerpts (the first 2,000 characters of each exchange; tool calls by name only, without their input or results) and read Claude Code's files directly. Sessions whose transcript Claude Code deleted before 0.6.0 cannot be recovered in full: souvenir lists them as **partial**, shows and searches their excerpts, and never deletes them. Sessions still listed in Claude Code's old `sessions-index.json` with nothing kept are listed as **lost**.
 
 The embedding model runs on a server of your choice:
@@ -211,7 +213,7 @@ Manage the transcript index (`status` and `check` also report whether this proje
 
 | Parameter | Description |
 |-----------|-------------|
-| `action` | `status`, `check` (settings, server, test embedding, index compatibility), `build` (incremental), `rebuild` (re-create the index from the archive; after a model change it resets the vectors of every project; the archive and partial sessions' excerpts are never deleted), `vacuum` (compact the database) |
+| `action` | `status`, `check` (settings, server, test embedding, index compatibility), `build` (incremental), `rebuild` (re-index from the archive, one session at a time, each replacing its old chunks at once so searches stay complete; after a model change it resets the vectors of every project; the archive and partial sessions' excerpts are never deleted), `vacuum` (compact the database) |
 | `project` | Project filter. Use `"all"` for all projects |
 | `session_id` | Index a specific session only |
 

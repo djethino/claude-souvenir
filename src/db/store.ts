@@ -10,6 +10,7 @@ import {
   setStoredIdentity, tableExists, vectorTableDimensions,
 } from './identity.js';
 import type { EmbeddingIdentity } from '../embedding/provider.js';
+import type { ArchivedFileRow } from '../archive/store.js';
 
 export interface ChunkRow {
   chunk_id: number;
@@ -280,7 +281,15 @@ export interface NewChunk {
  */
 export function insertChunks(chunks: NewChunk[], embeddings: Float32Array[]): number {
   const db = getDb();
+  let inserted = 0;
+  inTransaction(db, () => {
+    inserted = insertChunkRows(db, chunks, embeddings);
+  });
+  return inserted;
+}
 
+/** Insert chunks and their vectors, inside the caller's transaction. Returns how many were new. */
+function insertChunkRows(db: Db, chunks: NewChunk[], embeddings: Float32Array[]): number {
   if (chunks.length !== embeddings.length) {
     throw new Error(`Chunk count (${chunks.length}) doesn't match embedding count (${embeddings.length})`);
   }
@@ -291,24 +300,81 @@ export function insertChunks(chunks: NewChunk[], embeddings: Float32Array[]): nu
   `);
 
   let inserted = 0;
+  for (let i = 0; i < chunks.length; i++) {
+    const chunk = chunks[i];
+    const result = insertChunk.run(
+      chunk.session_id, chunk.project_dir, chunk.entry_uuid || null, chunk.role,
+      chunk.timestamp || null, chunk.line_number, chunk.part,
+      chunk.end_line, chunk.text_start, chunk.text_end, chunk.text_format,
+    );
 
+    if (result.changes > 0) {
+      insertVector(db, BigInt(result.lastInsertRowid), chunk, chunk.hasUser, chunk.hasAssistant, embeddings[i]);
+      inserted++;
+    }
+  }
+  return inserted;
+}
+
+/** Delete chunks and their vectors, inside the caller's transaction. */
+function deleteChunkRows(db: Db, chunkIds: number[]): void {
+  if (tableExists(db, CHUNK_VECTORS)) {
+    const deleteVector = db.prepare(`DELETE FROM ${CHUNK_VECTORS} WHERE chunk_id = ?`);
+    for (const id of chunkIds) deleteVector.run(BigInt(id));
+  }
+  const deleteChunk = db.prepare('DELETE FROM chunks WHERE chunk_id = ?');
+  for (const id of chunkIds) deleteChunk.run(id);
+}
+
+/**
+ * Replace the chunks of an archived transcript's lines 1..upToLine with chunks cut again from the
+ * archive, in one transaction: searches see either the old chunks or the new ones, never a gap.
+ * Chunks of later lines (indexed meanwhile by another process) are left alone. `indexedUpTo`:
+ * record that the transcript is indexed up to upToLine (when it had no index progress).
+ * Returns how many chunks were inserted.
+ */
+export function replaceTranscriptChunks(
+  file: { file_key: string; session_id: string; project_dir: string; archived_bytes: number },
+  upToLine: number,
+  chunks: NewChunk[],
+  embeddings: Float32Array[],
+  indexedUpTo: boolean,
+): number {
+  const db = getDb();
+  let inserted = 0;
   inTransaction(db, () => {
-    for (let i = 0; i < chunks.length; i++) {
-      const chunk = chunks[i];
-      const result = insertChunk.run(
-        chunk.session_id, chunk.project_dir, chunk.entry_uuid || null, chunk.role,
-        chunk.timestamp || null, chunk.line_number, chunk.part,
-        chunk.end_line, chunk.text_start, chunk.text_end, chunk.text_format,
-      );
-
-      if (result.changes > 0) {
-        insertVector(db, BigInt(result.lastInsertRowid), chunk, chunk.hasUser, chunk.hasAssistant, embeddings[i]);
-        inserted++;
-      }
+    const old = allRows<{ chunk_id: number }>(db,
+      'SELECT chunk_id FROM chunks WHERE session_id = ? AND project_dir = ? AND line_number <= ?',
+      file.session_id, file.project_dir, upToLine);
+    deleteChunkRows(db, old.map((r) => r.chunk_id));
+    inserted = insertChunkRows(db, chunks, embeddings);
+    if (indexedUpTo) {
+      db.prepare('INSERT OR REPLACE INTO index_state (file_path, file_size, last_line, indexed_at) VALUES (?, ?, ?, ?)')
+        .run(file.file_key, file.archived_bytes, upToLine, new Date().toISOString());
     }
   });
-
   return inserted;
+}
+
+/**
+ * Archived transcripts that still have chunks made before 0.6.0 (text kept, cut at 2,000
+ * characters, reply's first entry only), most recently active first. Partial sessions are not
+ * among them: they have no archived transcript, their chunks are their only copy.
+ */
+export function getTranscriptsWithOldChunks(): ArchivedFileRow[] {
+  return allRows<ArchivedFileRow>(getDb(), `
+    SELECT f.* FROM transcript_files f
+    WHERE EXISTS (SELECT 1 FROM chunks c WHERE c.session_id = f.session_id AND c.project_dir = f.project_dir AND c.text_format IS NULL)
+    ORDER BY f.last_timestamp DESC`);
+}
+
+/** Chunks of archived transcripts made before 0.6.0, still to be cut again (see getTranscriptsWithOldChunks). */
+export function countOldChunks(projectDir?: string): { chunks: number; transcripts: number } {
+  return getRow<{ chunks: number; transcripts: number }>(getDb(), `
+    SELECT COUNT(*) AS chunks, COUNT(DISTINCT c.session_id) AS transcripts FROM chunks c
+    WHERE c.text_format IS NULL ${projectDir ? 'AND c.project_dir = ?' : ''}
+      AND EXISTS (SELECT 1 FROM transcript_files f WHERE f.session_id = c.session_id AND f.project_dir = c.project_dir)`,
+    ...(projectDir ? [projectDir] : []))!;
 }
 
 /** sqlite-vec only accepts integer primary keys: a JS number binds as REAL, BigInt as INTEGER. */
@@ -500,38 +566,6 @@ export function escapeLike(value: string): string {
 }
 
 /**
- * Delete the chunks of a project's archived transcripts and their index progress, to re-create
- * them from the archive (rebuild). The chunks of partial sessions are kept: nothing can re-create
- * them.
- */
-export function clearArchivedChunks(projectDir: string, sessionId?: string): void {
-  const db = getDb();
-  const sessionFilter = sessionId ? 'AND session_id = ?' : '';
-  const params = sessionId ? [projectDir, projectDir, sessionId] : [projectDir, projectDir];
-
-  inTransaction(db, () => {
-    const chunkIds = allRows<{ chunk_id: number }>(db, `
-      SELECT chunk_id FROM chunks
-      WHERE project_dir = ? AND session_id IN (SELECT session_id FROM transcript_files WHERE project_dir = ?) ${sessionFilter}`, ...params);
-    if (tableExists(db, CHUNK_VECTORS)) {
-      const deleteVector = db.prepare(`DELETE FROM ${CHUNK_VECTORS} WHERE chunk_id = ?`);
-      for (const { chunk_id } of chunkIds) deleteVector.run(BigInt(chunk_id));
-    }
-    const deleteChunk = db.prepare('DELETE FROM chunks WHERE chunk_id = ?');
-    for (const { chunk_id } of chunkIds) deleteChunk.run(chunk_id);
-
-    if (sessionId) {
-      db.prepare('DELETE FROM index_state WHERE file_path IN (SELECT file_key FROM transcript_files WHERE project_dir = ? AND (session_id = ? OR parent_session_id = ?))')
-        .run(projectDir, sessionId, sessionId);
-    } else {
-      db.prepare('DELETE FROM index_state WHERE file_path IN (SELECT file_key FROM transcript_files WHERE project_dir = ?)').run(projectDir);
-    }
-  });
-
-  incrementalVacuum();
-}
-
-/**
  * Delete everything souvenir kept of a project: archived transcripts and files, chunks, vectors.
  * For a project whose transcripts Claude Code deleted, this is the last copy of its conversations:
  * only on the user's explicit request (souvenir_projects action="clean").
@@ -541,11 +575,7 @@ export function deleteProject(projectDir: string): void {
 
   inTransaction(db, () => {
     const chunkIds = allRows<{ chunk_id: number }>(db, 'SELECT chunk_id FROM chunks WHERE project_dir = ?', projectDir);
-    if (tableExists(db, CHUNK_VECTORS)) {
-      const deleteVector = db.prepare(`DELETE FROM ${CHUNK_VECTORS} WHERE chunk_id = ?`);
-      for (const { chunk_id } of chunkIds) deleteVector.run(BigInt(chunk_id));
-    }
-    db.prepare('DELETE FROM chunks WHERE project_dir = ?').run(projectDir);
+    deleteChunkRows(db, chunkIds.map((r) => r.chunk_id));
     db.prepare('DELETE FROM index_state WHERE file_path IN (SELECT file_key FROM transcript_files WHERE project_dir = ?)').run(projectDir);
     db.prepare('DELETE FROM transcript_lines WHERE file_key IN (SELECT file_key FROM transcript_files WHERE project_dir = ?)').run(projectDir);
     db.prepare('DELETE FROM transcript_files WHERE project_dir = ?').run(projectDir);

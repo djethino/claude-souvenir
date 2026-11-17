@@ -35322,6 +35322,13 @@ function closeDb() {
 }
 function insertChunks(chunks, embeddings) {
   const db = getDb();
+  let inserted = 0;
+  inTransaction(db, () => {
+    inserted = insertChunkRows(db, chunks, embeddings);
+  });
+  return inserted;
+}
+function insertChunkRows(db, chunks, embeddings) {
   if (chunks.length !== embeddings.length) {
     throw new Error(`Chunk count (${chunks.length}) doesn't match embedding count (${embeddings.length})`);
   }
@@ -35330,29 +35337,64 @@ function insertChunks(chunks, embeddings) {
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   let inserted = 0;
+  for (let i = 0; i < chunks.length; i++) {
+    const chunk = chunks[i];
+    const result = insertChunk.run(
+      chunk.session_id,
+      chunk.project_dir,
+      chunk.entry_uuid || null,
+      chunk.role,
+      chunk.timestamp || null,
+      chunk.line_number,
+      chunk.part,
+      chunk.end_line,
+      chunk.text_start,
+      chunk.text_end,
+      chunk.text_format
+    );
+    if (result.changes > 0) {
+      insertVector(db, BigInt(result.lastInsertRowid), chunk, chunk.hasUser, chunk.hasAssistant, embeddings[i]);
+      inserted++;
+    }
+  }
+  return inserted;
+}
+function deleteChunkRows(db, chunkIds) {
+  if (tableExists(db, CHUNK_VECTORS)) {
+    const deleteVector = db.prepare(`DELETE FROM ${CHUNK_VECTORS} WHERE chunk_id = ?`);
+    for (const id of chunkIds) deleteVector.run(BigInt(id));
+  }
+  const deleteChunk = db.prepare("DELETE FROM chunks WHERE chunk_id = ?");
+  for (const id of chunkIds) deleteChunk.run(id);
+}
+function replaceTranscriptChunks(file2, upToLine, chunks, embeddings, indexedUpTo) {
+  const db = getDb();
+  let inserted = 0;
   inTransaction(db, () => {
-    for (let i = 0; i < chunks.length; i++) {
-      const chunk = chunks[i];
-      const result = insertChunk.run(
-        chunk.session_id,
-        chunk.project_dir,
-        chunk.entry_uuid || null,
-        chunk.role,
-        chunk.timestamp || null,
-        chunk.line_number,
-        chunk.part,
-        chunk.end_line,
-        chunk.text_start,
-        chunk.text_end,
-        chunk.text_format
-      );
-      if (result.changes > 0) {
-        insertVector(db, BigInt(result.lastInsertRowid), chunk, chunk.hasUser, chunk.hasAssistant, embeddings[i]);
-        inserted++;
-      }
+    const old = allRows(
+      db,
+      "SELECT chunk_id FROM chunks WHERE session_id = ? AND project_dir = ? AND line_number <= ?",
+      file2.session_id,
+      file2.project_dir,
+      upToLine
+    );
+    deleteChunkRows(db, old.map((r) => r.chunk_id));
+    inserted = insertChunkRows(db, chunks, embeddings);
+    if (indexedUpTo) {
+      db.prepare("INSERT OR REPLACE INTO index_state (file_path, file_size, last_line, indexed_at) VALUES (?, ?, ?, ?)").run(file2.file_key, file2.archived_bytes, upToLine, (/* @__PURE__ */ new Date()).toISOString());
     }
   });
   return inserted;
+}
+function countOldChunks(projectDir) {
+  return getRow(
+    getDb(),
+    `
+    SELECT COUNT(*) AS chunks, COUNT(DISTINCT c.session_id) AS transcripts FROM chunks c
+    WHERE c.text_format IS NULL ${projectDir ? "AND c.project_dir = ?" : ""}
+      AND EXISTS (SELECT 1 FROM transcript_files f WHERE f.session_id = c.session_id AND f.project_dir = c.project_dir)`,
+    ...projectDir ? [projectDir] : []
+  );
 }
 function insertVector(db, chunkId, chunk, hasUser, hasAssistant, embedding) {
   db.prepare(`
@@ -35477,37 +35519,11 @@ function getIndexStatus(projectDir) {
 function escapeLike(value) {
   return value.replace(/[\\%_]/g, (c) => `\\${c}`);
 }
-function clearArchivedChunks(projectDir, sessionId) {
-  const db = getDb();
-  const sessionFilter = sessionId ? "AND session_id = ?" : "";
-  const params = sessionId ? [projectDir, projectDir, sessionId] : [projectDir, projectDir];
-  inTransaction(db, () => {
-    const chunkIds = allRows(db, `
-      SELECT chunk_id FROM chunks
-      WHERE project_dir = ? AND session_id IN (SELECT session_id FROM transcript_files WHERE project_dir = ?) ${sessionFilter}`, ...params);
-    if (tableExists(db, CHUNK_VECTORS)) {
-      const deleteVector = db.prepare(`DELETE FROM ${CHUNK_VECTORS} WHERE chunk_id = ?`);
-      for (const { chunk_id } of chunkIds) deleteVector.run(BigInt(chunk_id));
-    }
-    const deleteChunk = db.prepare("DELETE FROM chunks WHERE chunk_id = ?");
-    for (const { chunk_id } of chunkIds) deleteChunk.run(chunk_id);
-    if (sessionId) {
-      db.prepare("DELETE FROM index_state WHERE file_path IN (SELECT file_key FROM transcript_files WHERE project_dir = ? AND (session_id = ? OR parent_session_id = ?))").run(projectDir, sessionId, sessionId);
-    } else {
-      db.prepare("DELETE FROM index_state WHERE file_path IN (SELECT file_key FROM transcript_files WHERE project_dir = ?)").run(projectDir);
-    }
-  });
-  incrementalVacuum();
-}
 function deleteProject(projectDir) {
   const db = getDb();
   inTransaction(db, () => {
     const chunkIds = allRows(db, "SELECT chunk_id FROM chunks WHERE project_dir = ?", projectDir);
-    if (tableExists(db, CHUNK_VECTORS)) {
-      const deleteVector = db.prepare(`DELETE FROM ${CHUNK_VECTORS} WHERE chunk_id = ?`);
-      for (const { chunk_id } of chunkIds) deleteVector.run(BigInt(chunk_id));
-    }
-    db.prepare("DELETE FROM chunks WHERE project_dir = ?").run(projectDir);
+    deleteChunkRows(db, chunkIds.map((r) => r.chunk_id));
     db.prepare("DELETE FROM index_state WHERE file_path IN (SELECT file_key FROM transcript_files WHERE project_dir = ?)").run(projectDir);
     db.prepare("DELETE FROM transcript_lines WHERE file_key IN (SELECT file_key FROM transcript_files WHERE project_dir = ?)").run(projectDir);
     db.prepare("DELETE FROM transcript_files WHERE project_dir = ?").run(projectDir);
@@ -37215,7 +37231,10 @@ async function disposeSingletonProvider() {
 // src/db/indexer.ts
 var EMBED_BATCH_SIZE = 32;
 var PENDING_PAGE_SIZE = 2e3;
-var buildIndex = serialized(runBuildIndex);
+function buildIndex(...args) {
+  return exclusive(() => runBuildIndex(...args));
+}
+var exclusive = serialized((task) => task());
 async function runBuildIndex(provider, projectDirs, options = {}) {
   const { sessionId, includeSubagents = true, rebuild = false, onProgress, signal } = options;
   const archive = await archiveProjects(projectDirs, { onProgress, signal });
@@ -37231,9 +37250,6 @@ async function runBuildIndex(provider, projectDirs, options = {}) {
   prepareVectorIndex(provider.identity, { resetAll });
   if (rebuild && !resetAll) {
     logger.info("Rebuilding index from the archive...");
-    for (const dir of projectDirs) {
-      clearArchivedChunks(dir, sessionId);
-    }
   }
   let totalChunks = 0;
   let totalEmbedded = 0;
@@ -37257,9 +37273,18 @@ async function runBuildIndex(provider, projectDirs, options = {}) {
         detail: `Session ${file2.session_id.slice(0, 8)}...`
       });
       try {
+        let replaced = 0;
+        if (rebuild && !resetAll) {
+          const embedded = await reindexTranscript(provider, file2, signal);
+          if (embedded === null) break;
+          replaced = embedded;
+          totalEmbedded += embedded;
+          totalChunks += embedded;
+        }
         const indexState = getIndexState(file2.file_key);
         if (indexState && indexState.last_line >= file2.line_count) {
-          skipped++;
+          if (replaced > 0) filesProcessed++;
+          else skipped++;
           continue;
         }
         const fromLine = indexState ? indexState.last_line + 1 : 1;
@@ -37271,7 +37296,7 @@ async function runBuildIndex(provider, projectDirs, options = {}) {
         }
         totalChunks += chunks.length;
         setIndexState(file2.file_key, file2.archived_bytes, lastLine);
-        if (chunks.length > 0) filesProcessed++;
+        if (chunks.length > 0 || replaced > 0) filesProcessed++;
         else skipped++;
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -37293,6 +37318,17 @@ async function runBuildIndex(provider, projectDirs, options = {}) {
   }
   logger.info(`Indexing complete: ${totalChunks} chunks, ${totalEmbedded} embedded, ${filesProcessed} files, ${skipped} skipped`);
   return { totalChunks, totalEmbedded, filesProcessed, skipped, errors, resetAll, archive };
+}
+async function reindexTranscript(provider, file2, signal) {
+  const indexed = getIndexState(file2.file_key);
+  const upToLine = indexed ? indexed.last_line : file2.line_count;
+  const { chunks } = chunkTranscript({ ...file2, line_count: upToLine }, 1);
+  const embeddings = [];
+  for (let i = 0; i < chunks.length; i += EMBED_BATCH_SIZE) {
+    if (signal?.aborted) return null;
+    embeddings.push(...await provider.embed(chunks.slice(i, i + EMBED_BATCH_SIZE).map((c) => c.content_text)));
+  }
+  return replaceTranscriptChunks(file2, upToLine, chunks, embeddings, !indexed);
 }
 async function embedPendingChunks(provider, projectDir, onProgress, signal) {
   let embedded = 0;
@@ -38758,6 +38794,10 @@ function getStatusReport(projectFilter) {
   lines.push(`  Built with: ${identity ? describeIdentity(identity) : "not built yet"}`);
   lines.push(`  Total chunks: ${status.totalChunks}`);
   lines.push(`  Transcripts indexed: ${status.totalFiles}`);
+  const old = countOldChunks(projectDir);
+  if (old.chunks > 0) {
+    lines.push(`  Made before 0.6.0, being re-indexed in the background: ${old.chunks} chunks of ${old.transcripts} transcripts (each one replaced at once, search stays complete)`);
+  }
   lines.push("");
   if (status.projects.length === 0) {
     lines.push('  No projects indexed yet. Run souvenir_index with action="build".');
@@ -40660,10 +40700,10 @@ The index is built from souvenir's archive of every transcript, which is kept up
 - "status": show the archive (sessions, lines, size, transcripts Claude Code deleted) and what's indexed with which embedding model.
 - "check": verify the configuration end to end (settings, embedding server, a test embedding, index compatibility). Use it when semantic search fails or after changing settings.
 - "build": index new/updated sessions now (incremental).
-- "rebuild": re-create the index from the archive (archived conversations and the excerpts of partial sessions are never deleted). After an embedding model change it resets the vectors of every project (use project="all" to re-index every project now). Can take a long time on a large history. Asks the user to confirm when the client supports it.
+- "rebuild": re-index from the archive, one session at a time, each replacing its old chunks at once, so searches stay complete meanwhile (archived conversations and the excerpts of partial sessions are never deleted). Not needed after upgrading souvenir: chunks made before 0.6.0 are re-indexed automatically in the background. After an embedding model change it resets the vectors of every project (use project="all" to re-index every project now). Can take a long time on a large history. Asks the user to confirm when the client supports it.
 - "vacuum": compact the database file to reclaim disk space from deleted data.`,
     inputSchema: external_exports.object({
-      action: external_exports.enum(["status", "check", "build", "rebuild", "vacuum"]).describe('"status": show indexing state. "check": verify configuration and embedding server. "build": incrementally index new content. "rebuild": drop and re-index everything. "vacuum": compact database file.'),
+      action: external_exports.enum(["status", "check", "build", "rebuild", "vacuum"]).describe('"status": show indexing state. "check": verify configuration and embedding server. "build": incrementally index new content. "rebuild": re-index everything from the archive. "vacuum": compact database file.'),
       project: external_exports.string().optional().describe('Project to index. Default: current project. Use "all" for all projects.'),
       session_id: external_exports.string().optional().describe("Index only a specific session.")
     })
