@@ -35195,6 +35195,7 @@ function vectorTableDimensions(db, table) {
 var _db = null;
 var REBUILD_HINT = 'rebuild it with souvenir_index action="rebuild" project="all" (re-embeds every indexed chunk)';
 var PENDING_VECTORS_KEY = "pending_vectors:";
+var INDEXED_KEY = "indexed:";
 function getDb() {
   if (_db) return _db;
   const db = openDatabase(getDbPath(), "transcripts");
@@ -35204,6 +35205,7 @@ function getDb() {
     migrateLegacyVectors(db);
     migrateChunksTable(db);
     migrateIndexStateKeys(db);
+    markIndexedBeforeUpgrade(db);
     db.exec(CREATE_INDEXES);
     db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)").run(
       "schema_version",
@@ -35301,6 +35303,16 @@ function migrateChunksTable(db) {
   db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
   logger.info(`Chunks table migrated to schema ${SCHEMA_VERSION} in ${Date.now() - started} ms`);
 }
+function markIndexedBeforeUpgrade(db) {
+  if (getRow(db, "SELECT 1 AS done FROM metadata WHERE key = ?", "indexed_markers_initialized")) return;
+  inTransaction(db, () => {
+    if (getRow(db, "SELECT 1 AS done FROM metadata WHERE key = ?", "indexed_markers_initialized")) return;
+    db.prepare(`INSERT OR IGNORE INTO metadata (key, value)
+      SELECT ? || project_dir, ? FROM (
+        SELECT DISTINCT substr(file_path, 1, instr(file_path, '/') - 1) AS project_dir FROM index_state WHERE instr(file_path, '/') > 1)`).run(INDEXED_KEY, (/* @__PURE__ */ new Date()).toISOString());
+    db.prepare("INSERT INTO metadata (key, value) VALUES (?, ?)").run("indexed_markers_initialized", (/* @__PURE__ */ new Date()).toISOString());
+  }, "IMMEDIATE");
+}
 function migrateIndexStateKeys(db) {
   const rows = allRows(db, "SELECT file_path FROM index_state").filter((r) => isAbsolute2(r.file_path));
   if (rows.length === 0) return;
@@ -35328,6 +35340,7 @@ function prepareVectorIndex(identity, options = {}) {
       for (const { project_dir } of allRows(db, "SELECT DISTINCT project_dir FROM chunks")) {
         markPending.run(PENDING_VECTORS_KEY + project_dir, (/* @__PURE__ */ new Date()).toISOString());
       }
+      db.prepare("DELETE FROM metadata WHERE key LIKE ?").run(`${INDEXED_KEY}%`);
     }
     if (!tableExists(db, CHUNK_VECTORS)) db.exec(createChunkVectorsTable(identity.dimensions));
     setStoredIdentity(db, identity);
@@ -35457,6 +35470,18 @@ function insertVector(db, chunkId, chunk, hasUser, hasAssistant, embedding) {
     chunk.timestamp ?? "",
     vectorBlob(embedding)
   );
+}
+function isProjectIndexed(projectDir) {
+  return getRow(getDb(), "SELECT 1 AS done FROM metadata WHERE key = ?", INDEXED_KEY + projectDir) !== null;
+}
+function markProjectIndexed(projectDir) {
+  getDb().prepare("INSERT OR IGNORE INTO metadata (key, value) VALUES (?, ?)").run(INDEXED_KEY + projectDir, (/* @__PURE__ */ new Date()).toISOString());
+}
+function getIndexProgress(projectDir) {
+  return getRow(getDb(), `
+    SELECT COALESCE(SUM(MIN(COALESCE(s.last_line, 0), f.line_count)), 0) AS indexedLines, COALESCE(SUM(f.line_count), 0) AS totalLines
+    FROM transcript_files f LEFT JOIN index_state s ON s.file_path = f.file_key
+    WHERE f.project_dir = ?`, projectDir);
 }
 function hasPendingVectors(projectDir) {
   return getRow(getDb(), "SELECT 1 AS pending FROM metadata WHERE key = ?", PENDING_VECTORS_KEY + projectDir) !== null;
@@ -35614,7 +35639,7 @@ function deleteProject(projectDir) {
     db.prepare("DELETE FROM transcript_lines WHERE file_key IN (SELECT file_key FROM transcript_files WHERE project_dir = ?)").run(projectDir);
     db.prepare("DELETE FROM transcript_files WHERE project_dir = ?").run(projectDir);
     db.prepare("DELETE FROM transcript_attachments WHERE project_dir = ?").run(projectDir);
-    db.prepare("DELETE FROM metadata WHERE key = ?").run(PENDING_VECTORS_KEY + projectDir);
+    db.prepare("DELETE FROM metadata WHERE key IN (?, ?)").run(PENDING_VECTORS_KEY + projectDir, INDEXED_KEY + projectDir);
   }, "IMMEDIATE");
   incrementalVacuum();
 }
@@ -37360,6 +37385,7 @@ async function runBuildIndex(provider, projectDirs, options = {}) {
   let skipped = 0;
   const errors = [];
   for (const projectDir of projectDirs) {
+    let complete = !sessionId;
     const files = getArchivedFiles(projectDir).filter((f) => {
       if (f.parent_session_id !== null && !includeSubagents) return false;
       return !sessionId || f.session_id === sessionId || f.parent_session_id === sessionId;
@@ -37367,7 +37393,10 @@ async function runBuildIndex(provider, projectDirs, options = {}) {
     const totalFiles = files.length;
     onProgress?.({ phase: `Indexing ${projectDir}`, current: 0, total: totalFiles });
     for (let fi = 0; fi < files.length; fi++) {
-      if (signal?.aborted) break;
+      if (signal?.aborted) {
+        complete = false;
+        break;
+      }
       const file2 = files[fi];
       onProgress?.({
         phase: `Indexing ${projectDir}`,
@@ -37414,6 +37443,7 @@ async function runBuildIndex(provider, projectDirs, options = {}) {
         totalEmbedded += added;
         if (stopped) {
           if (added > 0) filesProcessed++;
+          complete = false;
           break;
         }
         if (added > 0 || replaced > 0) filesProcessed++;
@@ -37426,6 +37456,7 @@ async function runBuildIndex(provider, projectDirs, options = {}) {
         }
       }
     }
+    if (complete && !signal?.aborted) markProjectIndexed(projectDir);
     if (!signal?.aborted && hasPendingVectors(projectDir)) {
       try {
         totalEmbedded += await embedPendingChunks(provider, projectDir, onProgress, signal);
@@ -38031,9 +38062,25 @@ function pageFooter(endIndex, maxResults, total, more, nextScore) {
   return `
 --- ${page} | ${remaining}${best} | Next page: offset=${endIndex} ---`;
 }
+var firstIndexations = /* @__PURE__ */ new Set();
+function startFirstIndexation(provider, projectDir) {
+  if (firstIndexations.has(projectDir)) return;
+  firstIndexations.add(projectDir);
+  void buildIndex(provider, [projectDir], { rebuild: false }).catch((err) => logger.warn(`First indexation of ${projectDir} failed:`, err)).finally(() => firstIndexations.delete(projectDir));
+}
+function firstIndexationNote(projectDir) {
+  const { indexedLines, totalLines } = getIndexProgress(projectDir);
+  const progress = totalLines === 0 ? "its conversations are being copied into souvenir's database first" : `${Math.floor(indexedLines / totalLines * 100)}% done (${indexedLines.toLocaleString("en-US")} of ${totalLines.toLocaleString("en-US")} transcript lines)`;
+  return `Note: this project is being indexed for the first time, in the background: ${progress}. Semantic results only cover what is indexed so far: search again later for complete results (souvenir_index action="status" shows the progress). Text mode already searches every conversation.`;
+}
 async function indexBeforeSemanticSearch(provider, projectDirs, ctx) {
   if (projectDirs.length !== 1) {
     return 'Note: across several projects, only messages already indexed are searched: recent sessions of other projects may be missing (souvenir_index action="build" project="all" indexes them; text mode searches the whole archive).';
+  }
+  const projectDir = projectDirs[0];
+  if (!isProjectIndexed(projectDir)) {
+    startFirstIndexation(provider, projectDir);
+    return firstIndexationNote(projectDir);
   }
   try {
     const result = await buildIndex(provider, projectDirs, { rebuild: false, onProgress: createProgressNotifier(ctx) });
@@ -38214,7 +38261,7 @@ async function performSemanticSearch(params, projectDirs, maxResults, ctx) {
 
 ` : "";
     if (vecResults.length === 0) {
-      return `${noteBlock}No semantic results found for "${params.query}". The index may be empty for the specified project. Run souvenir_index with action="status" to check.`;
+      return indexNote ? `${noteBlock}No semantic results for "${params.query}" in what is indexed so far.` : `${noteBlock}No semantic results found for "${params.query}". The index may be empty for the specified project. Run souvenir_index with action="status" to check.`;
     }
     const metadataOf = sessionMetadataLookup();
     const seen = /* @__PURE__ */ new Set();
@@ -38983,6 +39030,10 @@ function getStatusReport(projectFilter) {
       const partial2 = sessions.filter((s) => s.availability === "partial").length;
       lines.push(`  ${p.projectDir}:`);
       lines.push(`    Chunks: ${p.chunkCount} | Sessions: ${sessions.length}${partial2 ? ` (${partial2} partial: excerpts only)` : ""}`);
+      if (!isProjectIndexed(p.projectDir)) {
+        const { indexedLines, totalLines } = getIndexProgress(p.projectDir);
+        if (totalLines > 0) lines.push(`    First indexation in progress: ${Math.floor(indexedLines / totalLines * 100)}% (${indexedLines} of ${totalLines} transcript lines)`);
+      }
       if (p.lastIndexed) lines.push(`    Last indexed: ${p.lastIndexed}`);
       lines.push("");
     }

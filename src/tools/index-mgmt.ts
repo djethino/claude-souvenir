@@ -6,7 +6,7 @@ import { getArchiveStats } from '../archive/store.js';
 import { archiveBacklog, archiveInProgress } from '../archive/archiver.js';
 import { listProjectDirsOnDisk } from '../transcript/discovery.js';
 import { buildIndex } from '../db/indexer.js';
-import { getDb, getIndexStatus, getIndexIdentity, fullVacuum, countOldChunks } from '../db/store.js';
+import { getDb, getIndexStatus, getIndexIdentity, fullVacuum, countOldChunks, getIndexProgress, isProjectIndexed } from '../db/store.js';
 import { docsDbExists, getDocsIndexIdentity, getDocsChunkCount } from '../docs/store.js';
 import { describeIdentity, sameIdentity } from '../embedding/provider.js';
 import { findModelPrompts } from '../embedding/models.js';
@@ -87,6 +87,10 @@ function getStatusReport(projectFilter?: string): string {
       const partial = sessions.filter((s) => s.availability === 'partial').length;
       lines.push(`  ${p.projectDir}:`);
       lines.push(`    Chunks: ${p.chunkCount} | Sessions: ${sessions.length}${partial ? ` (${partial} partial: excerpts only)` : ''}`);
+      if (!isProjectIndexed(p.projectDir)) {
+        const { indexedLines, totalLines } = getIndexProgress(p.projectDir);
+        if (totalLines > 0) lines.push(`    First indexation in progress: ${Math.floor((indexedLines / totalLines) * 100)}% (${indexedLines} of ${totalLines} transcript lines)`);
+      }
       if (p.lastIndexed) lines.push(`    Last indexed: ${p.lastIndexed}`);
       lines.push('');
     }

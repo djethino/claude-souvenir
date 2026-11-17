@@ -62,6 +62,9 @@ const REBUILD_HINT = 'rebuild it with souvenir_index action="rebuild" project="a
 /** Metadata key marking a project whose chunks lack vectors (kept through an embedding model change). */
 const PENDING_VECTORS_KEY = 'pending_vectors:';
 
+/** Metadata key marking a project whose first indexation is done (see isProjectIndexed). */
+const INDEXED_KEY = 'indexed:';
+
 /**
  * Get or create the SQLite database connection. The vector table is created by
  * prepareVectorIndex() once the embedding size is known.
@@ -76,6 +79,7 @@ export function getDb(): Db {
     migrateLegacyVectors(db);
     migrateChunksTable(db);
     migrateIndexStateKeys(db);
+    markIndexedBeforeUpgrade(db);
     db.exec(CREATE_INDEXES);
 
     // Store schema version
@@ -196,6 +200,24 @@ function migrateChunksTable(db: Db): void {
 }
 
 /**
+ * Projects indexed before the first-indexation marker existed (an index built by an older
+ * souvenir) count as indexed: only their new messages are left. Read from the index progress
+ * (keyed <project>/<transcript> by migrateIndexStateKeys), which exists before the first archive
+ * copy of an upgrade. Runs once.
+ */
+function markIndexedBeforeUpgrade(db: Db): void {
+  if (getRow(db, 'SELECT 1 AS done FROM metadata WHERE key = ?', 'indexed_markers_initialized')) return;
+  inTransaction(db, () => {
+    if (getRow(db, 'SELECT 1 AS done FROM metadata WHERE key = ?', 'indexed_markers_initialized')) return;
+    db.prepare(`INSERT OR IGNORE INTO metadata (key, value)
+      SELECT ? || project_dir, ? FROM (
+        SELECT DISTINCT substr(file_path, 1, instr(file_path, '/') - 1) AS project_dir FROM index_state WHERE instr(file_path, '/') > 1)`)
+      .run(INDEXED_KEY, new Date().toISOString());
+    db.prepare('INSERT INTO metadata (key, value) VALUES (?, ?)').run('indexed_markers_initialized', new Date().toISOString());
+  }, 'IMMEDIATE');
+}
+
+/**
  * Schema 2 keyed the index progress by the transcript's absolute path; it is now keyed by the
  * archived transcript (path relative to the projects folder), whose line numbers are the same.
  */
@@ -238,6 +260,7 @@ export function prepareVectorIndex(identity: EmbeddingIdentity, options: { reset
       for (const { project_dir } of allRows<{ project_dir: string }>(db, 'SELECT DISTINCT project_dir FROM chunks')) {
         markPending.run(PENDING_VECTORS_KEY + project_dir, new Date().toISOString());
       }
+      db.prepare('DELETE FROM metadata WHERE key LIKE ?').run(`${INDEXED_KEY}%`);
     }
     if (!tableExists(db, CHUNK_VECTORS)) db.exec(createChunkVectorsTable(identity.dimensions));
     setStoredIdentity(db, identity);
@@ -428,6 +451,24 @@ function insertVector(
     chunkId, chunk.project_dir, chunk.session_id, chunk.role ?? '',
     hasUser ? 1n : 0n, hasAssistant ? 1n : 0n, chunk.timestamp ?? '', vectorBlob(embedding),
   );
+}
+
+/** Whether the first indexation of a project is done: later builds only add its new messages. */
+export function isProjectIndexed(projectDir: string): boolean {
+  return getRow(getDb(), 'SELECT 1 AS done FROM metadata WHERE key = ?', INDEXED_KEY + projectDir) !== null;
+}
+
+/** Record that every archived transcript of a project has been indexed once. */
+export function markProjectIndexed(projectDir: string): void {
+  getDb().prepare('INSERT OR IGNORE INTO metadata (key, value) VALUES (?, ?)').run(INDEXED_KEY + projectDir, new Date().toISOString());
+}
+
+/** How far a project's archived lines are indexed (lines of its transcripts, subagents included). */
+export function getIndexProgress(projectDir: string): { indexedLines: number; totalLines: number } {
+  return getRow<{ indexedLines: number; totalLines: number }>(getDb(), `
+    SELECT COALESCE(SUM(MIN(COALESCE(s.last_line, 0), f.line_count)), 0) AS indexedLines, COALESCE(SUM(f.line_count), 0) AS totalLines
+    FROM transcript_files f LEFT JOIN index_state s ON s.file_path = f.file_key
+    WHERE f.project_dir = ?`, projectDir)!;
 }
 
 /** Whether an embedding model change left chunks of this project without vectors (see prepareVectorIndex). */
@@ -683,7 +724,7 @@ export function deleteProject(projectDir: string): void {
     db.prepare('DELETE FROM transcript_lines WHERE file_key IN (SELECT file_key FROM transcript_files WHERE project_dir = ?)').run(projectDir);
     db.prepare('DELETE FROM transcript_files WHERE project_dir = ?').run(projectDir);
     db.prepare('DELETE FROM transcript_attachments WHERE project_dir = ?').run(projectDir);
-    db.prepare('DELETE FROM metadata WHERE key = ?').run(PENDING_VECTORS_KEY + projectDir);
+    db.prepare('DELETE FROM metadata WHERE key IN (?, ?)').run(PENDING_VECTORS_KEY + projectDir, INDEXED_KEY + projectDir);
   }, 'IMMEDIATE'); // the write lock from the start: no other process writes while the protection is lifted
 
   incrementalVacuum();

@@ -695,6 +695,7 @@ function vectorTableDimensions(db, table) {
 var _db = null;
 var REBUILD_HINT = 'rebuild it with souvenir_index action="rebuild" project="all" (re-embeds every indexed chunk)';
 var PENDING_VECTORS_KEY = "pending_vectors:";
+var INDEXED_KEY = "indexed:";
 function getDb() {
   if (_db) return _db;
   const db = openDatabase(getDbPath(), "transcripts");
@@ -704,6 +705,7 @@ function getDb() {
     migrateLegacyVectors(db);
     migrateChunksTable(db);
     migrateIndexStateKeys(db);
+    markIndexedBeforeUpgrade(db);
     db.exec(CREATE_INDEXES);
     db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)").run(
       "schema_version",
@@ -801,6 +803,16 @@ function migrateChunksTable(db) {
   db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
   logger.info(`Chunks table migrated to schema ${SCHEMA_VERSION} in ${Date.now() - started} ms`);
 }
+function markIndexedBeforeUpgrade(db) {
+  if (getRow(db, "SELECT 1 AS done FROM metadata WHERE key = ?", "indexed_markers_initialized")) return;
+  inTransaction(db, () => {
+    if (getRow(db, "SELECT 1 AS done FROM metadata WHERE key = ?", "indexed_markers_initialized")) return;
+    db.prepare(`INSERT OR IGNORE INTO metadata (key, value)
+      SELECT ? || project_dir, ? FROM (
+        SELECT DISTINCT substr(file_path, 1, instr(file_path, '/') - 1) AS project_dir FROM index_state WHERE instr(file_path, '/') > 1)`).run(INDEXED_KEY, (/* @__PURE__ */ new Date()).toISOString());
+    db.prepare("INSERT INTO metadata (key, value) VALUES (?, ?)").run("indexed_markers_initialized", (/* @__PURE__ */ new Date()).toISOString());
+  }, "IMMEDIATE");
+}
 function migrateIndexStateKeys(db) {
   const rows = allRows(db, "SELECT file_path FROM index_state").filter((r) => isAbsolute2(r.file_path));
   if (rows.length === 0) return;
@@ -828,6 +840,7 @@ function prepareVectorIndex(identity, options = {}) {
       for (const { project_dir } of allRows(db, "SELECT DISTINCT project_dir FROM chunks")) {
         markPending.run(PENDING_VECTORS_KEY + project_dir, (/* @__PURE__ */ new Date()).toISOString());
       }
+      db.prepare("DELETE FROM metadata WHERE key LIKE ?").run(`${INDEXED_KEY}%`);
     }
     if (!tableExists(db, CHUNK_VECTORS)) db.exec(createChunkVectorsTable(identity.dimensions));
     setStoredIdentity(db, identity);
@@ -938,6 +951,9 @@ function insertVector(db, chunkId, chunk, hasUser, hasAssistant, embedding) {
     chunk.timestamp ?? "",
     vectorBlob(embedding)
   );
+}
+function markProjectIndexed(projectDir) {
+  getDb().prepare("INSERT OR IGNORE INTO metadata (key, value) VALUES (?, ?)").run(INDEXED_KEY + projectDir, (/* @__PURE__ */ new Date()).toISOString());
 }
 function hasPendingVectors(projectDir) {
   return getRow(getDb(), "SELECT 1 AS pending FROM metadata WHERE key = ?", PENDING_VECTORS_KEY + projectDir) !== null;
@@ -1636,6 +1652,7 @@ async function runBuildIndex(provider, projectDirs, options = {}) {
   let skipped = 0;
   const errors = [];
   for (const projectDir of projectDirs) {
+    let complete = !sessionId;
     const files = getArchivedFiles(projectDir).filter((f) => {
       if (f.parent_session_id !== null && !includeSubagents) return false;
       return !sessionId || f.session_id === sessionId || f.parent_session_id === sessionId;
@@ -1643,7 +1660,10 @@ async function runBuildIndex(provider, projectDirs, options = {}) {
     const totalFiles = files.length;
     onProgress?.({ phase: `Indexing ${projectDir}`, current: 0, total: totalFiles });
     for (let fi = 0; fi < files.length; fi++) {
-      if (signal?.aborted) break;
+      if (signal?.aborted) {
+        complete = false;
+        break;
+      }
       const file = files[fi];
       onProgress?.({
         phase: `Indexing ${projectDir}`,
@@ -1690,6 +1710,7 @@ async function runBuildIndex(provider, projectDirs, options = {}) {
         totalEmbedded += added;
         if (stopped) {
           if (added > 0) filesProcessed++;
+          complete = false;
           break;
         }
         if (added > 0 || replaced > 0) filesProcessed++;
@@ -1702,6 +1723,7 @@ async function runBuildIndex(provider, projectDirs, options = {}) {
         }
       }
     }
+    if (complete && !signal?.aborted) markProjectIndexed(projectDir);
     if (!signal?.aborted && hasPendingVectors(projectDir)) {
       try {
         totalEmbedded += await embedPendingChunks(provider, projectDir, onProgress, signal);

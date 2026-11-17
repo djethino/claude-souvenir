@@ -7,6 +7,7 @@ import { archiveProjects, type ArchiveReport } from '../archive/archiver.js';
 import { getArchivedFiles, type ArchivedFileRow } from '../archive/store.js';
 import {
   appendChunks,
+  markProjectIndexed,
   setIndexStateIfAbsent,
   rangeNeedsReindex,
   type NewChunk,
@@ -113,6 +114,7 @@ async function runBuildIndex(
   const errors: string[] = [];
 
   for (const projectDir of projectDirs) {
+    let complete = !sessionId; // only a build of the whole project ends its first indexation
     const files = getArchivedFiles(projectDir).filter((f) => {
       if (f.parent_session_id !== null && !includeSubagents) return false;
       return !sessionId || f.session_id === sessionId || f.parent_session_id === sessionId;
@@ -122,7 +124,10 @@ async function runBuildIndex(
     onProgress?.({ phase: `Indexing ${projectDir}`, current: 0, total: totalFiles });
 
     for (let fi = 0; fi < files.length; fi++) {
-      if (signal?.aborted) break;
+      if (signal?.aborted) {
+        complete = false;
+        break;
+      }
 
       const file = files[fi];
       onProgress?.({
@@ -179,6 +184,7 @@ async function runBuildIndex(
         totalEmbedded += added;
         if (stopped) {
           if (added > 0) filesProcessed++;
+          complete = false;
           break; // aborted
         }
         if (added > 0 || replaced > 0) filesProcessed++;
@@ -191,6 +197,8 @@ async function runBuildIndex(
         }
       }
     }
+
+    if (complete && !signal?.aborted) markProjectIndexed(projectDir);
 
     if (!signal?.aborted && hasPendingVectors(projectDir)) {
       try {

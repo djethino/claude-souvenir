@@ -3,7 +3,7 @@ import { formatSearchResult } from '../transcript/formatter.js';
 import { archiveErrorNote, ensureArchived, findSession, listProjectDirs, resolveCurrentSession } from '../archive/catalog.js';
 import { getConfig } from '../config.js';
 import { resolveProjectDir } from '../utils/paths.js';
-import { searchSemantic, getProjectChunkCount } from '../db/store.js';
+import { searchSemantic, getProjectChunkCount, getIndexProgress, isProjectIndexed } from '../db/store.js';
 import type { TextChunkRow, VecSearchResult } from '../db/store.js';
 import { withChunkText } from '../embedding/chunk-text.js';
 import { getOrCreateProvider, errorMessage } from './helpers.js';
@@ -45,6 +45,27 @@ function pageFooter(endIndex: number, maxResults: number, total: number, more: b
  * lack recent messages: the search still runs on what is indexed, but Claude must know the
  * results can be incomplete instead of taking them as everything there is.
  */
+/** Projects whose first indexation this process runs in the background. */
+const firstIndexations = new Set<string>();
+
+/** Start the first indexation of a project in the background, unless this process already runs it. */
+function startFirstIndexation(provider: ReturnType<typeof getOrCreateProvider>, projectDir: string): void {
+  if (firstIndexations.has(projectDir)) return;
+  firstIndexations.add(projectDir);
+  void buildIndex(provider, [projectDir], { rebuild: false })
+    .catch((err) => logger.warn(`First indexation of ${projectDir} failed:`, err))
+    .finally(() => firstIndexations.delete(projectDir));
+}
+
+/** What a search says while a project's first indexation runs: how far it is, what to do. */
+function firstIndexationNote(projectDir: string): string {
+  const { indexedLines, totalLines } = getIndexProgress(projectDir);
+  const progress = totalLines === 0
+    ? "its conversations are being copied into souvenir's database first"
+    : `${Math.floor((indexedLines / totalLines) * 100)}% done (${indexedLines.toLocaleString('en-US')} of ${totalLines.toLocaleString('en-US')} transcript lines)`;
+  return `Note: this project is being indexed for the first time, in the background: ${progress}. Semantic results only cover what is indexed so far: search again later for complete results (souvenir_index action="status" shows the progress). Text mode already searches every conversation.`;
+}
+
 async function indexBeforeSemanticSearch(
   provider: ReturnType<typeof getOrCreateProvider>,
   projectDirs: string[],
@@ -53,6 +74,12 @@ async function indexBeforeSemanticSearch(
   if (projectDirs.length !== 1) {
     // Several projects: indexing them all here could take minutes; the background index only covers the current one
     return 'Note: across several projects, only messages already indexed are searched: recent sessions of other projects may be missing (souvenir_index action="build" project="all" indexes them; text mode searches the whole archive).';
+  }
+  const projectDir = projectDirs[0];
+  if (!isProjectIndexed(projectDir)) {
+    // First indexation of the project: it can take long, it goes on in the background
+    startFirstIndexation(provider, projectDir);
+    return firstIndexationNote(projectDir);
   }
   try {
     // Every new message of the project is indexed first: the search covers the whole conversation
@@ -337,7 +364,9 @@ async function performSemanticSearch(
     const noteBlock = notes ? `${notes}\n\n` : '';
 
     if (vecResults.length === 0) {
-      return `${noteBlock}No semantic results found for "${params.query}". The index may be empty for the specified project. Run souvenir_index with action="status" to check.`;
+      return indexNote
+        ? `${noteBlock}No semantic results for "${params.query}" in what is indexed so far.`
+        : `${noteBlock}No semantic results found for "${params.query}". The index may be empty for the specified project. Run souvenir_index with action="status" to check.`;
     }
 
     // Convert all results to SearchResult format (no pagination yet)
