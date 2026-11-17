@@ -225,7 +225,7 @@ export function formatEntry(
 
 /**
  * Format a search index excerpt of a partial session (see availabilityNote): "USER: …\nASSISTANT: …"
- * as indexed, without tool calls.
+ * as indexed (tool calls by name only, no tool input or results).
  */
 export function formatExcerpt(excerpt: { role: string | null; content_text: string; timestamp: string | null }): string {
   return `[${formatTimestamp(excerpt.timestamp ?? undefined)}] EXCERPT (${excerpt.role ?? 'turn'}):\n${excerpt.content_text}`;
@@ -259,7 +259,7 @@ export function formatEntryCount(meta: Pick<SessionInfo, 'messageCount' | 'avail
 export function availabilityNote(meta: Pick<SessionInfo, 'availability'>): string | null {
   switch (meta.availability) {
     case 'complete': return null;
-    case 'partial': return 'PARTIAL: Claude Code deleted this transcript before souvenir archived whole transcripts (souvenir 0.6.0). Only the search index excerpts remain: the first 2,000 characters of each exchange, without tool calls or results.';
+    case 'partial': return 'PARTIAL: Claude Code deleted this transcript before souvenir archived whole transcripts (souvenir 0.6.0). Only the search index excerpts remain: the first 2,000 characters of each exchange; tool calls appear by name only ([Tool: Bash]), without their input or results.';
     case 'lost': return 'LOST: Claude Code deleted this transcript before souvenir kept anything of it. Only its listing in Claude Code\'s old sessions-index.json remains.';
   }
 }

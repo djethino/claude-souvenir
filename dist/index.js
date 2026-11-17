@@ -36594,7 +36594,7 @@ function availabilityNote(meta3) {
     case "complete":
       return null;
     case "partial":
-      return "PARTIAL: Claude Code deleted this transcript before souvenir archived whole transcripts (souvenir 0.6.0). Only the search index excerpts remain: the first 2,000 characters of each exchange, without tool calls or results.";
+      return "PARTIAL: Claude Code deleted this transcript before souvenir archived whole transcripts (souvenir 0.6.0). Only the search index excerpts remain: the first 2,000 characters of each exchange; tool calls appear by name only ([Tool: Bash]), without their input or results.";
     case "lost":
       return "LOST: Claude Code deleted this transcript before souvenir kept anything of it. Only its listing in Claude Code's old sessions-index.json remains.";
   }
